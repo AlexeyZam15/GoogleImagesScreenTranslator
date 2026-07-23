@@ -1,5 +1,7 @@
 """
+
 Строки локализации для приложения GoogleScreenTranslate
+
 """
 
 STRINGS = {
@@ -22,6 +24,7 @@ STRINGS = {
         'settings_saved': "Настройки сохранены",
         'settings_reset_confirm': "Сбросить все настройки к стандартным?",
         'settings_reset_done': "Настройки сброшены к стандартным",
+        'show_browser': "Показывать браузер",
     },
     'en': {
         'app_title': "Screen Translator",
@@ -42,5 +45,6 @@ STRINGS = {
         'settings_saved': "Settings saved",
         'settings_reset_confirm': "Reset all settings to defaults?",
         'settings_reset_done': "Settings reset to defaults",
+        'show_browser': "Show browser",
     }
 }

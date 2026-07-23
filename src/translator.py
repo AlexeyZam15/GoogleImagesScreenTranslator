@@ -1,5 +1,7 @@
 """
+
 Модуль для перевода изображений через Google Translate
+
 """
 
 import os
@@ -24,6 +26,26 @@ class GoogleTranslateDebug:
         self._context = None
         self._page = None
         self.logger = logging.getLogger(__name__)
+
+    def is_browser_alive(self) -> bool:
+        """Проверяет, жив ли браузер и контекст"""
+        try:
+            if self._context is None or self._page is None:
+                return False
+            # Пытаемся выполнить простую операцию для проверки
+            self._page.evaluate("1 + 1")
+            return True
+        except Exception:
+            return False
+
+    def ensure_browser_alive(self):
+        """Проверяет, жив ли браузер, и перезапускает если нет"""
+        if not self.is_browser_alive():
+            self.logger.warning("Браузер не активен, перезапуск...")
+            self.close_browser()
+            self.start_browser()
+            return True
+        return False
 
     def start_browser(self):
         """Запускает Яндекс Браузер с Playwright"""
@@ -67,6 +89,14 @@ class GoogleTranslateDebug:
         self._page = self._context.pages[0] if self._context.pages else self._context.new_page()
         self.logger.info("Яндекс Браузер запущен")
 
+        # Просто переходим на Google Translate
+        self.logger.info("Открытие Google Translate...")
+        try:
+            self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=30000)
+            self.logger.info("Google Translate открыт")
+        except Exception as e:
+            self.logger.error(f"Ошибка при открытии Google Translate: {e}")
+
     def close_browser(self):
         """Закрывает браузер"""
         if self._context:
@@ -82,6 +112,10 @@ class GoogleTranslateDebug:
                 self.logger.info("Playwright остановлен")
             except Exception as e:
                 self.logger.error(f"Ошибка при остановке Playwright: {e}")
+
+        self._context = None
+        self._page = None
+        self._pw = None
 
     def _copy_image_to_clipboard(self, image_path: Path) -> bool:
         """Копирует изображение в буфер обмена через JavaScript"""
@@ -273,14 +307,32 @@ class GoogleTranslateDebug:
         Переводит изображение через Google Translate.
         Возвращает путь к переведенному изображению или None.
         """
+        # Проверяем, жив ли браузер, если нет - перезапускаем
+        if not self.is_browser_alive():
+            self.logger.warning("Браузер закрыт, перезапуск...")
+            self.close_browser()
+            self.start_browser()
+            # После перезапуска даем время на загрузку
+            time.sleep(2)
+
         self.logger.info("=" * 60)
         self.logger.info("🚀 ЗАПУСК ПЕРЕВОДА ИЗОБРАЖЕНИЯ")
         self.logger.info("=" * 60)
         self.logger.info(f"URL: {self.base_url}")
 
         try:
+            # Если страница закрыта или не загружена, переходим по URL
             self.logger.info("Шаг 1: Открытие Google Translate")
-            self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=30000)
+            try:
+                self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=30000)
+            except Exception as e:
+                self.logger.error(f"Ошибка при открытии страницы: {e}")
+                # Пробуем перезапустить браузер
+                self.logger.info("Попытка перезапуска браузера...")
+                self.close_browser()
+                self.start_browser()
+                time.sleep(2)
+                self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=30000)
 
             self.logger.info("Шаг 2: Ожидание загрузки интерфейса")
             if not self._wait_for_upload_zone(timeout=15000):

@@ -1,5 +1,7 @@
 """
+
 Главный модуль приложения для перевода скриншотов
+
 """
 
 import logging
@@ -76,7 +78,7 @@ class ScreenshotTranslatorApp:
         self.translating = False
         self.initializing = False
         self._init_done = False
-        self._translation_done = True  # Добавляем флаг
+        self._translation_done = True
 
         # Оверлей индикатора перевода
         self.translation_overlay = None
@@ -85,6 +87,9 @@ class ScreenshotTranslatorApp:
         self._key_states = {}
         self._key_last_time = {}
         self._debounce_ms = 500
+
+        # Переменная для чекбокса показа браузера - будет создана в create_gui
+        self.show_browser_var = None
 
         # Создание GUI
         self.create_gui()
@@ -243,14 +248,20 @@ class ScreenshotTranslatorApp:
         if hasattr(self, 'hotkeys_label'):
             self.hotkeys_label.config(text=self.get_string('hotkeys_info'))
 
+        if hasattr(self, 'show_browser_check'):
+            self.show_browser_check.config(text=self.get_string('show_browser'))
+
     def create_gui(self):
         """Создает главное окно приложения с адаптивной версткой"""
         self.root = Tk()
         self.root.title(self.get_string('app_title'))
-        self.root.geometry("520x360")
-        self.root.minsize(480, 320)
+        self.root.geometry("520x400")
+        self.root.minsize(480, 350)
         self.root.resizable(True, True)
         self.root.configure(bg='#1e1e1e')
+
+        # Создаем переменную для чекбокса ПОСЛЕ создания root
+        self.show_browser_var = BooleanVar(value=self.settings.get_show_browser())
 
         main = Frame(self.root, bg='#1e1e1e')
         main.pack(expand=True, fill=BOTH, padx=25, pady=20)
@@ -337,6 +348,24 @@ class ScreenshotTranslatorApp:
         )
         self.btn_toggle.pack(fill=X)
 
+        # Чекбокс для показа браузера
+        checkbox_frame = Frame(main, bg='#1e1e1e')
+        checkbox_frame.pack(fill=X, pady=(10, 5))
+
+        self.show_browser_check = Checkbutton(
+            checkbox_frame,
+            text=self.get_string('show_browser'),
+            variable=self.show_browser_var,
+            command=self.toggle_browser_visibility,
+            bg='#1e1e1e',
+            fg='#cccccc',
+            selectcolor='#1e1e1e',
+            font=("Arial", 10),
+            activebackground='#1e1e1e',
+            activeforeground='#4CAF50'
+        )
+        self.show_browser_check.pack(anchor=W)
+
         # Подсказка внизу
         self.hotkeys_label = Label(
             main,
@@ -370,6 +399,8 @@ class ScreenshotTranslatorApp:
             self.status.config(font=("Arial", 10))
             if hasattr(self, 'hotkeys_label'):
                 self.hotkeys_label.config(font=("Arial", 9), wraplength=width - 60)
+            if hasattr(self, 'show_browser_check'):
+                self.show_browser_check.config(font=("Arial", 9))
         else:
             self.title_label.config(font=("Arial", 15, "bold"))
             self.lang_btn.config(font=("Arial", 12, "bold"), padx=18, pady=6, width=6)
@@ -378,6 +409,45 @@ class ScreenshotTranslatorApp:
             self.status.config(font=("Arial", 11))
             if hasattr(self, 'hotkeys_label'):
                 self.hotkeys_label.config(font=("Arial", 10), wraplength=min(width - 50, 480))
+            if hasattr(self, 'show_browser_check'):
+                self.show_browser_check.config(font=("Arial", 10))
+
+    def toggle_browser_visibility(self):
+        """Переключает видимость браузера"""
+        show = self.show_browser_var.get()
+        self.settings.set_show_browser(show)
+        self.logger.info(f"Видимость браузера изменена: {'показывать' if show else 'скрывать'}")
+
+        # Если переводчик уже инициализирован, перезапускаем его с новыми настройками
+        if self._init_done and self.translator:
+            self._restart_translator()
+
+    def _restart_translator(self):
+        """Перезапускает переводчик с новыми настройками"""
+
+        def restart_task():
+            try:
+                self.logger.info("Перезапуск переводчика с новыми настройками...")
+                self.update_status("● Перезапуск браузера...", '#ff9800')
+
+                # Закрываем текущий браузер
+                if self.translator:
+                    self.translator.close_browser()
+
+                # Создаем новый переводчик с обновленной настройкой
+                show_browser = self.settings.get_show_browser()
+                self.translator = GoogleTranslateDebug(headless=not show_browser)
+                self.translator.start_browser()
+
+                self.ready = True
+                self.update_status("● " + self.get_string('ready'), '#4CAF50')
+                self.logger.info("Переводчик перезапущен успешно")
+
+            except Exception as e:
+                self.logger.error(f"Ошибка перезапуска переводчика: {e}")
+                self.update_status("● " + self.get_string('error') + ": " + str(e)[:50], '#f44336')
+
+        threading.Thread(target=restart_task, daemon=True).start()
 
     def _init_translator_step(self):
         """Пошаговая инициализация переводчика"""
@@ -394,7 +464,9 @@ class ScreenshotTranslatorApp:
         """Инициализация переводчика"""
         try:
             self.logger.info("Запуск инициализации браузера...")
-            self.translator = GoogleTranslateDebug(headless=True)
+            # Используем настройку show_browser для управления видимостью
+            show_browser = self.settings.get_show_browser()
+            self.translator = GoogleTranslateDebug(headless=not show_browser)
             self.translator.start_browser()
             self.overlay = OverlayWindow()
             self.ready = True

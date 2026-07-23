@@ -1,5 +1,7 @@
 """
+
 Модуль для управления настройками приложения с поддержкой профилей
+
 """
 
 import json
@@ -17,7 +19,8 @@ class Settings:
         "zoom_normal": 1.08,
         "hide_delay": 1500,
         "always_on_top": True,
-        "current_profile": "default"
+        "current_profile": "default",
+        "show_browser": True
     }
 
     def __init__(self):
@@ -104,6 +107,15 @@ class Settings:
         """Возвращает локализованную строку"""
         lang = self.get_language()
         return STRINGS.get(lang, STRINGS['ru']).get(key, key)
+
+    def get_show_browser(self):
+        """Возвращает настройку показа браузера"""
+        return self.settings.get("show_browser", True)
+
+    def set_show_browser(self, show):
+        """Устанавливает настройку показа браузера"""
+        self.settings["show_browser"] = show
+        self.save()
 
     # Методы для работы с профилями
     def get_profiles_list(self):
