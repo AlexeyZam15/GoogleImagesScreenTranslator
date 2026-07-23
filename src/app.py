@@ -74,6 +74,12 @@ class ScreenshotTranslatorApp:
         self.translator = None
         self.ready = False
         self.translating = False
+        self.initializing = False
+        self._init_done = False
+        self._translation_done = True  # Добавляем флаг
+
+        # Оверлей индикатора перевода
+        self.translation_overlay = None
 
         # Флаги для горячих клавиш
         self._key_states = {}
@@ -82,12 +88,8 @@ class ScreenshotTranslatorApp:
 
         # Создание GUI
         self.create_gui()
-
-        # Инициализация переводчика
-        self.root.after(100, self.init_translator)
-
-        # Настройка горячих клавиш
-        self.setup_hotkeys()
+        self.root.update_idletasks()
+        self.root.update()
 
         # Обновление языка интерфейса
         self.update_ui_language()
@@ -95,23 +97,25 @@ class ScreenshotTranslatorApp:
         # Установка иконки приложения
         self._setup_app_icon()
 
+        # Настройка горячих клавиш
+        self.setup_hotkeys()
+
+        # Запускаем инициализацию
+        self.root.after(100, self._init_translator_step)
+
     def _setup_app_icon(self):
         """Устанавливает профессиональную иконку приложения для отображения в панели задач"""
         try:
             from PIL import Image, ImageDraw, ImageTk
 
-            # Создаем изображение 64x64 для лучшего качества
             size = 64
             img = Image.new('RGBA', (size, size), color=(0, 0, 0, 0))
             draw = ImageDraw.Draw(img)
 
-            # Цвета
-            bg_color = (33, 33, 33, 255)  # Темно-серый фон
-            accent_color = (76, 175, 80, 255)  # Зеленый (как в интерфейсе)
+            bg_color = (33, 33, 33, 255)
+            accent_color = (76, 175, 80, 255)
             white = (255, 255, 255, 255)
-            light_gray = (200, 200, 200, 255)
 
-            # Рисуем закругленный прямоугольник как фон
             radius = 14
             draw.rounded_rectangle(
                 [(4, 4), (size - 4, size - 4)],
@@ -121,21 +125,17 @@ class ScreenshotTranslatorApp:
                 width=2
             )
 
-            # === РИСУЕМ ЗНАЧОК КАМЕРЫ ===
             center_x = size // 2
             center_y = size // 2 + 2
 
-            # Размеры камеры
             cam_w = 30
             cam_h = 22
 
-            # Верхняя часть камеры (прямоугольник со скругленными углами)
             x1 = center_x - cam_w // 2
             y1 = center_y - cam_h // 2
             x2 = center_x + cam_w // 2
             y2 = center_y + cam_h // 2
 
-            # Корпус камеры
             draw.rounded_rectangle(
                 [(x1, y1), (x2, y2)],
                 radius=4,
@@ -144,7 +144,6 @@ class ScreenshotTranslatorApp:
                 width=2
             )
 
-            # Объектив (круг)
             lens_radius = 8
             draw.ellipse(
                 [(center_x - lens_radius, center_y - lens_radius),
@@ -154,14 +153,12 @@ class ScreenshotTranslatorApp:
                 width=2
             )
 
-            # Блик на объективе (маленький белый круг)
             draw.ellipse(
                 [(center_x - 4, center_y - 5),
                  (center_x - 1, center_y - 2)],
                 fill=white
             )
 
-            # Вспышка (маленький квадрат сверху справа)
             flash_x = center_x + 12
             flash_y = center_y - cam_h // 2 - 2
             draw.rectangle(
@@ -172,8 +169,6 @@ class ScreenshotTranslatorApp:
                 width=1
             )
 
-            # === ДОБАВЛЯЕМ ТЕКСТ "SC" (Screen Translate) ===
-            # Рисуем маленькую плашку снизу
             text_y = y2 + 6
             draw.rounded_rectangle(
                 [(center_x - 12, text_y - 1),
@@ -182,7 +177,6 @@ class ScreenshotTranslatorApp:
                 fill=accent_color
             )
 
-            # Пытаемся использовать шрифт, если нет - рисуем текстом
             try:
                 from PIL import ImageFont
                 font = ImageFont.truetype("arial.ttf", 8)
@@ -193,26 +187,21 @@ class ScreenshotTranslatorApp:
                     font=font
                 )
             except:
-                # Если шрифт не загрузился, рисуем простыми линиями
                 draw.text(
                     (center_x - 6, text_y + 1),
                     "SC",
                     fill=white
                 )
 
-            # Конвертируем в PhotoImage и устанавливаем как иконку
             photo = ImageTk.PhotoImage(img)
             self.root.iconphoto(True, photo)
             self.root.tk.call('wm', 'iconphoto', self.root._w, photo)
 
-            # Сохраняем ссылку, чтобы не удалилась сборщиком мусора
             self._icon_photo = photo
-
             self.logger.info("Профессиональная иконка приложения установлена")
 
         except Exception as e:
             self.logger.warning(f"Не удалось установить иконку: {e}")
-            # Запасной вариант - используем стандартную иконку Tkinter
             try:
                 self.root.iconbitmap(default='')
             except:
@@ -228,15 +217,13 @@ class ScreenshotTranslatorApp:
         new_lang = "en" if current_lang == "ru" else "ru"
         self.settings.set_language(new_lang)
 
-        # Обновляем интерфейс
         self.update_ui_language()
 
-        # Обновляем текст на кнопке языка
         if hasattr(self, 'lang_btn'):
             self.lang_btn.config(text="EN" if new_lang == "ru" else "RU")
 
-        # Обновляем статус
-        self.update_status("● " + self.get_string('ready'), '#4CAF50')
+        status_text = self.get_string('ready') if self.ready else self.get_string('starting_browser')
+        self.update_status("● " + status_text, '#4CAF50' if self.ready else '#ff9800')
 
         self.logger.info(f"Язык переключен на: {new_lang}")
 
@@ -246,10 +233,6 @@ class ScreenshotTranslatorApp:
 
         if hasattr(self, 'title_label'):
             self.title_label.config(text=self.get_string('app_title'))
-
-        if hasattr(self, 'status'):
-            status_text = self.get_string('ready') if self.ready else self.get_string('starting')
-            self.status.config(text="● " + status_text)
 
         if hasattr(self, 'btn_capture'):
             self.btn_capture.config(text=self.get_string('btn_capture'))
@@ -264,26 +247,21 @@ class ScreenshotTranslatorApp:
         """Создает главное окно приложения с адаптивной версткой"""
         self.root = Tk()
         self.root.title(self.get_string('app_title'))
-        self.root.geometry("450x320")
-        self.root.minsize(400, 280)  # Минимальный размер
-        self.root.resizable(True, True)  # Разрешаем изменение размера
+        self.root.geometry("520x360")
+        self.root.minsize(480, 320)
+        self.root.resizable(True, True)
         self.root.configure(bg='#1e1e1e')
 
-        # Не используем overrideredirect - окно отображается в панели задач
-
-        # Основной контейнер с отступами
         main = Frame(self.root, bg='#1e1e1e')
         main.pack(expand=True, fill=BOTH, padx=25, pady=20)
 
-        # ===== ВЕРХНЯЯ ПАНЕЛЬ =====
+        # Верхняя панель
         header_frame = Frame(main, bg='#1e1e1e')
         header_frame.pack(fill=X, pady=(0, 15))
 
-        # Заголовок слева
         title_frame = Frame(header_frame, bg='#1e1e1e')
         title_frame.pack(side=LEFT, expand=True, fill=X)
 
-        # Иконка и текст заголовка в одной строке
         icon_label = Label(title_frame, text="📸",
                            bg='#1e1e1e', fg='white', font=("Arial", 26))
         icon_label.pack(side=LEFT, padx=(0, 10))
@@ -292,7 +270,7 @@ class ScreenshotTranslatorApp:
                                  bg='#1e1e1e', fg='#4CAF50', font=("Arial", 15, "bold"))
         self.title_label.pack(side=LEFT)
 
-        # Кнопка языка справа - увеличенная и читаемая
+        # Кнопка языка
         lang_frame = Frame(header_frame, bg='#1e1e1e')
         lang_frame.pack(side=RIGHT, padx=(10, 0))
 
@@ -310,11 +288,10 @@ class ScreenshotTranslatorApp:
             padx=18,
             pady=6,
             cursor="hand2",
-            width=6  # Увеличенная ширина
+            width=6
         )
         self.lang_btn.pack()
 
-        # Добавляем эффект при наведении
         def on_enter(e):
             self.lang_btn.config(bg='#4CAF50', fg='white')
 
@@ -324,12 +301,12 @@ class ScreenshotTranslatorApp:
         self.lang_btn.bind('<Enter>', on_enter)
         self.lang_btn.bind('<Leave>', on_leave)
 
-        # ===== СТАТУС =====
+        # Статус
         self.status = Label(main, text="● " + self.get_string('starting'),
                             fg='#ff9800', bg='#1e1e1e', font=("Arial", 11))
-        self.status.pack(pady=(5, 20), fill=X)
+        self.status.pack(pady=(5, 18), fill=X)
 
-        # ===== КНОПКИ =====
+        # Кнопки
         btn_frame = Frame(main, bg='#1e1e1e')
         btn_frame.pack(fill=X, pady=5)
 
@@ -360,13 +337,17 @@ class ScreenshotTranslatorApp:
         )
         self.btn_toggle.pack(fill=X)
 
-        # ===== ПОДСКАЗКА ВНИЗУ =====
-        self.hotkeys_label = Label(main, text=self.get_string('hotkeys_info'),
-                                   bg='#1e1e1e', fg='#666', font=("Arial", 9))
-        self.hotkeys_label.pack(pady=(15, 0))
+        # Подсказка внизу
+        self.hotkeys_label = Label(
+            main,
+            text=self.get_string('hotkeys_info'),
+            bg='#1e1e1e',
+            fg='#888',
+            font=("Arial", 10),
+            wraplength=450
+        )
+        self.hotkeys_label.pack(pady=(15, 5), fill=X)
 
-        # ===== ПРИВЯЗКА К ИЗМЕНЕНИЮ РАЗМЕРА =====
-        # При изменении размера окна обновляем элементы
         self.root.bind('<Configure>', self._on_resize)
 
         # Центрируем окно
@@ -379,47 +360,68 @@ class ScreenshotTranslatorApp:
 
     def _on_resize(self, event):
         """Обработчик изменения размера окна"""
-        # Адаптируем размеры элементов при изменении окна
         width = self.root.winfo_width()
 
-        # При маленьком окне уменьшаем шрифты
-        if width < 420:
+        if width < 460:
             self.title_label.config(font=("Arial", 13, "bold"))
-            self.lang_btn.config(font=("Arial", 10, "bold"), padx=12, pady=4)
-            self.btn_capture.config(font=("Arial", 10))
-            self.btn_toggle.config(font=("Arial", 10))
+            self.lang_btn.config(font=("Arial", 10, "bold"), padx=12, pady=4, width=5)
+            self.btn_capture.config(font=("Arial", 10), padx=15, pady=10)
+            self.btn_toggle.config(font=("Arial", 10), padx=15, pady=10)
+            self.status.config(font=("Arial", 10))
+            if hasattr(self, 'hotkeys_label'):
+                self.hotkeys_label.config(font=("Arial", 9), wraplength=width - 60)
         else:
             self.title_label.config(font=("Arial", 15, "bold"))
-            self.lang_btn.config(font=("Arial", 12, "bold"), padx=18, pady=6)
-            self.btn_capture.config(font=("Arial", 11))
-            self.btn_toggle.config(font=("Arial", 11))
+            self.lang_btn.config(font=("Arial", 12, "bold"), padx=18, pady=6, width=6)
+            self.btn_capture.config(font=("Arial", 11), padx=20, pady=12)
+            self.btn_toggle.config(font=("Arial", 11), padx=20, pady=12)
+            self.status.config(font=("Arial", 11))
+            if hasattr(self, 'hotkeys_label'):
+                self.hotkeys_label.config(font=("Arial", 10), wraplength=min(width - 50, 480))
 
-    def init_translator(self):
-        """Инициализация переводчика в основном потоке"""
+    def _init_translator_step(self):
+        """Пошаговая инициализация переводчика"""
+        if self._init_done:
+            return
+
+        self.initializing = True
+        self.update_status("● " + self.get_string('starting_browser'), '#ff9800')
+        self.root.update_idletasks()
+
+        self.root.after(50, self._init_translator_async)
+
+    def _init_translator_async(self):
+        """Инициализация переводчика"""
         try:
-            self.update_status(self.get_string('starting_browser'), '#ff9800')
+            self.logger.info("Запуск инициализации браузера...")
             self.translator = GoogleTranslateDebug(headless=True)
             self.translator.start_browser()
-            self.ready = True
             self.overlay = OverlayWindow()
+            self.ready = True
+            self.initializing = False
+            self._init_done = True
+
             self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
-            self.update_status(self.get_string('ready'), '#4CAF50')
+            self.update_status("● " + self.get_string('ready'), '#4CAF50')
+
+            self.logger.info("Инициализация завершена успешно")
+
         except Exception as e:
-            self.logger.error(f"Ошибка: {e}")
-            self.update_status(self.get_string('error'), '#f44336')
+            self.logger.error(f"Ошибка инициализации: {e}")
+            self.initializing = False
+            self._init_done = True
+            self.update_status("● " + self.get_string('error') + ": " + str(e)[:50], '#f44336')
+            self.btn_capture.config(state=DISABLED, bg='#333', fg='#888')
 
     def setup_hotkeys(self):
         """Настройка глобальных горячих клавиш"""
         try:
-            # Отключаем предыдущие хуки
             keyboard.unhook_all()
 
-            # Блокируем F1 и F2 от передачи в другие приложения
             keyboard.block_key('f1')
             keyboard.block_key('f2')
 
             def on_key(event):
-                # Обработка F1
                 if event.name == 'f1' and event.event_type == 'down':
                     if not self._key_states.get('f1', False):
                         current_time = time.time() * 1000
@@ -430,7 +432,6 @@ class ScreenshotTranslatorApp:
                             self.root.after(100, lambda: self._key_states.__setitem__('f1', False))
                     return False
 
-                # Обработка F2
                 if event.name == 'f2' and event.event_type == 'down':
                     if not self._key_states.get('f2', False):
                         current_time = time.time() * 1000
@@ -444,7 +445,7 @@ class ScreenshotTranslatorApp:
                 return True
 
             keyboard.hook(on_key, suppress=True)
-            self.logger.info("Горячие клавиши зарегистрированы (F1, F2 заблокированы)")
+            self.logger.info("Горячие клавиши зарегистрированы")
 
         except Exception as e:
             self.logger.error(f"Ошибка регистрации горячих клавиш: {e}")
@@ -472,59 +473,127 @@ class ScreenshotTranslatorApp:
 
     def process(self):
         """Обработка скриншота"""
-        if self.translating or not self.ready:
+        if self.translating or not self.ready or self.initializing:
             return
 
-        def capture():
-            """Захват скриншота в отдельном потоке"""
-            self.translating = True
-            self.root.after(0, lambda: self.btn_capture.config(state=DISABLED, bg='#333'))
+        # Показываем оверлей индикатора ТОЛЬКО ОДИН РАЗ
+        self._show_translation_overlay()
 
+        # Блокируем кнопку
+        self.btn_capture.config(state=DISABLED, bg='#333')
+        self.translating = True
+
+        def capture_task():
+            """Захват скриншота в отдельном потоке"""
             try:
                 self.update_status(self.get_string('capturing'), '#ff9800')
+
                 img = self.screenshot.capture_active_window()
                 if not img:
                     self.update_status(self.get_string('capture_error'), '#f44336')
                     self.translating = False
-                    self.root.after(0, lambda: self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white'))
+                    self._hide_translation_overlay()
+                    self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
                     return
 
                 path = self.temp_dir / f"scr_{int(time.time())}.png"
                 img.save(path)
 
-                # Передаем в основной поток для перевода
-                self.root.after(0, lambda: self.do_translate(path))
+                # Возвращаемся в основной поток для перевода
+                self.root.after(0, lambda: self._do_translate(path))
 
             except Exception as e:
                 self.logger.error(f"Ошибка захвата: {e}")
-                self.update_status(self.get_string('error'), '#f44336')
-                self.translating = False
-                self.root.after(0, lambda: self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white'))
+                self.root.after(0, lambda: self._on_translate_error(str(e)))
 
-        threading.Thread(target=capture, daemon=True).start()
+        threading.Thread(target=capture_task, daemon=True).start()
 
-    def do_translate(self, image_path: Path):
-        """Перевод в основном потоке (где создан браузер)"""
+    def _do_translate(self, image_path: Path):
+        """Выполняет перевод в основном потоке"""
         try:
-            self.update_status(self.get_string('translating'), '#ff9800')
+            # Выполняем перевод (блокирует поток)
             out = self.temp_dir / "translated"
             result = self.translator.translate_image(image_path, out)
 
+            self._on_translate_finished(result)
+
+        except Exception as e:
+            error_msg = str(e)
+            self.logger.error(f"Ошибка перевода: {error_msg}")
+            self._on_translate_error(error_msg)
+
+    def _do_translate_async(self, image_path: Path):
+        """Выполняет перевод в отдельном потоке"""
+
+        def translate_task():
+            try:
+                out = self.temp_dir / "translated"
+                result = self.translator.translate_image(image_path, out)
+                # Возвращаем результат в основной поток
+                self.root.after(0, lambda: self._on_translate_finished(result))
+            except Exception as e:
+                self.logger.error(f"Ошибка перевода: {e}")
+                self.root.after(0, lambda: self._on_translate_error(str(e)))
+
+        threading.Thread(target=translate_task, daemon=True).start()
+
+    def _on_translate_finished(self, result):
+        """Обработчик завершения перевода"""
+        try:
+            # Завершаем прогресс
+            if self.translation_overlay:
+                self.translation_overlay.finish()
+                time.sleep(0.3)
+
             if result and self.overlay:
-                self.overlay.show_fullscreen(result)
+                window_rect = self.screenshot.get_last_window_rect()
+
+                if window_rect and hasattr(self.overlay, 'show_for_window'):
+                    self.overlay.show_for_window(result, window_rect)
+                else:
+                    self.overlay.show_fullscreen(result)
+
                 self.update_status(self.get_string('ready'), '#4CAF50')
             else:
                 self.update_status(self.get_string('translate_error'), '#f44336')
 
         except Exception as e:
-            self.logger.error(f"Ошибка перевода: {e}")
+            self.logger.error(f"Ошибка показа результата: {e}")
             self.update_status(self.get_string('error'), '#f44336')
         finally:
             self.translating = False
+            self._hide_translation_overlay()
             self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
 
+    def _on_translate_error(self, error_msg):
+        """Обработчик ошибки перевода"""
+        self.logger.error(f"Ошибка перевода: {error_msg}")
+        self.update_status(self.get_string('error'), '#f44336')
+        self.translating = False
+        self._hide_translation_overlay()
+        self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+
+    def _show_translation_overlay(self):
+        """Показывает оверлей индикатора перевода"""
+        try:
+            if self.translation_overlay is None:
+                from src.translation_overlay import TranslationOverlay
+                self.translation_overlay = TranslationOverlay()
+
+            self.translation_overlay.show(self.get_string('translating'))
+        except Exception as e:
+            self.logger.warning(f"Не удалось показать оверлей: {e}")
+
+    def _hide_translation_overlay(self):
+        """Скрывает оверлей индикатора перевода"""
+        try:
+            if self.translation_overlay:
+                self.translation_overlay.hide()
+        except:
+            pass
+
     def toggle_overlay(self):
-        """Переключает видимость оверлея"""
+        """Переключает видимость оверлея переведенного скриншота"""
         if self.overlay:
             self.overlay.toggle()
             status = self.get_string('shown') if self.overlay.is_visible() else self.get_string('hidden')
@@ -532,7 +601,8 @@ class ScreenshotTranslatorApp:
 
     def on_close(self):
         """Обработчик закрытия приложения"""
-        # Отключаем горячие клавиши
+        self._hide_translation_overlay()
+
         try:
             keyboard.unblock_key('f1')
             keyboard.unblock_key('f2')
@@ -540,7 +610,6 @@ class ScreenshotTranslatorApp:
         except:
             pass
 
-        # Сохраняем настройки
         if hasattr(self, 'settings'):
             self.settings.save()
 
