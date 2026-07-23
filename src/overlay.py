@@ -33,19 +33,10 @@ class OverlayWindow:
         self.canvas = tk.Canvas(self.root, bg='#000000', highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True)
 
-        # Кнопка закрытия
-        self.close_btn = tk.Label(
-            self.root,
-            text="✕",
-            bg='#000000',
-            fg='#666666',
-            font=("Arial", 16, "bold"),
-            cursor="hand2"
-        )
-        self.close_btn.place(x=20, y=20)
-        self.close_btn.bind('<Button-1>', lambda e: self.hide())
-        self.close_btn.bind('<Enter>', lambda e: self.close_btn.config(fg='#ff0000'))
-        self.close_btn.bind('<Leave>', lambda e: self.close_btn.config(fg='#666666'))
+        # ПРИ КЛИКЕ НА ХОЛСТ - СКРЫВАЕМ ОВЕРЛЕЙ
+        self.canvas.bind('<Button-1>', lambda e: self.hide())
+        # Также клик по самому окну
+        self.root.bind('<Button-1>', lambda e: self.hide())
 
         # ESC через Tkinter (работает только когда окно в фокусе)
         self.root.bind('<Escape>', self._on_escape)
