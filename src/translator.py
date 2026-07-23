@@ -1,6 +1,9 @@
 """
 
+
 Модуль для перевода изображений через Google Translate
+
+
 
 """
 
@@ -19,20 +22,26 @@ from PIL import Image
 class GoogleTranslateDebug:
     """Класс для перевода изображений в Google Translate (вкладка Images)"""
 
-    def __init__(self, headless: bool = True):
+    def __init__(self, headless: bool = True, target_lang: str = "ru"):
         self.headless = headless
-        self.base_url = "https://translate.google.com/details?hl=ru&sl=auto&tl=ru&op=images"
+        self.target_lang = target_lang
+        self.base_url = f"https://translate.google.com/details?hl=ru&sl=auto&tl={target_lang}&op=images"
         self._pw = None
         self._context = None
         self._page = None
         self.logger = logging.getLogger(__name__)
+
+    def update_target_language(self, target_lang: str):
+        """Обновляет целевой язык перевода"""
+        self.target_lang = target_lang
+        self.base_url = f"https://translate.google.com/details?hl=ru&sl=auto&tl={target_lang}&op=images"
+        self.logger.info(f"Целевой язык обновлен на: {target_lang}")
 
     def is_browser_alive(self) -> bool:
         """Проверяет, жив ли браузер и контекст"""
         try:
             if self._context is None or self._page is None:
                 return False
-            # Пытаемся выполнить простую операцию для проверки
             self._page.evaluate("1 + 1")
             return True
         except Exception:
@@ -54,10 +63,8 @@ class GoogleTranslateDebug:
 
         self.logger.info("Запуск Яндекс Браузера...")
 
-        # Путь к Яндекс Браузеру
         yandex_path = r"P:\Program Files\Yandex\YandexBrowser\Application\browser.exe"
 
-        # Проверяем существование пути
         if not os.path.exists(yandex_path):
             self.logger.error(f"Яндекс Браузер не найден по пути: {yandex_path}")
             self.logger.error("Пожалуйста, проверьте правильность пути")
@@ -89,7 +96,6 @@ class GoogleTranslateDebug:
         self._page = self._context.pages[0] if self._context.pages else self._context.new_page()
         self.logger.info("Яндекс Браузер запущен")
 
-        # Просто переходим на Google Translate
         self.logger.info("Открытие Google Translate...")
         try:
             self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=30000)
@@ -271,12 +277,10 @@ class GoogleTranslateDebug:
         """
         self.logger.info("Поиск видимой кнопки скачивания...")
 
-        # Находим ВСЕ кнопки с jsname="hRZeKc"
         buttons = self._page.locator('button[jsname="hRZeKc"]')
         count = buttons.count()
         self.logger.info(f"Найдено {count} кнопок с jsname='hRZeKc'")
 
-        # Перебираем все и ищем видимую
         for i in range(count):
             btn = buttons.nth(i)
             is_visible = btn.is_visible()
@@ -287,7 +291,6 @@ class GoogleTranslateDebug:
                 self.logger.info(f"✅ Найдена видимая кнопка #{i + 1}")
                 return btn
 
-        # Если не нашли по jsname, пробуем по aria-label
         self.logger.info("Пробуем поиск по aria-label...")
         buttons = self._page.locator('button[aria-label="Скачать перевод"]')
         count = buttons.count()
@@ -307,12 +310,10 @@ class GoogleTranslateDebug:
         Переводит изображение через Google Translate.
         Возвращает путь к переведенному изображению или None.
         """
-        # Проверяем, жив ли браузер, если нет - перезапускаем
         if not self.is_browser_alive():
             self.logger.warning("Браузер закрыт, перезапуск...")
             self.close_browser()
             self.start_browser()
-            # После перезапуска даем время на загрузку
             time.sleep(2)
 
         self.logger.info("=" * 60)
@@ -321,13 +322,11 @@ class GoogleTranslateDebug:
         self.logger.info(f"URL: {self.base_url}")
 
         try:
-            # Если страница закрыта или не загружена, переходим по URL
             self.logger.info("Шаг 1: Открытие Google Translate")
             try:
                 self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=30000)
             except Exception as e:
                 self.logger.error(f"Ошибка при открытии страницы: {e}")
-                # Пробуем перезапустить браузер
                 self.logger.info("Попытка перезапуска браузера...")
                 self.close_browser()
                 self.start_browser()
@@ -366,7 +365,6 @@ class GoogleTranslateDebug:
             self.logger.info("Шаг 6: Скачивание переведенного изображения")
             output_path = output_dir / f"translated_{image_path.stem}.png"
 
-            # Автоматическое скачивание
             download_button = self._find_download_button()
             if not download_button:
                 self.logger.error("Не найдена видимая кнопка скачивания")

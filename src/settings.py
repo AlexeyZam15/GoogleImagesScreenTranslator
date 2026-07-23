@@ -1,6 +1,9 @@
 """
 
+
 Модуль для управления настройками приложения с поддержкой профилей
+
+
 
 """
 
@@ -14,6 +17,7 @@ class Settings:
 
     DEFAULT_SETTINGS = {
         "language": "ru",
+        "target_language": "ru",
         "confidence_threshold": 0.8,
         "monitor_delay": 0.3,
         "zoom_normal": 1.08,
@@ -73,7 +77,6 @@ class Settings:
                 if "current_profile" in loaded:
                     self.current_profile = loaded["current_profile"]
 
-                # Инициализация профиля по умолчанию
                 if not self.profiles:
                     self.profiles = {
                         "default": {
@@ -95,11 +98,11 @@ class Settings:
         self.save()
 
     def get_language(self):
-        """Возвращает текущий язык"""
+        """Возвращает текущий язык интерфейса"""
         return self.settings.get("language", "ru")
 
     def set_language(self, lang):
-        """Устанавливает язык"""
+        """Устанавливает язык интерфейса"""
         self.settings["language"] = lang
         self.save()
 
@@ -117,7 +120,15 @@ class Settings:
         self.settings["show_browser"] = show
         self.save()
 
-    # Методы для работы с профилями
+    def get_target_language(self):
+        """Возвращает целевой язык перевода"""
+        return self.settings.get("target_language", "ru")
+
+    def set_target_language(self, lang_code):
+        """Устанавливает целевой язык перевода"""
+        self.settings["target_language"] = lang_code
+        self.save()
+
     def get_profiles_list(self):
         """Возвращает список всех профилей"""
         return list(self.profiles.keys())
