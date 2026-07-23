@@ -24,7 +24,8 @@ class Settings:
         "hide_delay": 1500,
         "always_on_top": True,
         "current_profile": "default",
-        "show_browser": True
+        "show_browser": True,
+        "show_translation_indicator": True
     }
 
     def __init__(self):
@@ -127,6 +128,15 @@ class Settings:
     def set_target_language(self, lang_code):
         """Устанавливает целевой язык перевода"""
         self.settings["target_language"] = lang_code
+        self.save()
+
+    def get_show_translation_indicator(self):
+        """Возвращает настройку показа индикатора перевода"""
+        return self.settings.get("show_translation_indicator", True)
+
+    def set_show_translation_indicator(self, show):
+        """Устанавливает настройку показа индикатора перевода"""
+        self.settings["show_translation_indicator"] = show
         self.save()
 
     def get_profiles_list(self):

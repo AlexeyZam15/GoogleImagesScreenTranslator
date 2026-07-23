@@ -14,6 +14,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 from src.app import ScreenshotTranslatorApp
 from src.settings import Settings
 
+# Проверяем аргументы командной строки
+DEBUG_MODE = '--debug' in sys.argv or '-d' in sys.argv
+
 
 def ensure_app_directories():
     """Создает все необходимые папки приложения"""
@@ -44,6 +47,14 @@ if __name__ == "__main__":
             }
         }
         settings.save()
+
+    # Если включен режим отладки - показываем браузер
+    if DEBUG_MODE:
+        settings.set_show_browser(True)
+        print("🔧 РЕЖИМ ОТЛАДКИ: браузер будет показан")
+    else:
+        # В обычном режиме браузер скрыт
+        settings.set_show_browser(False)
 
     app = ScreenshotTranslatorApp()
     app.run()

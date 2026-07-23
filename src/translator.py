@@ -33,6 +33,9 @@ class GoogleTranslateDebug:
 
     def start_browser(self):
         """Запускает Яндекс Браузер с Playwright"""
+        import shutil
+        import time
+
         self.logger.info("Запуск Playwright...")
         self._pw = sync_playwright().start()
 
@@ -46,6 +49,15 @@ class GoogleTranslateDebug:
             yandex_path = None
         else:
             self.logger.info(f"Яндекс Браузер найден: {yandex_path}")
+
+        # Удаляем старый профиль для чистого запуска
+        profile_path = Path("metadata/google_translate_profile")
+        if profile_path.exists():
+            try:
+                shutil.rmtree(profile_path)
+                self.logger.info("✅ Старый профиль удален")
+            except Exception as e:
+                self.logger.warning(f"Не удалось удалить профиль: {e}")
 
         self._context = self._pw.chromium.launch_persistent_context(
             user_data_dir="metadata/google_translate_profile",
@@ -70,34 +82,42 @@ class GoogleTranslateDebug:
 
         self.logger.info("Яндекс Браузер запущен")
 
-        # Получаем первую вкладку (она пустая)
+        # Даем браузеру время на инициализацию
+        self.logger.info("Ожидание инициализации браузера (3с)...")
+        time.sleep(3)
+
+        # Закрываем все существующие вкладки
         pages = self._context.pages
         if pages:
-            self._page = pages[0]
-            self.logger.info("Используем существующую вкладку")
-        else:
-            self._page = self._context.new_page()
-            self.logger.info("Создана новая вкладка")
+            self.logger.info(f"Закрытие {len(pages)} существующих вкладок...")
+            for page in pages:
+                try:
+                    page.close()
+                except Exception as e:
+                    self.logger.warning(f"Не удалось закрыть вкладку: {e}")
+            self.logger.info("Все вкладки закрыты")
 
-        # Закрываем все лишние вкладки, оставляя только текущую
-        self._cleanup_pages()
+        # Создаем новую чистую вкладку
+        self._page = self._context.new_page()
+        self.logger.info("Создана новая вкладка")
 
-        self.logger.info("Открытие Google Translate на вкладке Изображения...")
+        # Переходим на Google Translate
+        self.logger.info("Открытие Google Translate...")
         try:
-            self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=30000)
-            self.logger.info(f"Google Translate открыт: {self.base_url}")
+            self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=15000)
+            self.logger.info(f"✅ Google Translate открыт: {self.base_url}")
         except Exception as e:
             self.logger.error(f"Ошибка при открытии Google Translate: {e}")
             try:
                 self.logger.info("Повторная попытка открытия...")
-                self._page.goto(self.base_url, timeout=30000)
-                self.logger.info(f"Google Translate открыт (повторно): {self.base_url}")
+                self._page.goto(self.base_url, timeout=15000)
+                self.logger.info(f"✅ Google Translate открыт (повторно): {self.base_url}")
             except Exception as e2:
                 self.logger.error(f"Повторная ошибка при открытии: {e2}")
                 raise
 
-    def _cleanup_pages(self):
-        """Закрывает все лишние вкладки, оставляя только текущую"""
+    def _reset_pages_fast(self):
+        """Быстрое обнуление вкладок - используем первую существующую"""
         try:
             if not self._context:
                 return
@@ -105,29 +125,174 @@ class GoogleTranslateDebug:
             pages = self._context.pages
             page_count = len(pages)
 
-            if page_count <= 1:
-                self.logger.info(f"Всего {page_count} вкладка, очистка не требуется")
+            if page_count == 0:
+                # Нет вкладок - создаем новую
+                self._page = self._context.new_page()
+                self.logger.info("Создана новая вкладка")
                 return
 
-            self.logger.info(f"Найдено {page_count} вкладок, закрываем лишние...")
+            # Используем первую вкладку
+            self._page = pages[0]
+            self.logger.info(f"Используем существующую вкладку (всего {page_count})")
 
-            # Закрываем все вкладки, кроме текущей (self._page)
-            for i, page in enumerate(pages):
-                if page != self._page:
+            # Закрываем все остальные вкладки быстро (начиная с конца)
+            if page_count > 1:
+                for i in range(page_count - 1, 0, -1):
                     try:
-                        page.close()
-                        self.logger.info(f"Закрыта вкладка #{i + 1}")
-                    except Exception as e:
-                        self.logger.warning(f"Не удалось закрыть вкладку #{i + 1}: {e}")
+                        pages[i].close()
+                    except:
+                        pass
+                self.logger.info(f"Закрыты лишние вкладки, осталась 1")
 
-            self.logger.info(f"Очистка завершена, осталась 1 вкладка")
         except Exception as e:
-            self.logger.warning(f"Ошибка при очистке вкладок: {e}")
+            self.logger.warning(f"Ошибка при обнулении вкладок: {e}")
+            # Если что-то пошло не так - создаем новую вкладку
+            try:
+                self._page = self._context.new_page()
+                self.logger.info("Создана новая вкладка (fallback)")
+            except:
+                pass
+
+    def translate_image(self, image_path: Path, output_dir: Path) -> Optional[Path]:
+        """
+        Переводит изображение через Google Translate.
+        Возвращает путь к переведенному изображению или None.
+        """
+        import time
+        total_start = time.time()
+
+        if not self.is_browser_alive():
+            self.logger.warning("Браузер закрыт, перезапуск...")
+            self.close_browser()
+            self.start_browser()
+            time.sleep(1)
+
+        self.logger.info("=" * 60)
+        self.logger.info("🚀 ЗАПУСК ПЕРЕВОДА ИЗОБРАЖЕНИЯ")
+        self.logger.info("=" * 60)
+
+        try:
+            # Шаг 1: Проверка готовности страницы
+            step_start = time.time()
+            self.logger.info("Шаг 1: Проверка готовности страницы")
+            try:
+                self._page.evaluate("1 + 1")
+                self.logger.info(f"  ✓ Страница загружена (+{time.time() - step_start:.3f}с)")
+            except Exception as e:
+                self.logger.warning(f"Страница недоступна, перезагрузка: {e}")
+                try:
+                    self._page.reload()
+                    self.logger.info(f"  ✓ Страница перезагружена (+{time.time() - step_start:.3f}с)")
+                except Exception as e2:
+                    self.logger.error(f"Не удалось перезагрузить страницу: {e2}")
+                    try:
+                        self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=10000)
+                        self.logger.info(f"  ✓ Страница открыта заново (+{time.time() - step_start:.3f}с)")
+                    except Exception as e3:
+                        self.logger.error(f"Не удалось открыть страницу: {e3}")
+                        return None
+            self.logger.info(f"  ✓ Шаг 1 выполнен за {time.time() - step_start:.3f}с")
+
+            # Шаг 2: Ожидание загрузки интерфейса
+            step_start = time.time()
+            self.logger.info("Шаг 2: Ожидание загрузки интерфейса")
+            if not self._wait_for_upload_zone(timeout=10000):
+                self._page.reload()
+                if not self._wait_for_upload_zone(timeout=8000):
+                    self.logger.error("Интерфейс не загрузился")
+                    return None
+            self.logger.info(f"  ✓ Шаг 2 выполнен за {time.time() - step_start:.3f}с")
+
+            # Шаг 3: Копирование изображения в буфер обмена
+            step_start = time.time()
+            self.logger.info("Шаг 3: Копирование изображения в буфер обмена")
+            if not self._copy_image_to_clipboard(image_path):
+                self.logger.error("Не удалось скопировать изображение")
+                return None
+            self.logger.info(f"  ✓ Шаг 3 выполнен за {time.time() - step_start:.3f}с")
+
+            # Шаг 4: Нажатие кнопки 'Вставить из буфера обмена'
+            step_start = time.time()
+            self.logger.info("Шаг 4: Нажатие кнопки 'Вставить из буфера обмена'")
+            if not self._find_and_click_paste_button():
+                self.logger.error("Не найдена кнопка вставки")
+                return None
+            self.logger.info(f"  ✓ Шаг 4 выполнен за {time.time() - step_start:.3f}с")
+
+            # Шаг 5: Ожидание перевода
+            step_start = time.time()
+            self.logger.info("Шаг 5: Ожидание перевода")
+            if not self._wait_for_blob(timeout=20):
+                self.logger.error("Перевод не завершился")
+                return None
+            self.logger.info(f"  ✓ Шаг 5 выполнен за {time.time() - step_start:.3f}с")
+
+            # Шаг 6: Скачивание переведенного изображения
+            step_start = time.time()
+            self.logger.info("Шаг 6: Скачивание переведенного изображения")
+            output_path = output_dir / f"translated_{image_path.stem}.png"
+
+            download_button = self._find_download_button()
+            if not download_button:
+                self.logger.error("Не найдена видимая кнопка скачивания")
+                return None
+
+            download_button.scroll_into_view_if_needed()
+
+            if not download_button.is_visible():
+                self.logger.error("Кнопка перестала быть видимой")
+                return None
+
+            with self._page.expect_download(timeout=20000) as download_info:
+                download_button.click()
+                self.logger.info("Нажата кнопка скачивания, ожидание загрузки...")
+
+            download = download_info.value
+            self.logger.info(f"Скачивание перехвачено: {download.suggested_filename}")
+
+            output_dir.mkdir(parents=True, exist_ok=True)
+            download.save_as(str(output_path))
+
+            self.logger.info(f"  ✓ Шаг 6 выполнен за {time.time() - step_start:.3f}с")
+
+            if output_path.exists():
+                size = output_path.stat().st_size
+                total_elapsed = time.time() - total_start
+                self.logger.info(f"✅ Изображение сохранено: {output_path} ({size} байт)")
+                self.logger.info(f"⏱️ ОБЩЕЕ ВРЕМЯ ПЕРЕВОДА: {total_elapsed:.3f} секунд")
+
+                # ВОЗВРАЩАЕМ РЕЗУЛЬТАТ СРАЗУ, БЕЗ ПОДГОТОВКИ СТРАНИЦЫ
+                return output_path
+            else:
+                self.logger.error("Файл не был сохранен")
+                return None
+
+        except Exception as e:
+            total_elapsed = time.time() - total_start
+            self.logger.error(f"Критическая ошибка (через {total_elapsed:.3f}с): {e}")
+            import traceback
+            traceback.print_exc()
+            return None
 
     def close_browser(self):
-        """Закрывает браузер"""
+        """Закрывает браузер и все вкладки"""
         try:
             if self._context:
+                # Закрываем все вкладки
+                try:
+                    pages = self._context.pages
+                    if pages:
+                        self.logger.info(f"Закрытие {len(pages)} вкладок...")
+                        for page in pages:
+                            try:
+                                page.close()
+                            except:
+                                pass
+                        self.logger.info("Все вкладки закрыты")
+                except Exception as e:
+                    self.logger.error(f"Ошибка при закрытии вкладок: {e}")
+
+                # Закрываем контекст
                 try:
                     self._context.close()
                     self.logger.info("Контекст закрыт")
@@ -172,7 +337,7 @@ class GoogleTranslateDebug:
         return False
 
     def _copy_image_to_clipboard(self, image_path: Path) -> bool:
-        """Копирует изображение в буфер обмена через JavaScript"""
+        """Копирует изображение в буфер обмена через Playwright (быстро)"""
         self.logger.info(f"Копирование изображения в буфер обмена: {image_path}")
 
         if not image_path.exists():
@@ -180,38 +345,30 @@ class GoogleTranslateDebug:
             return False
 
         try:
-            with Image.open(image_path) as img:
-                if img.mode != 'RGBA':
-                    img = img.convert('RGBA')
+            # Используем встроенный метод Playwright для установки буфера обмена
+            # Читаем изображение как PNG
+            with open(image_path, 'rb') as f:
+                image_data = f.read()
 
-                buffer = io.BytesIO()
-                img.save(buffer, format='PNG')
-                png_data = buffer.getvalue()
+            # Кодируем в base64 для передачи в JavaScript
+            import base64
+            b64_data = base64.b64encode(image_data).decode('utf-8')
 
-            b64_data = base64.b64encode(png_data).decode('utf-8')
-
+            # Минимальный JavaScript для копирования
             js_code = """
-                async (b64Data) => {
-                    try {
-                        const binaryString = atob(b64Data);
-                        const bytes = new Uint8Array(binaryString.length);
-                        for (let i = 0; i < binaryString.length; i++) {
-                            bytes[i] = binaryString.charCodeAt(i);
-                        }
-
-                        const blob = new Blob([bytes], { type: 'image/png' });
-
-                        await navigator.clipboard.write([
-                            new ClipboardItem({
-                                [blob.type]: blob
-                            })
-                        ]);
-
-                        return true;
-                    } catch (e) {
-                        console.error('Clipboard error:', e);
-                        return false;
+                (b64Data) => {
+                    const byteCharacters = atob(b64Data);
+                    const byteNumbers = new Array(byteCharacters.length);
+                    for (let i = 0; i < byteCharacters.length; i++) {
+                        byteNumbers[i] = byteCharacters.charCodeAt(i);
                     }
+                    const byteArray = new Uint8Array(byteNumbers);
+                    const blob = new Blob([byteArray], { type: 'image/png' });
+                    return navigator.clipboard.write([
+                        new ClipboardItem({
+                            [blob.type]: blob
+                        })
+                    ]).then(() => true).catch(() => false);
                 }
             """
 
@@ -229,35 +386,29 @@ class GoogleTranslateDebug:
             return False
 
     def _find_and_click_paste_button(self) -> bool:
-        """Находит и нажимает кнопку 'Вставить из буфера обмена'"""
-        self.logger.info("Поиск кнопки 'Вставить из буфера обмена'...")
+        """Быстро нажимает кнопку 'Вставить из буфера обмена'"""
+        self.logger.info("Вставка изображения из буфера обмена...")
 
-        button_selectors = [
-            'button[aria-label="Вставить изображение из буфера обмена"]',
-            'button.VfPpkd-LgbsSe.OLiIxf.PDpWxe',
-            'button.Rj2Mlf.OLiIxf.PDpWxe',
-            'button.VfPpkd-LgbsSe',
-            'button:has-text("Вставить из буфера обмена")',
-            'span:has-text("Вставить из буфера обмена")',
-            '//button[contains(@aria-label, "Вставить изображение из буфера обмена")]',
-            '//button[.//span[text()="Вставить из буфера обмена"]]',
-            '//button[contains(., "Вставить из буфера обмена")]',
-            'div[jsaction*="wQCqLd"] button',
-        ]
+        # Просто нажимаем Ctrl+V - страница уже готова
+        try:
+            self._page.click('body')
+            self._page.keyboard.press("Control+V")
+            self.logger.info("✅ Вставка через Ctrl+V выполнена")
+            return True
+        except Exception as e:
+            self.logger.warning(f"Ctrl+V не сработал: {e}")
 
-        for selector in button_selectors:
-            try:
-                locator = self._page.locator(selector).first
-                if locator.count() > 0 and locator.is_visible():
-                    locator.scroll_into_view_if_needed()
-                    locator.click(timeout=5000)
-                    self.logger.info(f"✅ Нажата кнопка вставки через селектор: {selector}")
-                    return True
-            except Exception as e:
-                self.logger.debug(f"Не удалось использовать селектор {selector}: {e}")
-                continue
+        # Запасной вариант - ищем кнопку
+        try:
+            button = self._page.locator('button[aria-label="Вставить изображение из буфера обмена"]')
+            if button.count() > 0:
+                button.first.click(timeout=2000)
+                self.logger.info("✅ Кнопка вставки нажата")
+                return True
+        except Exception as e:
+            self.logger.debug(f"Не удалось нажать кнопку: {e}")
 
-        self.logger.warning("Не удалось найти кнопку 'Вставить из буфера обмена'")
+        self.logger.warning("Не удалось вставить изображение")
         return False
 
     def _wait_for_upload_zone(self, timeout: int = 15000) -> bool:
@@ -318,118 +469,6 @@ class GoogleTranslateDebug:
 
         self.logger.warning("Переведенное изображение не появилось")
         return False
-
-    def translate_image(self, image_path: Path, output_dir: Path) -> Optional[Path]:
-        """
-        Переводит изображение через Google Translate.
-        Возвращает путь к переведенному изображению или None.
-        """
-        import time
-        total_start = time.time()
-
-        if not self.is_browser_alive():
-            self.logger.warning("Браузер закрыт, перезапуск...")
-            self.close_browser()
-            self.start_browser()
-            time.sleep(1)
-
-        self.logger.info("=" * 60)
-        self.logger.info("🚀 ЗАПУСК ПЕРЕВОДА ИЗОБРАЖЕНИЯ")
-        self.logger.info("=" * 60)
-        self.logger.info(f"URL: {self.base_url}")
-
-        try:
-            step_start = time.time()
-            self.logger.info("Шаг 1: Открытие Google Translate")
-            try:
-                self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=20000)
-            except Exception as e:
-                self.logger.error(f"Ошибка при открытии страницы: {e}")
-                self.logger.info("Попытка перезапуска браузера...")
-                self.close_browser()
-                self.start_browser()
-                time.sleep(1)
-                self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=20000)
-            self.logger.info(f"  ✓ Шаг 1 выполнен за {time.time() - step_start:.2f}с")
-
-            step_start = time.time()
-            self.logger.info("Шаг 2: Ожидание загрузки интерфейса")
-            if not self._wait_for_upload_zone(timeout=10000):
-                self._page.reload()
-                time.sleep(2)
-                if not self._wait_for_upload_zone(timeout=8000):
-                    self.logger.error("Интерфейс не загрузился")
-                    return None
-            self.logger.info(f"  ✓ Шаг 2 выполнен за {time.time() - step_start:.2f}с")
-            time.sleep(0.5)
-
-            step_start = time.time()
-            self.logger.info("Шаг 3: Копирование изображения в буфер обмена")
-            if not self._copy_image_to_clipboard(image_path):
-                self.logger.error("Не удалось скопировать изображение")
-                return None
-            self.logger.info(f"  ✓ Шаг 3 выполнен за {time.time() - step_start:.2f}с")
-            time.sleep(0.3)
-
-            step_start = time.time()
-            self.logger.info("Шаг 4: Нажатие кнопки 'Вставить из буфера обмена'")
-            if not self._find_and_click_paste_button():
-                self.logger.error("Не найдена кнопка вставки")
-                return None
-            self.logger.info(f"  ✓ Шаг 4 выполнен за {time.time() - step_start:.2f}с")
-
-            step_start = time.time()
-            self.logger.info("Шаг 5: Ожидание перевода")
-            if not self._wait_for_blob(timeout=20):
-                self.logger.error("Перевод не завершился")
-                return None
-            self.logger.info(f"  ✓ Шаг 5 выполнен за {time.time() - step_start:.2f}с")
-            time.sleep(0.5)
-
-            step_start = time.time()
-            self.logger.info("Шаг 6: Скачивание переведенного изображения")
-            output_path = output_dir / f"translated_{image_path.stem}.png"
-
-            download_button = self._find_download_button()
-            if not download_button:
-                self.logger.error("Не найдена видимая кнопка скачивания")
-                return None
-
-            download_button.scroll_into_view_if_needed()
-            time.sleep(0.3)
-
-            if not download_button.is_visible():
-                self.logger.error("Кнопка перестала быть видимой")
-                return None
-
-            with self._page.expect_download(timeout=20000) as download_info:
-                download_button.click()
-                self.logger.info("Нажата кнопка скачивания, ожидание загрузки...")
-
-            download = download_info.value
-            self.logger.info(f"Скачивание перехвачено: {download.suggested_filename}")
-
-            output_dir.mkdir(parents=True, exist_ok=True)
-            download.save_as(str(output_path))
-
-            self.logger.info(f"  ✓ Шаг 6 выполнен за {time.time() - step_start:.2f}с")
-
-            if output_path.exists():
-                size = output_path.stat().st_size
-                total_elapsed = time.time() - total_start
-                self.logger.info(f"✅ Изображение сохранено: {output_path} ({size} байт)")
-                self.logger.info(f"⏱️ ОБЩЕЕ ВРЕМЯ ПЕРЕВОДА: {total_elapsed:.2f} секунд")
-                return output_path
-            else:
-                self.logger.error("Файл не был сохранен")
-                return None
-
-        except Exception as e:
-            total_elapsed = time.time() - total_start
-            self.logger.error(f"Критическая ошибка (через {total_elapsed:.2f}с): {e}")
-            import traceback
-            traceback.print_exc()
-            return None
 
     def _find_download_button(self):
         """

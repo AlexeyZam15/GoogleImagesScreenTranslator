@@ -1,10 +1,5 @@
 """
-
-
 Строки локализации для приложения GoogleScreenTranslate
-
-
-
 """
 
 STRINGS = {
@@ -27,7 +22,7 @@ STRINGS = {
         'settings_saved': "Настройки сохранены",
         'settings_reset_confirm': "Сбросить все настройки к стандартным?",
         'settings_reset_done': "Настройки сброшены к стандартным",
-        'show_browser': "Показывать браузер",
+        'show_translation_indicator': "Показывать индикатор перевода",
         'target_language': "Целевой язык перевода:",
     },
     'en': {
@@ -49,7 +44,7 @@ STRINGS = {
         'settings_saved': "Settings saved",
         'settings_reset_confirm': "Reset all settings to defaults?",
         'settings_reset_done': "Settings reset to defaults",
-        'show_browser': "Show browser",
+        'show_translation_indicator': "Show translation indicator",
         'target_language': "Target translation language:",
     }
 }
