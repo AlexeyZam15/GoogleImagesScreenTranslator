@@ -1,7 +1,5 @@
 """
-
 Главный модуль приложения для перевода скриншотов
-
 """
 
 import logging
@@ -10,6 +8,7 @@ import time
 import threading
 import os
 import sys
+import tkinter.messagebox as messagebox
 from pathlib import Path
 from tkinter import *
 from tkinter import ttk
@@ -192,7 +191,6 @@ class ScreenshotTranslatorApp:
         self.update_ui_language()
         self._setup_app_icon()
         self.setup_hotkeys()
-        # Инициализация в главном потоке через after
         self.root.after(100, self._init_translator_step)
 
     def _init_translator_step(self):
@@ -211,7 +209,12 @@ class ScreenshotTranslatorApp:
             show_browser = self.settings.get_show_browser()
             target_lang = self.settings.get_target_language()
 
-            self.translator = GoogleTranslateDebug(headless=not show_browser, target_lang=target_lang)
+            # ПЕРЕДАЕМ НАСТРОЙКИ В ПЕРЕВОДЧИК
+            self.translator = GoogleTranslateDebug(
+                headless=not show_browser,
+                target_lang=target_lang,
+                settings=self.settings  # <--- ДОБАВЛЯЕМ ПЕРЕДАЧУ НАСТРОЕК
+            )
             self.translator.start_browser()
             self.overlay = OverlayWindow()
             self.ready = True
@@ -227,6 +230,149 @@ class ScreenshotTranslatorApp:
             self._init_done = True
             self.update_status("● " + self.get_string('error') + ": " + str(e)[:50], '#f44336')
             self.btn_capture.config(state=DISABLED, bg='#333', fg='#888')
+
+    def _handle_browser_not_found(self, error_msg: str):
+        """Обрабатывает ситуацию, когда браузер не найден"""
+        self.logger.error(f"Браузер не найден: {error_msg}")
+        self.update_status("● Браузер не найден", '#f44336')
+        self.btn_capture.config(state=DISABLED, bg='#333', fg='#888')
+
+        # Показываем диалог с инструкцией
+        result = messagebox.askquestion(
+            "Браузер не найден",
+            "Не удалось найти Яндекс Браузер или Google Chrome.\n\n"
+            "Для работы программы необходим один из этих браузеров.\n\n"
+            "Вы можете:\n"
+            "1. Установить Яндекс Браузер или Google Chrome\n"
+            "2. Указать путь к уже установленному браузеру вручную\n\n"
+            "Хотите указать путь к браузеру вручную?",
+            icon='warning'
+        )
+
+        if result == 'yes':
+            self._show_browser_path_dialog()
+        else:
+            messagebox.showinfo(
+                "Информация",
+                "Пожалуйста, установите Яндекс Браузер или Google Chrome\n"
+                "и перезапустите программу."
+            )
+
+    def _show_browser_path_dialog(self):
+        """Показывает диалог для ручного указания пути к браузеру"""
+        import tkinter.filedialog as filedialog
+
+        current_path = self.settings.get_browser_path()
+
+        # Создаем простое окно для ввода пути
+        dialog = Toplevel(self.root)
+        dialog.title("Укажите путь к браузеру")
+        dialog.geometry("600x200")
+        dialog.resizable(False, False)
+        dialog.configure(bg='#1e1e1e')
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        # Центрируем окно
+        dialog.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - 600) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - 200) // 2
+        dialog.geometry(f"+{x}+{y}")
+
+        Label(
+            dialog,
+            text="Укажите полный путь к исполняемому файлу браузера:",
+            bg='#1e1e1e',
+            fg='white',
+            font=("Arial", 10)
+        ).pack(pady=(20, 5))
+
+        Label(
+            dialog,
+            text="Например: C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+            bg='#1e1e1e',
+            fg='#888',
+            font=("Arial", 9)
+        ).pack(pady=(0, 10))
+
+        path_frame = Frame(dialog, bg='#1e1e1e')
+        path_frame.pack(fill=X, padx=20, pady=5)
+
+        path_var = StringVar(value=current_path)
+        path_entry = Entry(
+            path_frame,
+            textvariable=path_var,
+            font=("Arial", 10),
+            bg='#2d2d2d',
+            fg='white',
+            insertbackground='white',
+            relief=FLAT
+        )
+        path_entry.pack(side=LEFT, fill=X, expand=True, padx=(0, 5))
+
+        def browse():
+            file_path = filedialog.askopenfilename(
+                title="Выберите браузер",
+                filetypes=[("Executable files", "*.exe"), ("All files", "*.*")]
+            )
+            if file_path:
+                path_var.set(file_path)
+
+        browse_btn = Button(
+            path_frame,
+            text="Обзор...",
+            command=browse,
+            bg='#3c3c3c',
+            fg='white',
+            relief=FLAT,
+            padx=10,
+            pady=5
+        )
+        browse_btn.pack(side=RIGHT)
+
+        btn_frame = Frame(dialog, bg='#1e1e1e')
+        btn_frame.pack(pady=20)
+
+        def save_path():
+            new_path = path_var.get().strip()
+            if new_path and os.path.exists(new_path):
+                self.settings.set_browser_path(new_path)
+                dialog.destroy()
+                # Перезапускаем инициализацию с новым путем
+                self.root.after(100, self._retry_init)
+            elif new_path:
+                messagebox.showerror("Ошибка", "Указанный файл не существует!")
+            else:
+                messagebox.showerror("Ошибка", "Пожалуйста, укажите путь к браузеру!")
+
+        Button(
+            btn_frame,
+            text="Сохранить и продолжить",
+            command=save_path,
+            bg='#4CAF50',
+            fg='white',
+            relief=FLAT,
+            padx=20,
+            pady=8
+        ).pack(side=LEFT, padx=5)
+
+        Button(
+            btn_frame,
+            text="Отмена",
+            command=dialog.destroy,
+            bg='#3c3c3c',
+            fg='white',
+            relief=FLAT,
+            padx=20,
+            pady=8
+        ).pack(side=LEFT, padx=5)
+
+    def _retry_init(self):
+        """Повторяет попытку инициализации"""
+        self._init_done = False
+        self.ready = False
+        self.initializing = False
+        self._init_translator_step()
 
     def toggle_browser_visibility(self):
         """Переключает видимость браузера"""
@@ -244,26 +390,27 @@ class ScreenshotTranslatorApp:
         self._restarting = True
         self.logger.info("Перезапуск переводчика с новыми настройками...")
         self.update_status("● Перезапуск браузера...", '#ff9800')
-
-        # Выполняем перезапуск в главном потоке через after
         self.root.after(0, self._do_restart)
 
     def _do_restart(self):
         """Выполняет перезапуск в главном потоке"""
         try:
-            # Закрываем браузер
             if self.translator:
                 self.translator.close_browser()
                 self.translator = None
                 self.ready = False
 
-            # Создаем новый браузер
             show_browser = self.settings.get_show_browser()
             target_lang = self.settings.get_target_language()
             self.logger.info(
                 f"Запуск переводчика с параметрами: headless={not show_browser}, target_lang={target_lang}")
 
-            self.translator = GoogleTranslateDebug(headless=not show_browser, target_lang=target_lang)
+            # ПЕРЕДАЕМ НАСТРОЙКИ В ПЕРЕВОДЧИК
+            self.translator = GoogleTranslateDebug(
+                headless=not show_browser,
+                target_lang=target_lang,
+                settings=self.settings  # <--- ДОБАВЛЯЕМ ПЕРЕДАЧУ НАСТРОЕК
+            )
             self.translator.start_browser()
             self.ready = True
 
@@ -286,15 +433,14 @@ class ScreenshotTranslatorApp:
                 show_browser = self.settings.get_show_browser()
                 target_lang = self.settings.get_target_language()
 
-                # Создаем переводчик в отдельном потоке
                 translator = GoogleTranslateDebug(headless=not show_browser, target_lang=target_lang)
                 translator.start_browser()
 
-                # Возвращаем результат в главный поток
                 self.root.after(0, lambda: self._on_init_complete(translator))
             except Exception as e:
-                self.logger.error(f"Ошибка инициализации: {e}")
-                self.root.after(0, lambda: self._on_init_error(str(e)))
+                error_msg = str(e)
+                self.logger.error(f"Ошибка инициализации: {error_msg}")
+                self.root.after(0, lambda: self._on_init_error(error_msg))
 
         threading.Thread(target=init_task, daemon=True).start()
 
@@ -318,9 +464,13 @@ class ScreenshotTranslatorApp:
         """Обработчик ошибки инициализации"""
         self.initializing = False
         self._init_done = True
-        self.update_status("● " + self.get_string('error') + ": " + error_msg[:50], '#f44336')
-        self.btn_capture.config(state=DISABLED, bg='#333', fg='#888')
-        self.logger.error(f"❌ Ошибка инициализации: {error_msg}")
+
+        if "Не найден" in error_msg and ("браузер" in error_msg or "Chrome" in error_msg):
+            self._handle_browser_not_found(error_msg)
+        else:
+            self.update_status("● " + self.get_string('error') + ": " + error_msg[:50], '#f44336')
+            self.btn_capture.config(state=DISABLED, bg='#333', fg='#888')
+            self.logger.error(f"❌ Ошибка инициализации: {error_msg}")
 
     def _on_restart_complete(self):
         """Обработчик успешного перезапуска"""
@@ -344,7 +494,12 @@ class ScreenshotTranslatorApp:
             self.logger.info(
                 f"Запуск переводчика с параметрами: headless={not show_browser}, target_lang={target_lang}")
 
-            self.translator = GoogleTranslateDebug(headless=not show_browser, target_lang=target_lang)
+            # ПЕРЕДАЕМ НАСТРОЙКИ В ПЕРЕВОДЧИК
+            self.translator = GoogleTranslateDebug(
+                headless=not show_browser,
+                target_lang=target_lang,
+                settings=self.settings  # <--- ДОБАВЛЯЕМ ПЕРЕДАЧУ НАСТРОЕК
+            )
             self.translator.start_browser()
 
             self.ready = True
@@ -481,6 +636,36 @@ class ScreenshotTranslatorApp:
         if hasattr(self, 'target_lang_label'):
             self.target_lang_label.config(text=self.get_string('target_language'))
 
+        # ОБНОВЛЯЕМ МЕНЮ
+        self.update_menu_language()
+
+    def update_menu_language(self):
+        """Обновляет язык главного меню"""
+        # Удаляем старое меню
+        self.root.config(menu=Menu())
+
+        # Создаем новое меню
+        menubar = Menu(self.root, bg='#1e1e1e', fg='white')
+        self.root.config(menu=menubar)
+
+        # Меню "Файл"
+        file_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white')
+        menubar.add_cascade(label=self.get_string('menu_file'), menu=file_menu)
+        file_menu.add_command(label=self.get_string('menu_exit'), command=self.on_close)
+
+        # Меню "Настройки"
+        settings_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white')
+        menubar.add_cascade(label=self.get_string('menu_settings'), menu=settings_menu)
+        settings_menu.add_command(label=self.get_string('menu_settings_item'), command=self.open_settings)
+        settings_menu.add_separator()
+        settings_menu.add_command(label=self.get_string('menu_reset_settings'), command=self.reset_settings)
+
+        # Меню "Помощь"
+        help_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white')
+        menubar.add_cascade(label=self.get_string('menu_help'), menu=help_menu)
+        help_menu.add_command(label=self.get_string('menu_shortcuts'), command=self.show_shortcuts)
+        help_menu.add_command(label=self.get_string('menu_about'), command=self.show_about)
+
     def create_gui(self):
         """Создает главное окно приложения с адаптивной версткой"""
         self.root = Tk()
@@ -489,6 +674,10 @@ class ScreenshotTranslatorApp:
         self.root.minsize(480, 430)
         self.root.resizable(True, True)
         self.root.configure(bg='#1e1e1e')
+
+        # СОЗДАЕМ ГЛАВНОЕ МЕНЮ
+        self.create_menu()
+
         self.show_browser_var = BooleanVar(value=self.settings.get_show_browser())
         self.target_lang_var = StringVar(value=self.settings.get_target_language())
         self.show_indicator_var = BooleanVar(value=self.settings.get_show_translation_indicator())
@@ -504,24 +693,42 @@ class ScreenshotTranslatorApp:
         self.title_label = Label(title_frame, text=self.get_string('app_title'),
                                  bg='#1e1e1e', fg='#4CAF50', font=("Arial", 15, "bold"))
         self.title_label.pack(side=LEFT)
-        lang_frame = Frame(header_frame, bg='#1e1e1e')
-        lang_frame.pack(side=RIGHT, padx=(10, 0))
+
+        # Правая часть хедера - кнопки языка и настроек
+        header_right = Frame(header_frame, bg='#1e1e1e')
+        header_right.pack(side=RIGHT, padx=(10, 0))
+
+        # Кнопка языка (EN/RU) - БЕЗ ФИКСИРОВАННОЙ ШИРИНЫ
         current_lang = self.settings.get_language()
         lang_text = "EN" if current_lang == "ru" else "RU"
         self.lang_btn = Button(
-            lang_frame,
+            header_right,
             text=lang_text,
             command=self.toggle_language,
             font=("Arial", 12, "bold"),
             bg='#3c3c3c',
             fg='#4CAF50',
             relief=FLAT,
-            padx=18,
+            padx=12,
             pady=6,
-            cursor="hand2",
-            width=6
+            cursor="hand2"
         )
-        self.lang_btn.pack()
+        self.lang_btn.pack(side=RIGHT, padx=(0, 5))
+
+        # Кнопка настроек (шестеренка) - БЕЗ ФИКСИРОВАННОЙ ШИРИНЫ
+        self.settings_btn = Button(
+            header_right,
+            text="⚙️",
+            command=self.open_settings,
+            font=("Arial", 14),
+            bg='#3c3c3c',
+            fg='#cccccc',
+            relief=FLAT,
+            padx=12,
+            pady=6,
+            cursor="hand2"
+        )
+        self.settings_btn.pack(side=RIGHT, padx=(0, 5))
 
         def on_enter(e):
             self.lang_btn.config(bg='#4CAF50', fg='white')
@@ -531,6 +738,16 @@ class ScreenshotTranslatorApp:
 
         self.lang_btn.bind('<Enter>', on_enter)
         self.lang_btn.bind('<Leave>', on_leave)
+
+        def on_settings_enter(e):
+            self.settings_btn.config(bg='#4CAF50', fg='white')
+
+        def on_settings_leave(e):
+            self.settings_btn.config(bg='#3c3c3c', fg='#cccccc')
+
+        self.settings_btn.bind('<Enter>', on_settings_enter)
+        self.settings_btn.bind('<Leave>', on_settings_leave)
+
         self.status = Label(main, text="● " + self.get_string('starting'),
                             fg='#ff9800', bg='#1e1e1e', font=("Arial", 11))
         self.status.pack(pady=(5, 10), fill=X)
@@ -591,10 +808,6 @@ class ScreenshotTranslatorApp:
         self.btn_toggle.pack(fill=X)
         checkbox_frame = Frame(main, bg='#1e1e1e')
         checkbox_frame.pack(fill=X, pady=(10, 5))
-
-        # Скрываем чекбокс "Показывать браузер" - он теперь только для отладки
-        # self.show_browser_check = Checkbutton(...) - закомментировано
-
         self.show_indicator_check = Checkbutton(
             checkbox_frame,
             text=self.get_string('show_translation_indicator'),
@@ -624,6 +837,56 @@ class ScreenshotTranslatorApp:
         x = (self.root.winfo_screenwidth() - w) // 2
         y = (self.root.winfo_screenheight() - h) // 2
         self.root.geometry(f"{w}x{h}+{x}+{y}")
+
+    def create_menu(self):
+        """Создает главное меню приложения"""
+        self.update_menu_language()
+
+    def open_settings(self):
+        """Открывает окно настроек"""
+        from src.settings_window import SettingsWindow
+        SettingsWindow(self.root, self.settings, self.on_settings_changed)
+
+    def on_settings_changed(self):
+        """Обработчик изменения настроек"""
+        # Обновляем язык интерфейса
+        self.update_ui_language()
+        # Обновляем статус
+        status_text = self.get_string('ready') if self.ready else self.get_string('starting_browser')
+        self.update_status("● " + status_text, '#4CAF50' if self.ready else '#ff9800')
+        self.logger.info("Настройки применены")
+
+    def reset_settings(self):
+        """Сбрасывает настройки к значениям по умолчанию"""
+        import tkinter.messagebox as messagebox
+        if messagebox.askyesno(self.get_string('settings_title'), self.get_string('settings_reset_confirm')):
+            from src.settings import Settings
+            for key, value in Settings.DEFAULT_SETTINGS.items():
+                self.settings.set(key, value)
+            self.settings.save()
+            # Обновляем интерфейс
+            self.update_ui_language()
+            self.target_lang_var.set(self.settings.get_target_language())
+            current_display = f"{LANGUAGES.get(self.settings.get_target_language(), 'Russian')} ({self.settings.get_target_language()})"
+            self.target_lang_combo.set(current_display)
+            self.show_indicator_var.set(self.settings.get_show_translation_indicator())
+            messagebox.showinfo(self.get_string('settings_title'), self.get_string('settings_reset_done'))
+
+    def show_shortcuts(self):
+        """Показывает окно с горячими клавишами"""
+        import tkinter.messagebox as messagebox
+        messagebox.showinfo(
+            self.get_string('shortcuts_title'),
+            self.get_string('shortcuts_text')
+        )
+
+    def show_about(self):
+        """Показывает окно 'О программе'"""
+        import tkinter.messagebox as messagebox
+        messagebox.showinfo(
+            self.get_string('about_title'),
+            self.get_string('about_text')
+        )
 
     def _on_lang_search(self, event):
         """Фильтрует список языков при вводе текста"""
@@ -666,9 +929,15 @@ class ScreenshotTranslatorApp:
     def _on_resize(self, event):
         """Обработчик изменения размера окна"""
         width = self.root.winfo_width()
+
         if width < 460:
+            # Маленькое окно - уменьшаем все элементы
             self.title_label.config(font=("Arial", 13, "bold"))
-            self.lang_btn.config(font=("Arial", 10, "bold"), padx=12, pady=4, width=5)
+
+            # Уменьшаем кнопки языка и настроек
+            self.lang_btn.config(font=("Arial", 10, "bold"), padx=8, pady=4)
+            self.settings_btn.config(font=("Arial", 12), padx=8, pady=4)
+
             self.btn_capture.config(font=("Arial", 10), padx=15, pady=10)
             self.btn_toggle.config(font=("Arial", 10), padx=15, pady=10)
             self.status.config(font=("Arial", 10))
@@ -681,8 +950,13 @@ class ScreenshotTranslatorApp:
             if hasattr(self, 'show_indicator_check'):
                 self.show_indicator_check.config(font=("Arial", 9))
         else:
+            # Большое окно - увеличиваем все элементы
             self.title_label.config(font=("Arial", 15, "bold"))
-            self.lang_btn.config(font=("Arial", 12, "bold"), padx=18, pady=6, width=6)
+
+            # Увеличиваем кнопки языка и настроек
+            self.lang_btn.config(font=("Arial", 12, "bold"), padx=12, pady=6)
+            self.settings_btn.config(font=("Arial", 14), padx=12, pady=6)
+
             self.btn_capture.config(font=("Arial", 11), padx=20, pady=12)
             self.btn_toggle.config(font=("Arial", 11), padx=20, pady=12)
             self.status.config(font=("Arial", 11))
@@ -821,14 +1095,12 @@ class ScreenshotTranslatorApp:
                 time.sleep(0.3)
 
             if result and self.overlay:
-                # Сначала показываем результат пользователю
                 window_rect = self.screenshot.get_last_window_rect()
                 if window_rect and hasattr(self.overlay, 'show_for_window'):
                     self.overlay.show_for_window(result, window_rect)
                 else:
                     self.overlay.show_fullscreen(result)
 
-                # Затем в фоне готовим страницу для следующего перевода
                 self.logger.info("Подготовка страницы для следующего перевода...")
                 try:
                     self.translator._page.goto(self.translator.base_url, wait_until="domcontentloaded", timeout=10000)

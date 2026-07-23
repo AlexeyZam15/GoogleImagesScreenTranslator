@@ -1,10 +1,5 @@
 """
-
-
 Модуль для управления настройками приложения с поддержкой профилей
-
-
-
 """
 
 import json
@@ -25,7 +20,8 @@ class Settings:
         "always_on_top": True,
         "current_profile": "default",
         "show_browser": True,
-        "show_translation_indicator": True
+        "show_translation_indicator": True,
+        "browser_path": ""
     }
 
     def __init__(self):
@@ -35,6 +31,15 @@ class Settings:
         self._config_dir = Path.home() / "Documents" / "GoogleScreenTranslate" / "config"
         self._config_file = self._config_dir / "settings.json"
         self.load()
+
+    def get_browser_path(self) -> str:
+        """Возвращает путь к браузеру из настроек"""
+        return self.settings.get("browser_path", "")
+
+    def set_browser_path(self, path: str):
+        """Сохраняет путь к браузеру в настройки"""
+        self.settings["browser_path"] = path
+        self.save()
 
     def _ensure_config_dir(self):
         """Создает директорию для конфигурации"""

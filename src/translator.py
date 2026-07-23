@@ -1,10 +1,5 @@
 """
-
-
 Модуль для перевода изображений через Google Translate
-
-
-
 """
 
 import os
@@ -12,6 +7,9 @@ import time
 import logging
 import base64
 import io
+import sys
+import winreg
+import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -22,99 +20,339 @@ from PIL import Image
 class GoogleTranslateDebug:
     """Класс для перевода изображений в Google Translate (вкладка Images)"""
 
-    def __init__(self, headless: bool = True, target_lang: str = "ru"):
+    def __init__(self, headless: bool = True, target_lang: str = "ru", settings=None):
         self.headless = headless
         self.target_lang = target_lang
+        self.settings = settings  # <--- СОХРАНЯЕМ НАСТРОЙКИ
         self.base_url = f"https://translate.google.com/details?hl=ru&sl=auto&tl={target_lang}&op=images"
         self._pw = None
         self._context = None
         self._page = None
         self.logger = logging.getLogger(__name__)
 
+    def _find_yandex_browser(self) -> Optional[str]:
+        """Ищет Яндекс Браузер через реестр Windows"""
+        self.logger.info("Поиск Яндекс Браузера через реестр Windows...")
+
+        # 1. Поиск через App Paths (самый надежный способ)
+        try:
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                 r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\browser.exe", 0, winreg.KEY_READ)
+            try:
+                browser_path = winreg.QueryValueEx(key, "")[0]
+                if os.path.exists(browser_path):
+                    self.logger.info(f"✅ Найден Яндекс Браузер (App Paths): {browser_path}")
+                    return browser_path
+            finally:
+                winreg.CloseKey(key)
+        except WindowsError:
+            pass
+
+        # 2. Поиск через установку для текущего пользователя
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Yandex\YandexBrowser", 0, winreg.KEY_READ)
+            try:
+                install_dir = winreg.QueryValueEx(key, "InstallDir")[0]
+                browser_path = os.path.join(install_dir, "browser.exe")
+                if os.path.exists(browser_path):
+                    self.logger.info(f"✅ Найден Яндекс Браузер (HKCU): {browser_path}")
+                    return browser_path
+            finally:
+                winreg.CloseKey(key)
+        except WindowsError:
+            pass
+
+        # 3. Поиск через установку для всех пользователей (64-bit)
+        try:
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Yandex\YandexBrowser", 0,
+                                 winreg.KEY_READ)
+            try:
+                install_dir = winreg.QueryValueEx(key, "InstallDir")[0]
+                browser_path = os.path.join(install_dir, "browser.exe")
+                if os.path.exists(browser_path):
+                    self.logger.info(f"✅ Найден Яндекс Браузер (HKLM 64-bit): {browser_path}")
+                    return browser_path
+            finally:
+                winreg.CloseKey(key)
+        except WindowsError:
+            pass
+
+        # 4. Поиск через установку для всех пользователей (32-bit)
+        try:
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Yandex\YandexBrowser", 0, winreg.KEY_READ)
+            try:
+                install_dir = winreg.QueryValueEx(key, "InstallDir")[0]
+                browser_path = os.path.join(install_dir, "browser.exe")
+                if os.path.exists(browser_path):
+                    self.logger.info(f"✅ Найден Яндекс Браузер (HKLM 32-bit): {browser_path}")
+                    return browser_path
+            finally:
+                winreg.CloseKey(key)
+        except WindowsError:
+            pass
+
+        # 5. Поиск через Uninstall реестр (информация об установке)
+        try:
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall", 0,
+                                 winreg.KEY_READ)
+            i = 0
+            while True:
+                try:
+                    subkey_name = winreg.EnumKey(key, i)
+                    subkey = winreg.OpenKey(key, subkey_name)
+                    try:
+                        display_name = winreg.QueryValueEx(subkey, "DisplayName")[0]
+                        if "Яндекс" in display_name or "Yandex" in display_name:
+                            install_location = winreg.QueryValueEx(subkey, "InstallLocation")[0]
+                            if install_location:
+                                browser_path = os.path.join(install_location, "browser.exe")
+                                if os.path.exists(browser_path):
+                                    self.logger.info(f"✅ Найден Яндекс Браузер (Uninstall): {browser_path}")
+                                    return browser_path
+                    except:
+                        pass
+                    finally:
+                        winreg.CloseKey(subkey)
+                    i += 1
+                except WindowsError:
+                    break
+            winreg.CloseKey(key)
+        except WindowsError:
+            pass
+
+        self.logger.warning("❌ Яндекс Браузер не найден в реестре")
+        return None
+
+    def _find_chrome_browser(self) -> Optional[str]:
+        """Ищет Google Chrome через реестр Windows"""
+        self.logger.info("Поиск Google Chrome через реестр Windows...")
+
+        # 1. Поиск через App Paths
+        try:
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                 r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe", 0, winreg.KEY_READ)
+            try:
+                chrome_path = winreg.QueryValueEx(key, "")[0]
+                if os.path.exists(chrome_path):
+                    self.logger.info(f"✅ Найден Google Chrome (App Paths): {chrome_path}")
+                    return chrome_path
+            finally:
+                winreg.CloseKey(key)
+        except WindowsError:
+            pass
+
+        # 2. Поиск через Uninstall реестр
+        try:
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall", 0,
+                                 winreg.KEY_READ)
+            i = 0
+            while True:
+                try:
+                    subkey_name = winreg.EnumKey(key, i)
+                    subkey = winreg.OpenKey(key, subkey_name)
+                    try:
+                        display_name = winreg.QueryValueEx(subkey, "DisplayName")[0]
+                        if "Google Chrome" in display_name:
+                            install_location = winreg.QueryValueEx(subkey, "InstallLocation")[0]
+                            if install_location:
+                                chrome_path = os.path.join(install_location, "chrome.exe")
+                                if os.path.exists(chrome_path):
+                                    self.logger.info(f"✅ Найден Google Chrome (Uninstall): {chrome_path}")
+                                    return chrome_path
+                    except:
+                        pass
+                    finally:
+                        winreg.CloseKey(subkey)
+                    i += 1
+                except WindowsError:
+                    break
+            winreg.CloseKey(key)
+        except WindowsError:
+            pass
+
+        self.logger.warning("❌ Google Chrome не найден в реестре")
+        return None
+
+    def _find_browser_in_path(self) -> Optional[str]:
+        """Ищет браузер в системном PATH"""
+        self.logger.info("Поиск браузера в системном PATH...")
+
+        # Проверяем, есть ли Yandex в PATH
+        try:
+            result = subprocess.run(['where', 'yandex'], capture_output=True, text=True, shell=True)
+            if result.returncode == 0:
+                paths = result.stdout.strip().split('\n')
+                for path in paths:
+                    if path and os.path.exists(path):
+                        self.logger.info(f"✅ Найден Яндекс Браузер в PATH: {path}")
+                        return path
+        except:
+            pass
+
+        # Проверяем, есть ли Chrome в PATH
+        try:
+            result = subprocess.run(['where', 'chrome'], capture_output=True, text=True, shell=True)
+            if result.returncode == 0:
+                paths = result.stdout.strip().split('\n')
+                for path in paths:
+                    if path and os.path.exists(path):
+                        self.logger.info(f"✅ Найден Google Chrome в PATH: {path}")
+                        return path
+        except:
+            pass
+
+        return None
+
+    def _find_any_browser(self) -> Optional[str]:
+        """Ищет любой доступный Chromium-браузер"""
+        # СНАЧАЛА ИЩЕМ ЯНДЕКС БРАУЗЕР
+        browser_path = self._find_yandex_browser()
+        if browser_path:
+            # СОХРАНЯЕМ НАЙДЕННЫЙ ПУТЬ В НАСТРОЙКИ
+            if hasattr(self, 'settings'):
+                self.settings.set_browser_path(browser_path)
+                self.logger.info(f"✅ Путь к браузеру сохранен в настройки: {browser_path}")
+            return browser_path
+
+        # ЕСЛИ ЯНДЕКС НЕ НАЙДЕН - ИЩЕМ CHROME
+        browser_path = self._find_chrome_browser()
+        if browser_path:
+            self.logger.info("⚠️ Яндекс Браузер не найден, будет использован Google Chrome")
+            if hasattr(self, 'settings'):
+                self.settings.set_browser_path(browser_path)
+                self.logger.info(f"✅ Путь к браузеру сохранен в настройки: {browser_path}")
+            return browser_path
+
+        # ЕСЛИ CHROME НЕ НАЙДЕН - ИЩЕМ ДРУГИЕ БРАУЗЕРЫ
+        chromium_paths = [
+            r"C:\Program Files\Chromium\Application\chrome.exe",
+            r"C:\Program Files (x86)\Chromium\Application\chrome.exe",
+            r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
+            r"C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe",
+            r"C:\Program Files\Vivaldi\Application\vivaldi.exe",
+            r"C:\Program Files (x86)\Vivaldi\Application\vivaldi.exe",
+        ]
+
+        for path in chromium_paths:
+            if os.path.exists(path):
+                self.logger.info(f"✅ Найден Chromium-браузер: {path}")
+                if hasattr(self, 'settings'):
+                    self.settings.set_browser_path(path)
+                    self.logger.info(f"✅ Путь к браузеру сохранен в настройки: {path}")
+                return path
+
+        self.logger.error("❌ Не найден ни один Chromium-браузер")
+        return None
+
     def start_browser(self):
-        """Запускает Яндекс Браузер с Playwright"""
+        """Запускает браузер с Playwright"""
         import shutil
-        import time
+        import tempfile
 
         self.logger.info("Запуск Playwright...")
         self._pw = sync_playwright().start()
 
-        self.logger.info("Запуск Яндекс Браузера...")
+        self.logger.info("Поиск браузера...")
 
-        yandex_path = r"P:\Program Files\Yandex\YandexBrowser\Application\browser.exe"
+        # Проверяем пользовательский путь
+        browser_path = None
+        if hasattr(self, 'settings'):
+            custom_path = self.settings.get_browser_path()
+            if custom_path and os.path.exists(custom_path):
+                browser_path = custom_path
+                self.logger.info(f"✅ Используется пользовательский путь: {browser_path}")
 
-        if not os.path.exists(yandex_path):
-            self.logger.error(f"Яндекс Браузер не найден по пути: {yandex_path}")
-            self.logger.error("Пожалуйста, проверьте правильность пути")
-            yandex_path = None
+        # Если пользовательский путь не задан или не существует, ищем автоматически
+        if not browser_path:
+            browser_path = self._find_any_browser()
+
+            # Если найден автоматически, сохраняем путь в настройки для отображения
+            if browser_path and hasattr(self, 'settings'):
+                self.settings.set_browser_path(browser_path)
+                self.logger.info(f"✅ Автоматически найденный путь сохранен: {browser_path}")
+
+        if not browser_path:
+            error_msg = (
+                "Не найден Яндекс Браузер или Google Chrome.\n"
+                "Пожалуйста, установите один из браузеров или укажите путь вручную.\n"
+                "Рекомендуется установить Яндекс Браузер для лучшей совместимости."
+            )
+            self.logger.error(error_msg)
+            raise Exception(error_msg)
+
+        self.logger.info(f"Используется браузер: {browser_path}")
+
+        if getattr(sys, 'frozen', False):
+            profile_dir = Path(tempfile.gettempdir()) / "google_translate_profile"
         else:
-            self.logger.info(f"Яндекс Браузер найден: {yandex_path}")
+            profile_dir = Path("metadata/google_translate_profile")
 
-        # Удаляем старый профиль для чистого запуска
-        profile_path = Path("metadata/google_translate_profile")
-        if profile_path.exists():
+        if profile_dir.exists():
             try:
-                shutil.rmtree(profile_path)
+                shutil.rmtree(profile_dir)
                 self.logger.info("✅ Старый профиль удален")
             except Exception as e:
                 self.logger.warning(f"Не удалось удалить профиль: {e}")
 
-        self._context = self._pw.chromium.launch_persistent_context(
-            user_data_dir="metadata/google_translate_profile",
-            headless=self.headless,
-            locale="ru-RU",
-            viewport={"width": 1440, "height": 900},
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 "
-                "YaBrowser/24.4.0.0 (1) Yowser/2.5"
-            ),
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--disable-gpu",
-                "--no-sandbox",
-            ],
-            ignore_default_args=["--enable-automation"],
-            timeout=30000,
-            permissions=["clipboard-read", "clipboard-write"],
-            executable_path=yandex_path,
-        )
-
-        self.logger.info("Яндекс Браузер запущен")
-
-        # Даем браузеру время на инициализацию
-        self.logger.info("Ожидание инициализации браузера (3с)...")
-        time.sleep(3)
-
-        # Закрываем все существующие вкладки
-        pages = self._context.pages
-        if pages:
-            self.logger.info(f"Закрытие {len(pages)} существующих вкладок...")
-            for page in pages:
-                try:
-                    page.close()
-                except Exception as e:
-                    self.logger.warning(f"Не удалось закрыть вкладку: {e}")
-            self.logger.info("Все вкладки закрыты")
-
-        # Создаем новую чистую вкладку
-        self._page = self._context.new_page()
-        self.logger.info("Создана новая вкладка")
-
-        # Переходим на Google Translate
-        self.logger.info("Открытие Google Translate...")
         try:
-            self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=15000)
-            self.logger.info(f"✅ Google Translate открыт: {self.base_url}")
-        except Exception as e:
-            self.logger.error(f"Ошибка при открытии Google Translate: {e}")
+            self._context = self._pw.chromium.launch_persistent_context(
+                user_data_dir=str(profile_dir),
+                headless=self.headless,
+                locale="ru-RU",
+                viewport={"width": 1440, "height": 900},
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 "
+                    "YaBrowser/24.4.0.0 (1) Yowser/2.5"
+                ),
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-gpu",
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-setuid-sandbox",
+                ],
+                ignore_default_args=["--enable-automation"],
+                timeout=30000,
+                permissions=["clipboard-read", "clipboard-write"],
+                executable_path=browser_path,
+            )
+
+            self.logger.info("✅ Браузер запущен")
+
+            self.logger.info("Ожидание инициализации браузера (3с)...")
+            time.sleep(3)
+
+            pages = self._context.pages
+            if pages:
+                self.logger.info(f"Закрытие {len(pages)} существующих вкладок...")
+                for page in pages:
+                    try:
+                        page.close()
+                    except Exception as e:
+                        self.logger.warning(f"Не удалось закрыть вкладку: {e}")
+                self.logger.info("Все вкладки закрыты")
+
+            self._page = self._context.new_page()
+            self.logger.info("Создана новая вкладка")
+
+            self.logger.info("Открытие Google Translate...")
             try:
-                self.logger.info("Повторная попытка открытия...")
-                self._page.goto(self.base_url, timeout=15000)
-                self.logger.info(f"✅ Google Translate открыт (повторно): {self.base_url}")
-            except Exception as e2:
-                self.logger.error(f"Повторная ошибка при открытии: {e2}")
-                raise
+                self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=15000)
+                self.logger.info(f"✅ Google Translate открыт: {self.base_url}")
+            except Exception as e:
+                self.logger.error(f"Ошибка при открытии Google Translate: {e}")
+                try:
+                    self.logger.info("Повторная попытка открытия...")
+                    self._page.goto(self.base_url, timeout=15000)
+                    self.logger.info(f"✅ Google Translate открыт (повторно): {self.base_url}")
+                except Exception as e2:
+                    self.logger.error(f"Повторная ошибка при открытии: {e2}")
+                    raise
+
+        except Exception as e:
+            self.logger.error(f"Ошибка запуска браузера: {e}")
+            raise
 
     def _reset_pages_fast(self):
         """Быстрое обнуление вкладок - используем первую существующую"""
@@ -126,16 +364,13 @@ class GoogleTranslateDebug:
             page_count = len(pages)
 
             if page_count == 0:
-                # Нет вкладок - создаем новую
                 self._page = self._context.new_page()
                 self.logger.info("Создана новая вкладка")
                 return
 
-            # Используем первую вкладку
             self._page = pages[0]
             self.logger.info(f"Используем существующую вкладку (всего {page_count})")
 
-            # Закрываем все остальные вкладки быстро (начиная с конца)
             if page_count > 1:
                 for i in range(page_count - 1, 0, -1):
                     try:
@@ -146,7 +381,6 @@ class GoogleTranslateDebug:
 
         except Exception as e:
             self.logger.warning(f"Ошибка при обнулении вкладок: {e}")
-            # Если что-то пошло не так - создаем новую вкладку
             try:
                 self._page = self._context.new_page()
                 self.logger.info("Создана новая вкладка (fallback)")
@@ -172,7 +406,6 @@ class GoogleTranslateDebug:
         self.logger.info("=" * 60)
 
         try:
-            # Шаг 1: Проверка готовности страницы
             step_start = time.time()
             self.logger.info("Шаг 1: Проверка готовности страницы")
             try:
@@ -193,7 +426,6 @@ class GoogleTranslateDebug:
                         return None
             self.logger.info(f"  ✓ Шаг 1 выполнен за {time.time() - step_start:.3f}с")
 
-            # Шаг 2: Ожидание загрузки интерфейса
             step_start = time.time()
             self.logger.info("Шаг 2: Ожидание загрузки интерфейса")
             if not self._wait_for_upload_zone(timeout=10000):
@@ -203,7 +435,6 @@ class GoogleTranslateDebug:
                     return None
             self.logger.info(f"  ✓ Шаг 2 выполнен за {time.time() - step_start:.3f}с")
 
-            # Шаг 3: Копирование изображения в буфер обмена
             step_start = time.time()
             self.logger.info("Шаг 3: Копирование изображения в буфер обмена")
             if not self._copy_image_to_clipboard(image_path):
@@ -211,7 +442,6 @@ class GoogleTranslateDebug:
                 return None
             self.logger.info(f"  ✓ Шаг 3 выполнен за {time.time() - step_start:.3f}с")
 
-            # Шаг 4: Нажатие кнопки 'Вставить из буфера обмена'
             step_start = time.time()
             self.logger.info("Шаг 4: Нажатие кнопки 'Вставить из буфера обмена'")
             if not self._find_and_click_paste_button():
@@ -219,7 +449,6 @@ class GoogleTranslateDebug:
                 return None
             self.logger.info(f"  ✓ Шаг 4 выполнен за {time.time() - step_start:.3f}с")
 
-            # Шаг 5: Ожидание перевода
             step_start = time.time()
             self.logger.info("Шаг 5: Ожидание перевода")
             if not self._wait_for_blob(timeout=20):
@@ -227,7 +456,6 @@ class GoogleTranslateDebug:
                 return None
             self.logger.info(f"  ✓ Шаг 5 выполнен за {time.time() - step_start:.3f}с")
 
-            # Шаг 6: Скачивание переведенного изображения
             step_start = time.time()
             self.logger.info("Шаг 6: Скачивание переведенного изображения")
             output_path = output_dir / f"translated_{image_path.stem}.png"
@@ -260,8 +488,6 @@ class GoogleTranslateDebug:
                 total_elapsed = time.time() - total_start
                 self.logger.info(f"✅ Изображение сохранено: {output_path} ({size} байт)")
                 self.logger.info(f"⏱️ ОБЩЕЕ ВРЕМЯ ПЕРЕВОДА: {total_elapsed:.3f} секунд")
-
-                # ВОЗВРАЩАЕМ РЕЗУЛЬТАТ СРАЗУ, БЕЗ ПОДГОТОВКИ СТРАНИЦЫ
                 return output_path
             else:
                 self.logger.error("Файл не был сохранен")
@@ -278,7 +504,6 @@ class GoogleTranslateDebug:
         """Закрывает браузер и все вкладки"""
         try:
             if self._context:
-                # Закрываем все вкладки
                 try:
                     pages = self._context.pages
                     if pages:
@@ -292,7 +517,6 @@ class GoogleTranslateDebug:
                 except Exception as e:
                     self.logger.error(f"Ошибка при закрытии вкладок: {e}")
 
-                # Закрываем контекст
                 try:
                     self._context.close()
                     self.logger.info("Контекст закрыт")
@@ -345,16 +569,12 @@ class GoogleTranslateDebug:
             return False
 
         try:
-            # Используем встроенный метод Playwright для установки буфера обмена
-            # Читаем изображение как PNG
             with open(image_path, 'rb') as f:
                 image_data = f.read()
 
-            # Кодируем в base64 для передачи в JavaScript
             import base64
             b64_data = base64.b64encode(image_data).decode('utf-8')
 
-            # Минимальный JavaScript для копирования
             js_code = """
                 (b64Data) => {
                     const byteCharacters = atob(b64Data);
@@ -389,7 +609,6 @@ class GoogleTranslateDebug:
         """Быстро нажимает кнопку 'Вставить из буфера обмена'"""
         self.logger.info("Вставка изображения из буфера обмена...")
 
-        # Просто нажимаем Ctrl+V - страница уже готова
         try:
             self._page.click('body')
             self._page.keyboard.press("Control+V")
@@ -398,7 +617,6 @@ class GoogleTranslateDebug:
         except Exception as e:
             self.logger.warning(f"Ctrl+V не сработал: {e}")
 
-        # Запасной вариант - ищем кнопку
         try:
             button = self._page.locator('button[aria-label="Вставить изображение из буфера обмена"]')
             if button.count() > 0:
