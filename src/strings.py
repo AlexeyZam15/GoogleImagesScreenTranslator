@@ -43,6 +43,8 @@ def get_russian_settings_strings():
         'target_language': "Целевой язык перевода:",
         'browser_not_found': "Браузер не найден",
         'browser_not_found_msg': "Не удалось найти Яндекс Браузер или Google Chrome.\n\nДля работы программы необходим один из этих браузеров.",
+        'auto_hide_overlay': "Автоскрытие оверлея при переключении окон",
+        'settings_reset': "Сбросить",
     }
 
 
@@ -73,6 +75,7 @@ def get_russian_settings_window_strings():
         'settings_browser_path_label': "Путь: {}",
         'settings_save': "💾 Сохранить",
         'settings_cancel': "❌ Отмена",
+        'settings_ui': "🎨 Интерфейс",
     }
 
 
@@ -143,6 +146,8 @@ def get_english_settings_strings():
         'target_language': "Target translation language:",
         'browser_not_found': "Browser not found",
         'browser_not_found_msg': "Could not find Yandex Browser or Google Chrome.\n\nOne of these browsers is required for the program to work.",
+        'auto_hide_overlay': "Auto-hide overlay when switching windows",
+        'settings_reset': "Reset",
     }
 
 
@@ -173,6 +178,7 @@ def get_english_settings_window_strings():
         'settings_browser_path_label': "Path: {}",
         'settings_save': "💾 Save",
         'settings_cancel': "❌ Cancel",
+        'settings_ui': "🎨 Interface",
     }
 
 
