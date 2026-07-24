@@ -1,7 +1,5 @@
 """
-
 Главный модуль приложения для перевода скриншотов
-
 """
 
 import logging
@@ -16,11 +14,13 @@ from tkinter import *
 from tkinter import ttk
 from datetime import datetime
 import keyboard
+
 from src.translator import GoogleTranslateDebug
 from src.screenshot import ScreenshotCapturer
 from src.overlay import OverlayWindow
 from src.settings import Settings
 from src.strings import get_strings
+from src.browser_worker import BrowserWorker
 
 LANGUAGES = {"af": "Afrikaans", "sq": "Albanian", "am": "Amharic", "ar": "Arabic", "hy": "Armenian",
              "az": "Azerbaijani", "eu": "Basque", "be": "Belarusian", "bn": "Bengali", "bs": "Bosnian",
@@ -111,7 +111,6 @@ class ScreenshotTranslatorApp:
         self.temp_dir.mkdir(exist_ok=True)
         self.overlay = None
         self.screenshot = ScreenshotCapturer()
-        self.translator = None
         self.ready = False
         self.translating = False
         self.initializing = False
@@ -122,51 +121,125 @@ class ScreenshotTranslatorApp:
         self._key_last_time = {}
         self._debounce_ms = 500
         self._restarting = False
+        self._processor_running = False
         self.show_browser_var = None
         self.target_lang_var = None
         self.show_indicator_var = None
+
+        # Создаем BrowserWorker
+        self.browser_worker = BrowserWorker(self.settings)
+        self.browser_worker.start()
+
+        # Периодическая проверка результатов
+        self._pending_command_ids = {}
+
         self.create_gui()
         self.root.update_idletasks()
         self.root.update()
         self.update_ui_language()
         self._setup_app_icon()
         self.setup_hotkeys()
+
+        # Инициализируем браузер
         self.root.after(100, self._init_translator_step)
 
     def _init_translator_step(self):
-        """Инициализация переводчика в главном потоке"""
+        """Инициализация переводчика в фоновом режиме"""
         if self._init_done:
             return
+
         self.initializing = True
         self.update_status("● " + self.get_string('starting_browser'), '#ff9800')
         self.root.update_idletasks()
-        self.root.after(50, self._init_translator_sync)
 
-    def _init_translator_sync(self):
-        """Инициализация переводчика в главном потоке (синхронно)"""
+        # Запускаем постоянный процессор результатов
+        self._start_result_processor()
+
+        # Отправляем команду инициализации в BrowserWorker
+        show_browser = self.settings.get_show_browser()
+        target_lang = self.settings.get_target_language()
+
+        cmd_id = self.browser_worker.init_browser(
+            show_browser,
+            target_lang,
+            callback=self._on_init_complete
+        )
+        self._pending_command_ids[cmd_id] = 'init'
+
+    def _start_result_processor(self):
+        """Запускает постоянную проверку результатов из рабочего потока"""
+        if hasattr(self, '_processor_running') and self._processor_running:
+            return
+
+        self._processor_running = True
+        self._process_results_loop()
+
+    def _process_results_loop(self):
+        """Постоянный цикл проверки результатов"""
         try:
-            self.logger.info("Запуск инициализации браузера...")
-            show_browser = self.settings.get_show_browser()
-            target_lang = self.settings.get_target_language()
-            self.translator = GoogleTranslateDebug(
-                headless=not show_browser,
-                target_lang=target_lang,
-                settings=self.settings
-            )
-            self.translator.start_browser()
-            self.overlay = OverlayWindow()
+            # Проверяем, есть ли результаты
+            processed = self.browser_worker.process_results()
+            if processed:
+                self.logger.info(f"Обработано {processed} результатов")
+        except Exception as e:
+            self.logger.error(f"Ошибка обработки результатов: {e}")
+            import traceback
+            traceback.print_exc()
+
+        # Продолжаем проверку, пока приложение работает
+        if hasattr(self, '_processor_running') and self._processor_running:
+            self.root.after(100, self._process_results_loop)
+
+    def _check_results(self):
+        """Периодическая проверка результатов из рабочего потока"""
+        try:
+            self.browser_worker.process_results()
+        except Exception as e:
+            self.logger.error(f"Ошибка обработки результатов: {e}")
+
+        # Продолжаем проверку, пока есть ожидающие команды
+        if self._pending_command_ids:
+            self.root.after(100, self._check_results)
+
+    def _on_init_complete(self, result, error):
+        """Обработчик завершения инициализации"""
+        self.logger.info(f"_on_init_complete вызван: result={result}, error={error}")
+
+        if error:
+            self.logger.error(f"Ошибка инициализации: {error}")
+            self._on_init_error(error)
+        else:
+            self.logger.info("Инициализация завершена успешно, обновляем UI")
             self.ready = True
             self.initializing = False
             self._init_done = True
+
+            # СОЗДАЕМ ОВЕРЛЕЙ ЕСЛИ ЕЩЕ НЕ СОЗДАН
+            if self.overlay is None:
+                self.logger.info("Создание оверлея")
+                from src.overlay import OverlayWindow
+                self.overlay = OverlayWindow()
+                self.logger.info(f"Оверлей создан: {self.overlay}")
+            else:
+                self.logger.info(f"Оверлей уже существует: {self.overlay}")
+
             self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
             self.update_status("● " + self.get_string('ready'), '#4CAF50')
-            self.logger.info("✅ Инициализация завершена успешно")
-        except Exception as e:
-            self.logger.error(f"Ошибка инициализации: {e}")
-            self.initializing = False
-            self._init_done = True
-            self.update_status("● " + self.get_string('error') + ": " + str(e)[:50], '#f44336')
+            self.logger.info("UI обновлен: статус 'Готово'")
+
+        # Очищаем ожидающие команды
+        self._pending_command_ids = {}
+
+    def _on_init_error(self, error_msg):
+        """Обработчик ошибки инициализации"""
+        self.initializing = False
+        self._init_done = True
+        if "Не найден" in error_msg and ("браузер" in error_msg or "Chrome" in error_msg):
+            self._handle_browser_not_found(error_msg)
+        else:
+            self.update_status("● " + self.get_string('error') + ": " + error_msg[:50], '#f44336')
             self.btn_capture.config(state=DISABLED, bg='#333', fg='#888')
+            self.logger.error(f"❌ Ошибка инициализации: {error_msg}")
 
     def _handle_browser_not_found(self, error_msg: str):
         """Обрабатывает ситуацию, когда браузер не найден"""
@@ -301,97 +374,44 @@ class ScreenshotTranslatorApp:
         show = self.show_browser_var.get()
         self.settings.set_show_browser(show)
         self.logger.info(f"Видимость браузера изменена: {'показывать' if show else 'скрывать'}")
-        if self._init_done and self.translator:
+        if self._init_done:
             self._restart_translator()
 
     def _restart_translator(self):
-        """Перезапускает переводчик с новыми настройками в главном потоке"""
+        """Перезапускает переводчик с новыми настройками в фоновом режиме"""
         if self._restarting:
             self.logger.info("Перезапуск уже выполняется, пропускаем")
             return
+
         self._restarting = True
         self.logger.info("Перезапуск переводчика с новыми настройками...")
         self.update_status("● Перезапуск браузера...", '#ff9800')
-        self.root.after(0, self._do_restart)
+        self.btn_capture.config(state=DISABLED, bg='#333')
 
-    def _do_restart(self):
-        """Выполняет перезапуск в главном потоке"""
-        try:
-            if self.translator:
-                self.translator.close_browser()
-                self.translator = None
-                self.ready = False
-            show_browser = self.settings.get_show_browser()
-            target_lang = self.settings.get_target_language()
-            self.logger.info(
-                f"Запуск переводчика с параметрами: headless={not show_browser}, target_lang={target_lang}")
-            self.translator = GoogleTranslateDebug(
-                headless=not show_browser,
-                target_lang=target_lang,
-                settings=self.settings
-            )
-            self.translator.start_browser()
+        show_browser = self.settings.get_show_browser()
+        target_lang = self.settings.get_target_language()
+
+        cmd_id = self.browser_worker.restart_browser(
+            show_browser,
+            target_lang,
+            callback=self._on_restart_complete
+        )
+        self._pending_command_ids[cmd_id] = 'restart'
+        self._check_results()
+
+    def _on_restart_complete(self, result, error):
+        """Обработчик завершения перезапуска"""
+        if error:
+            self.logger.error(f"Ошибка перезапуска: {error}")
+            self._on_restart_error(error)
+        else:
             self.ready = True
             self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
             self.update_status("● " + self.get_string('ready'), '#4CAF50')
             self.logger.info("✅ Переводчик перезапущен успешно")
-        except Exception as e:
-            self.logger.error(f"❌ Ошибка перезапуска: {e}")
-            self.update_status("● " + self.get_string('error') + ": " + str(e)[:50], '#f44336')
-            self.btn_capture.config(state=DISABLED, bg='#333', fg='#888')
-        finally:
-            self._restarting = False
 
-    def _init_translator_async(self):
-        """Инициализация переводчика в отдельном потоке"""
-
-        def init_task():
-            try:
-                self.logger.info("Запуск инициализации браузера...")
-                show_browser = self.settings.get_show_browser()
-                target_lang = self.settings.get_target_language()
-                translator = GoogleTranslateDebug(headless=not show_browser, target_lang=target_lang)
-                translator.start_browser()
-                self.root.after(0, lambda: self._on_init_complete(translator))
-            except Exception as e:
-                error_msg = str(e)
-                self.logger.error(f"Ошибка инициализации: {error_msg}")
-                self.root.after(0, lambda: self._on_init_error(error_msg))
-
-        threading.Thread(target=init_task, daemon=True).start()
-
-    def _on_init_complete(self, translator):
-        """Обработчик успешной инициализации"""
-        try:
-            self.translator = translator
-            self.overlay = OverlayWindow()
-            self.ready = True
-            self.initializing = False
-            self._init_done = True
-            self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
-            self.update_status("● " + self.get_string('ready'), '#4CAF50')
-            self.logger.info("✅ Инициализация завершена успешно")
-        except Exception as e:
-            self.logger.error(f"Ошибка при завершении инициализации: {e}")
-            self._on_init_error(str(e))
-
-    def _on_init_error(self, error_msg):
-        """Обработчик ошибки инициализации"""
-        self.initializing = False
-        self._init_done = True
-        if "Не найден" in error_msg and ("браузер" in error_msg or "Chrome" in error_msg):
-            self._handle_browser_not_found(error_msg)
-        else:
-            self.update_status("● " + self.get_string('error') + ": " + error_msg[:50], '#f44336')
-            self.btn_capture.config(state=DISABLED, bg='#333', fg='#888')
-            self.logger.error(f"❌ Ошибка инициализации: {error_msg}")
-
-    def _on_restart_complete(self):
-        """Обработчик успешного перезапуска"""
-        self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
-        self.update_status("● " + self.get_string('ready'), '#4CAF50')
-        self.logger.info("✅ Переводчик перезапущен успешно")
         self._restarting = False
+        self._pending_command_ids = {}
 
     def _on_restart_error(self, error_msg):
         """Обработчик ошибки перезапуска"""
@@ -399,30 +419,6 @@ class ScreenshotTranslatorApp:
         self.btn_capture.config(state=DISABLED, bg='#333', fg='#888')
         self.logger.error(f"❌ Ошибка перезапуска: {error_msg}")
         self._restarting = False
-
-    def _start_translator_after_restart(self):
-        """Запускает переводчик после перезапуска в главном потоке"""
-        try:
-            show_browser = self.settings.get_show_browser()
-            target_lang = self.settings.get_target_language()
-            self.logger.info(
-                f"Запуск переводчика с параметрами: headless={not show_browser}, target_lang={target_lang}")
-            self.translator = GoogleTranslateDebug(
-                headless=not show_browser,
-                target_lang=target_lang,
-                settings=self.settings
-            )
-            self.translator.start_browser()
-            self.ready = True
-            self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
-            self.update_status("● " + self.get_string('ready'), '#4CAF50')
-            self.logger.info("✅ Переводчик перезапущен успешно")
-        except Exception as e:
-            self.logger.error(f"❌ Ошибка запуска переводчика после перезапуска: {e}")
-            self.update_status("● " + self.get_string('error') + ": " + str(e)[:50], '#f44336')
-            self.btn_capture.config(state=DISABLED, bg='#333', fg='#888')
-        finally:
-            self._restarting = False
 
     def _setup_app_icon(self):
         """Устанавливает профессиональную иконку приложения для отображения в панели задач"""
@@ -828,9 +824,9 @@ class ScreenshotTranslatorApp:
             lang_code = "ru"
         self.logger.info(f"Выбран целевой язык: {lang_code}")
         self.settings.set_target_language(lang_code)
-        if self.translator:
-            self.translator.update_target_language(lang_code)
-            self.logger.info(f"Язык перевода обновлен на: {lang_code}")
+        # Отправляем команду обновления языка в браузер
+        if self.ready:
+            self.browser_worker.update_language(lang_code)
 
     def _on_target_lang_changed(self, event):
         """Обработчик изменения целевого языка перевода"""
@@ -935,6 +931,7 @@ class ScreenshotTranslatorApp:
         """Обработка скриншота"""
         if self.translating or not self.ready or self.initializing:
             return
+
         self._show_translation_overlay()
         self.btn_capture.config(state=DISABLED, bg='#333')
         self.translating = True
@@ -960,66 +957,79 @@ class ScreenshotTranslatorApp:
         threading.Thread(target=capture_task, daemon=True).start()
 
     def _do_translate(self, image_path: Path):
-        """Выполняет перевод в основном потоке"""
-        import time
-        start_time = time.time()
-        try:
-            out = self.temp_dir / "translated"
-            result = self.translator.translate_image(image_path, out)
-            elapsed = time.time() - start_time
-            self.logger.info(f"⏱️ Перевод выполнен за {elapsed:.2f} секунд")
-            self._on_translate_finished(result, elapsed)
-        except Exception as e:
-            elapsed = time.time() - start_time
-            error_msg = str(e)
-            self.logger.error(f"Ошибка перевода (через {elapsed:.2f}с): {error_msg}")
-            self._on_translate_error(error_msg)
+        """Выполняет перевод в фоновом режиме через BrowserWorker"""
+        out = self.temp_dir / "translated"
 
-    def _do_translate_async(self, image_path: Path):
-        """Выполняет перевод в отдельном потоке"""
+        cmd_id = self.browser_worker.translate_image(
+            image_path,
+            out,
+            callback=self._on_translate_finished
+        )
+        self._pending_command_ids[cmd_id] = 'translate'
+        self._check_results()
 
-        def translate_task():
-            try:
-                out = self.temp_dir / "translated"
-                result = self.translator.translate_image(image_path, out)
-                self.root.after(0, lambda: self._on_translate_finished(result))
-            except Exception as e:
-                self.logger.error(f"Ошибка перевода: {e}")
-                self.root.after(0, lambda: self._on_translate_error(str(e)))
-
-        threading.Thread(target=translate_task, daemon=True).start()
-
-    def _on_translate_finished(self, result, elapsed=None):
+    def _on_translate_finished(self, result, error):
         """Обработчик завершения перевода"""
+        self.logger.info(f"_on_translate_finished вызван: result={result}, error={error}")
+
         try:
-            if self.translation_overlay:
-                self.translation_overlay.finish()
-                time.sleep(0.3)
-            if result and self.overlay:
-                window_rect = self.screenshot.get_last_window_rect()
-                if window_rect and hasattr(self.overlay, 'show_for_window'):
-                    self.overlay.show_for_window(result, window_rect)
+            if error:
+                self.logger.error(f"Ошибка перевода: {error}")
+                self._on_translate_error(error)
+                return
+
+            if result:
+                self.logger.info(f"Результат перевода получен: {result}")
+
+                if isinstance(result, Path) and result.exists():
+                    self.logger.info(f"Файл перевода существует: {result}, размер: {result.stat().st_size} байт")
                 else:
-                    self.overlay.show_fullscreen(result)
-                self.logger.info("Подготовка страницы для следующего перевода...")
-                try:
-                    self.translator._page.goto(self.translator.base_url, wait_until="domcontentloaded", timeout=10000)
-                    self.logger.info("✅ Страница подготовлена для следующего перевода")
-                except Exception as e:
-                    self.logger.warning(f"Не удалось подготовить страницу: {e}")
-                if elapsed is not None:
-                    self.update_status(f"● {self.get_string('ready')} ({elapsed:.1f}с)", '#4CAF50')
+                    self.logger.warning(f"Результат не является файлом или не существует: {result}")
+
+                if self.translation_overlay:
+                    self.logger.info("Завершаем оверлей прогресса")
+                    self.translation_overlay.finish()
+                    time.sleep(0.3)
+
+                self.logger.info(f"Попытка показать оверлей с результатом")
+                self.logger.info(f"self.overlay = {self.overlay}")
+
+                if self.overlay:
+                    window_rect = self.screenshot.get_last_window_rect()
+                    self.logger.info(f"window_rect = {window_rect}")
+
+                    if window_rect and hasattr(self.overlay, 'show_for_window'):
+                        self.logger.info(f"Вызов show_for_window с rect={window_rect}")
+                        self.overlay.show_for_window(result, window_rect)
+                        self.logger.info("show_for_window выполнен")
+                    else:
+                        self.logger.info("Вызов show_fullscreen")
+                        self.overlay.show_fullscreen(result)
+                        self.logger.info("show_fullscreen выполнен")
+
+                    # ПРИНУДИТЕЛЬНО ОБНОВЛЯЕМ ГЛАВНОЕ ОКНО
+                    self.root.update_idletasks()
+                    self.root.update()
+
+                    self.logger.info("Результат перевода показан")
                 else:
-                    self.update_status(self.get_string('ready'), '#4CAF50')
+                    self.logger.error("self.overlay is None! Оверлей не создан.")
+
+                self.update_status(self.get_string('ready'), '#4CAF50')
             else:
+                self.logger.warning("Результат перевода пустой (None)")
                 self.update_status(self.get_string('translate_error'), '#f44336')
+
         except Exception as e:
             self.logger.error(f"Ошибка показа результата: {e}")
+            import traceback
+            traceback.print_exc()
             self.update_status(self.get_string('error'), '#f44336')
         finally:
             self.translating = False
             self._hide_translation_overlay()
             self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+            self._pending_command_ids = {}
 
     def _on_translate_error(self, error_msg):
         """Обработчик ошибки перевода"""
@@ -1059,18 +1069,27 @@ class ScreenshotTranslatorApp:
     def on_close(self):
         """Обработчик закрытия приложения"""
         self._hide_translation_overlay()
+
+        # Останавливаем процессор результатов
+        self._processor_running = False
+
         try:
             keyboard.unblock_key('f1')
             keyboard.unblock_key('f2')
             keyboard.unhook_all()
         except:
             pass
+
         if hasattr(self, 'settings'):
             self.settings.save()
-        if self.translator:
-            self.translator.close_browser()
+
+        # Останавливаем BrowserWorker
+        if hasattr(self, 'browser_worker'):
+            self.browser_worker.stop()
+
         if self.overlay:
             self.overlay.close()
+
         self.root.destroy()
 
     def run(self):
