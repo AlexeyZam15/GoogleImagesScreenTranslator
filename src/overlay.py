@@ -53,6 +53,10 @@ class OverlayWindow:
 
         self.logger.info("OverlayWindow инициализирован")
 
+    def get_target_hwnd(self) -> int:
+        """Возвращает HWND целевого окна"""
+        return self._target_hwnd
+
     def _hide_internal(self):
         """Внутреннее скрытие оверлея без изменения флага _is_visible_by_user"""
         self.visible = False
