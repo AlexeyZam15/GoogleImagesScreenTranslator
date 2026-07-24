@@ -76,6 +76,10 @@ class TranslationOverlay:
             self.root.overrideredirect(True)
             self.root.attributes('-topmost', True)
             self.root.attributes('-alpha', 0.95)
+            # Делаем окно недоступным для взаимодействия (клики не проходят, фокус не забирается)
+            self.root.attributes('-disabled', True)
+            # Делаем окно инструментальным (без кнопок в панели задач)
+            self.root.attributes('-toolwindow', True)
             self.root.configure(bg='#1e1e1e')
 
             # Обработчик закрытия окна
@@ -92,12 +96,17 @@ class TranslationOverlay:
             # Принудительно показываем окно
             self.root.deiconify()
             self.root.lift()
-            self.root.focus_force()
+            # Не вызываем focus_force, чтобы не забирать фокус
 
             print(f"[DEBUG] Окно настроено: {width}x{height}+{x}+{y}")
 
             main = tk.Frame(self.root, bg='#1e1e1e', bd=2, relief=tk.RAISED)
             main.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
+            # Отключаем фокус для фрейма
+            main.config(takefocus=False)
+            # Блокируем клики, чтобы они не передавались в окно
+            main.bind('<Button-1>', lambda e: "break")
+            main.bind('<ButtonRelease-1>', lambda e: "break")
 
             self.status_label = tk.Label(
                 main,
@@ -107,9 +116,17 @@ class TranslationOverlay:
                 font=('Segoe UI', 14, 'bold')
             )
             self.status_label.pack(pady=(15, 10))
+            # Отключаем фокус для label
+            self.status_label.config(takefocus=False)
+            self.status_label.bind('<Button-1>', lambda e: "break")
+            self.status_label.bind('<ButtonRelease-1>', lambda e: "break")
 
             progress_frame = tk.Frame(main, bg='#1e1e1e')
             progress_frame.pack(fill=tk.X, padx=20, pady=(5, 15))
+            # Отключаем фокус для фрейма прогресса
+            progress_frame.config(takefocus=False)
+            progress_frame.bind('<Button-1>', lambda e: "break")
+            progress_frame.bind('<ButtonRelease-1>', lambda e: "break")
 
             self.progress = ttk.Progressbar(
                 progress_frame,
@@ -118,6 +135,10 @@ class TranslationOverlay:
                 style='green.Horizontal.TProgressbar'
             )
             self.progress.pack()
+            # Отключаем фокус для прогрессбара
+            self.progress.config(takefocus=False)
+            self.progress.bind('<Button-1>', lambda e: "break")
+            self.progress.bind('<ButtonRelease-1>', lambda e: "break")
 
             style = ttk.Style()
             style.theme_use('clam')
@@ -137,6 +158,9 @@ class TranslationOverlay:
             self._update_status_animation()
 
             self.root.bind('<Escape>', self._on_escape)
+            # Блокируем клики по корневому окну
+            self.root.bind('<Button-1>', lambda e: "break")
+            self.root.bind('<ButtonRelease-1>', lambda e: "break")
 
             # Принудительно обновляем
             self.root.update_idletasks()
