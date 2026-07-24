@@ -214,11 +214,11 @@ class ScreenshotTranslatorApp:
             self.initializing = False
             self._init_done = True
 
-            # СОЗДАЕМ ОВЕРЛЕЙ ЕСЛИ ЕЩЕ НЕ СОЗДАН
+            # СОЗДАЕМ ОВЕРЛЕЙ В ГЛАВНОМ ПОТОКЕ
             if self.overlay is None:
                 self.logger.info("Создание оверлея")
                 from src.overlay import OverlayWindow
-                self.overlay = OverlayWindow()
+                self.overlay = OverlayWindow(parent=self.root)  # <-- ПЕРЕДАЕМ parent
                 self.logger.info(f"Оверлей создан: {self.overlay}")
             else:
                 self.logger.info(f"Оверлей уже существует: {self.overlay}")
@@ -877,11 +877,19 @@ class ScreenshotTranslatorApp:
         """Настройка глобальных горячих клавиш"""
         try:
             keyboard.unhook_all()
-            keyboard.block_key('f1')
-            keyboard.block_key('f2')
+
+            # Пытаемся заблокировать системные клавиши через keyblock
+            try:
+                # Блокируем F1 и F2 на системном уровне
+                keyboard.block_key('f1')
+                keyboard.block_key('f2')
+            except:
+                pass
 
             def on_key(event):
+                # Перехватываем F1
                 if event.name == 'f1' and event.event_type == 'down':
+                    # Подавляем событие
                     if not self._key_states.get('f1', False):
                         current_time = time.time() * 1000
                         if current_time - self._key_last_time.get('f1', 0) >= self._debounce_ms:
@@ -889,7 +897,9 @@ class ScreenshotTranslatorApp:
                             self._key_last_time['f1'] = current_time
                             self.root.after(0, self.toggle_overlay)
                             self.root.after(100, lambda: self._key_states.__setitem__('f1', False))
-                    return False
+                    return False  # Блокируем дальнейшую обработку события
+
+                # Перехватываем F2
                 if event.name == 'f2' and event.event_type == 'down':
                     if not self._key_states.get('f2', False):
                         current_time = time.time() * 1000
@@ -898,28 +908,34 @@ class ScreenshotTranslatorApp:
                             self._key_last_time['f2'] = current_time
                             self.root.after(0, self.process)
                             self.root.after(100, lambda: self._key_states.__setitem__('f2', False))
-                    return False
+                    return False  # Блокируем дальнейшую обработку события
+
                 return True
 
+            # Регистрируем хук с подавлением
             keyboard.hook(on_key, suppress=True)
             self.logger.info("Горячие клавиши зарегистрированы")
+
         except Exception as e:
             self.logger.error(f"Ошибка регистрации горячих клавиш: {e}")
             self._setup_tkinter_hotkeys()
 
     def _setup_tkinter_hotkeys(self):
         """Запасной вариант через Tkinter bind_all"""
+        self.logger.warning("Используется запасной метод горячих клавиш (Tkinter)")
 
         def handle_hotkey(event):
             keysym = event.keysym
             if keysym == "F1" or keysym == "f1":
                 self.toggle_overlay()
-                return "break"
+                return "break"  # Блокируем дальнейшую обработку
             if keysym == "F2" or keysym == "f2":
                 self.process()
-                return "break"
+                return "break"  # Блокируем дальнейшую обработка
+            return None
 
-        self.root.bind_all("<Key>", handle_hotkey)
+        self.root.bind_all("<Key-F1>", handle_hotkey)
+        self.root.bind_all("<Key-F2>", handle_hotkey)
         self.root.focus_force()
         self.logger.info("Tkinter горячие клавиши зарегистрированы")
 
