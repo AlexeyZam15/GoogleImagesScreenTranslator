@@ -12,23 +12,32 @@ import os
 class SettingsWindow:
     """Окно настроек программы"""
 
-    def __init__(self, parent, settings, on_settings_changed):
-        self.parent = parent
+    def __init__(self, app_instance, settings, on_settings_changed):
+        self.app = app_instance  # Сохраняем ссылку на экземпляр приложения
+        self.parent = app_instance.root  # Родительское окно - главное окно приложения
         self.settings = settings
         self.on_settings_changed = on_settings_changed
 
-        self.window = tk.Toplevel(parent)
+        self.window = tk.Toplevel(self.parent)
         self.window.title(self.get_string('settings_title'))
-        self.window.geometry("500x400")
-        self.window.minsize(450, 350)
+        self.window.geometry("580x650")
+        self.window.minsize(550, 600)
         self.window.resizable(True, True)
         self.window.configure(bg='#1e1e1e')
-        self.window.transient(parent)
+        self.window.transient(self.parent)
         self.window.grab_set()
+
+        # Скрываем окно до полной настройки
+        self.window.withdraw()
 
         self.center_window()
         self.create_widgets()
         self.load_values()
+
+        # Показываем окно после всех настроек
+        self.window.deiconify()
+        self.window.lift()
+        self.window.focus_force()
 
     def reset_settings(self):
         """Сбрасывает настройки к значениям по умолчанию"""
@@ -37,7 +46,11 @@ class SettingsWindow:
             for key, value in Settings.DEFAULT_SETTINGS.items():
                 self.settings.set(key, value)
             self.load_values()
-            self.update_labels()
+            # Обновляем переменные для новых настроек
+            if hasattr(self, 'show_indicator_var'):
+                self.show_indicator_var.set(self.settings.get_show_translation_indicator())
+            if hasattr(self, 'auto_hide_var'):
+                self.auto_hide_var.set(self.settings.get_auto_hide_overlay())
             messagebox.showinfo(self.get_string('settings_title'), self.get_string('settings_reset_done'))
 
     def get_string(self, key):
@@ -52,39 +65,30 @@ class SettingsWindow:
         self.window.geometry(f'{width}x{height}+{x}+{y}')
 
     def create_widgets(self):
-        main = tk.Frame(self.window, bg='#1e1e1e')
-        main.pack(fill=tk.BOTH, expand=True, padx=25, pady=20)
+        main_container = tk.Frame(self.window, bg='#1e1e1e')
+        main_container.pack(fill=tk.BOTH, expand=True, padx=25, pady=20)
 
-        # Заголовок
-        title = tk.Label(
-            main,
-            text=self.get_string('settings_title'),
-            font=('Segoe UI', 16, 'bold'),
-            bg='#1e1e1e',
-            fg='white'
-        )
+        title = tk.Label(main_container, text=self.get_string('settings_title'),
+                         font=('Segoe UI', 18, 'bold'), bg='#1e1e1e', fg='white')
         title.pack(pady=(0, 20))
 
         # --- НАСТРОЙКА БРАУЗЕРА ---
         browser_frame = tk.LabelFrame(
-            main,
+            main_container,
             text=self.get_string('settings_browser_section'),
             bg='#1e1e1e',
             fg='#4CAF50',
             font=('Segoe UI', 12, 'bold'),
             padx=15,
-            pady=10
+            pady=12
         )
         browser_frame.pack(fill=tk.X, pady=(0, 15))
 
         # Информация о текущем браузере
         current_path = self.settings.get_browser_path()
-
-        # Определяем язык для названия браузера
         lang = self.settings.get_language()
 
         if current_path and os.path.exists(current_path):
-            # Определяем имя браузера в зависимости от языка
             if 'Yandex' in current_path or 'Яндекс' in current_path:
                 browser_name = "Yandex Browser" if lang == 'en' else "Яндекс Браузер"
             elif 'Google' in current_path or 'Chrome' in current_path:
@@ -132,7 +136,7 @@ class SettingsWindow:
             font=('Segoe UI', 10),
             relief=tk.FLAT
         )
-        self.browser_path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        self.browser_path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5), ipady=4)
 
         browse_btn = tk.Button(
             path_entry_frame,
@@ -143,27 +147,69 @@ class SettingsWindow:
             font=('Segoe UI', 9),
             relief=tk.FLAT,
             padx=10,
-            pady=4,
+            pady=6,
             cursor='hand2',
             width=10
         )
         browse_btn.pack(side=tk.RIGHT)
 
-        # Подсказка - ФИКСИРОВАННАЯ ШИРИНА
+        # Подсказка
         tk.Label(
             browser_frame,
             text=self.get_string('settings_browser_path_hint'),
             bg='#1e1e1e',
             fg='#666666',
             font=('Segoe UI', 9),
-            wraplength=420,
+            wraplength=480,
             anchor='w',
             justify='left'
         ).pack(anchor=tk.W, pady=(5, 0), fill=tk.X)
 
+        # --- НАСТРОЙКИ ИНДИКАТОРА И АВТОСКРЫТИЯ ---
+        ui_frame = tk.LabelFrame(
+            main_container,
+            text=self.get_string('settings_ui'),
+            bg='#1e1e1e',
+            fg='white',
+            font=('Segoe UI', 12, 'bold'),
+            padx=15,
+            pady=12
+        )
+        ui_frame.pack(fill=tk.X, pady=(0, 20))
+
+        # Показывать индикатор перевода
+        self.show_indicator_var = tk.BooleanVar(value=self.settings.get_show_translation_indicator())
+        indicator_cb = tk.Checkbutton(
+            ui_frame,
+            text=self.get_string('show_translation_indicator'),
+            variable=self.show_indicator_var,
+            bg='#1e1e1e',
+            fg='white',
+            selectcolor='#1e1e1e',
+            font=('Segoe UI', 11),
+            padx=5,
+            pady=5
+        )
+        indicator_cb.pack(anchor=tk.W, pady=6)
+
+        # Автоскрытие оверлея
+        self.auto_hide_var = tk.BooleanVar(value=self.settings.get_auto_hide_overlay())
+        auto_hide_cb = tk.Checkbutton(
+            ui_frame,
+            text=self.get_string('auto_hide_overlay'),
+            variable=self.auto_hide_var,
+            bg='#1e1e1e',
+            fg='white',
+            selectcolor='#1e1e1e',
+            font=('Segoe UI', 11),
+            padx=5,
+            pady=5
+        )
+        auto_hide_cb.pack(anchor=tk.W, pady=6)
+
         # --- КНОПКИ ---
-        btn_frame = tk.Frame(main, bg='#1e1e1e')
-        btn_frame.pack(fill=tk.X, pady=(20, 0))
+        btn_frame = tk.Frame(main_container, bg='#1e1e1e')
+        btn_frame.pack(fill=tk.X, pady=(10, 0))
 
         save_btn = tk.Button(
             btn_frame,
@@ -174,10 +220,24 @@ class SettingsWindow:
             font=('Segoe UI', 11, 'bold'),
             relief=tk.FLAT,
             height=1,
-            pady=10,
+            pady=12,
             cursor='hand2'
         )
         save_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 5), ipady=2)
+
+        reset_btn = tk.Button(
+            btn_frame,
+            text=self.get_string('settings_reset'),
+            command=self.reset_settings,
+            bg='#3c3c3c',
+            fg='white',
+            font=('Segoe UI', 11),
+            relief=tk.FLAT,
+            height=1,
+            pady=12,
+            cursor='hand2'
+        )
+        reset_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(5, 5), ipady=2)
 
         cancel_btn = tk.Button(
             btn_frame,
@@ -188,7 +248,7 @@ class SettingsWindow:
             font=('Segoe UI', 11),
             relief=tk.FLAT,
             height=1,
-            pady=10,
+            pady=12,
             cursor='hand2'
         )
         cancel_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(5, 0), ipady=2)
@@ -200,10 +260,13 @@ class SettingsWindow:
         """Загружает текущие настройки в поля"""
         current_path = self.settings.get_browser_path()
         self.browser_path_var.set(current_path)
+        if hasattr(self, 'show_indicator_var'):
+            self.show_indicator_var.set(self.settings.get_show_translation_indicator())
+        if hasattr(self, 'auto_hide_var'):
+            self.auto_hide_var.set(self.settings.get_auto_hide_overlay())
 
     def save_settings(self):
         """Сохраняет настройки"""
-        # Сохраняем путь к браузеру
         browser_path = self.browser_path_var.get().strip()
         if browser_path and not os.path.exists(browser_path):
             messagebox.showerror(
@@ -213,14 +276,28 @@ class SettingsWindow:
             return
 
         self.settings.set_browser_path(browser_path)
+        self.settings.set_show_translation_indicator(self.show_indicator_var.get())
+        self.settings.set_auto_hide_overlay(self.auto_hide_var.get())
         self.settings.save()
+
+        print(f"[DEBUG] Сохранена настройка автоскрытия: {self.auto_hide_var.get()}")
+
+        # Используем self.app вместо self.parent
+        if hasattr(self, 'app') and hasattr(self.app, 'overlay') and self.app.overlay:
+            print(f"[DEBUG] Вызываем overlay.set_auto_hide({self.auto_hide_var.get()})")
+            self.app.overlay.set_auto_hide(self.auto_hide_var.get())
+            print(f"[DEBUG] Обновлен режим автоскрытия оверлея: {self.auto_hide_var.get()}")
+        else:
+            print(f"[DEBUG] app.overlay = {getattr(self.app, 'overlay', None)}")
+
+        if hasattr(self, 'app') and hasattr(self.app, 'setup_hotkeys'):
+            self.app.setup_hotkeys()
 
         messagebox.showinfo(
             self.get_string('settings_title'),
             self.get_string('settings_saved')
         )
 
-        # Уведомляем главное окно об изменении настроек
         if self.on_settings_changed:
             self.on_settings_changed()
 

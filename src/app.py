@@ -21,6 +21,7 @@ from src.screenshot import ScreenshotCapturer
 from src.overlay import OverlayWindow
 from src.settings import Settings
 from src.strings import get_strings
+from src.browser_worker import BrowserWorker
 
 LANGUAGES = {"af": "Afrikaans", "sq": "Albanian", "am": "Amharic", "ar": "Arabic", "hy": "Armenian",
              "az": "Azerbaijani", "eu": "Basque", "be": "Belarusian", "bn": "Bengali", "bs": "Bosnian",
@@ -47,7 +48,6 @@ LANGUAGES = {"af": "Afrikaans", "sq": "Albanian", "am": "Amharic", "ar": "Arabic
 def cleanup_old_logs(log_dir, keep_count=5):
     """
     Очищает старые логи, оставляя только указанное количество последних
-
     Args:
         log_dir: Путь к папке с логами
         keep_count: Количество последних лог-файлов для сохранения
@@ -111,7 +111,6 @@ class ScreenshotTranslatorApp:
         self.temp_dir.mkdir(exist_ok=True)
         self.overlay = None
         self.screenshot = ScreenshotCapturer()
-        self.translator = None
         self.ready = False
         self.translating = False
         self.initializing = False
@@ -122,51 +121,346 @@ class ScreenshotTranslatorApp:
         self._key_last_time = {}
         self._debounce_ms = 500
         self._restarting = False
+        self._processor_running = False
         self.show_browser_var = None
         self.target_lang_var = None
         self.show_indicator_var = None
+        self.auto_hide_var = None
+        self.app_title = None
+        self.browser_worker = BrowserWorker(self.settings)
+        self.browser_worker.start()
+        self._pending_command_ids = {}
+
         self.create_gui()
-        self.root.update_idletasks()
-        self.root.update()
+
+        # Убираем эти строки, так как теперь все в create_gui
+        # self.root.update_idletasks()
+        # self.root.update()
+
         self.update_ui_language()
+        self.app_title = self.get_string('app_title')
+        self.logger.info(f"Заголовок приложения: {self.app_title}")
         self._setup_app_icon()
         self.setup_hotkeys()
         self.root.after(100, self._init_translator_step)
 
+    def setup_hotkeys(self):
+        """Настройка глобальных горячих клавиш"""
+        try:
+            keyboard.unhook_all()
+
+            def on_key(event):
+                # Логируем только наши горячие клавиши
+                if event.name == 'f1' and event.event_type == 'down':
+                    self.logger.info("[DEBUG] F1 нажата!")
+
+                    # Получаем настройку автоскрытия
+                    auto_hide_enabled = self.settings.get_auto_hide_overlay()
+                    self.logger.info(f"[DEBUG] auto_hide_enabled = {auto_hide_enabled}")
+
+                    if auto_hide_enabled:
+                        self.logger.info("[DEBUG] Автоскрытие ВКЛЮЧЕНО, проверяем активное окно")
+                        target_hwnd = self.screenshot.get_last_hwnd()
+                        try:
+                            import win32gui
+                            active_hwnd = win32gui.GetForegroundWindow()
+                            self.logger.info(f"[DEBUG] active_hwnd={active_hwnd}, target_hwnd={target_hwnd}")
+
+                            class_name = ""
+                            window_text = ""
+                            try:
+                                class_name = win32gui.GetClassName(active_hwnd)
+                                window_text = win32gui.GetWindowText(active_hwnd)
+                                self.logger.info(f"[DEBUG] active window: class='{class_name}', title='{window_text}'")
+                            except:
+                                pass
+
+                            is_overlay_active = (class_name == "TkTopLevel" and window_text == "Перевод")
+
+                            overlay_hwnd = None
+                            overlay_exists = False
+                            if self.overlay and hasattr(self.overlay, 'root') and self.overlay.root.winfo_exists():
+                                overlay_exists = True
+                                try:
+                                    overlay_hwnd = int(self.overlay.root.winfo_id())
+                                    self.logger.info(f"[DEBUG] overlay_hwnd={overlay_hwnd}")
+                                except Exception as e:
+                                    self.logger.info(f"[DEBUG] Ошибка получения HWND оверлея: {e}")
+
+                            if is_overlay_active:
+                                self.logger.info("[DEBUG] F1 перехвачена (активно окно оверлея TkTopLevel)")
+                                if overlay_exists:
+                                    current_time = time.time() * 1000
+                                    if current_time - self._key_last_time.get('f1', 0) >= self._debounce_ms:
+                                        self._key_last_time['f1'] = current_time
+                                        self.root.after(0, self.toggle_overlay)
+                                        self.logger.info("[DEBUG] Вызван toggle_overlay")
+                                return False
+
+                            if overlay_hwnd is not None and active_hwnd == overlay_hwnd:
+                                self.logger.info("[DEBUG] F1 перехвачена (окно оверлея по HWND)")
+                                if overlay_exists:
+                                    current_time = time.time() * 1000
+                                    if current_time - self._key_last_time.get('f1', 0) >= self._debounce_ms:
+                                        self._key_last_time['f1'] = current_time
+                                        self.root.after(0, self.toggle_overlay)
+                                        self.logger.info("[DEBUG] Вызван toggle_overlay")
+                                return False
+
+                            if self.overlay and hasattr(self.overlay, '_is_dragging') and self.overlay._is_dragging:
+                                self.logger.info("[DEBUG] F1 перехвачена (идет перетаскивание оверлея)")
+                                return False
+
+                            if target_hwnd is not None and active_hwnd == target_hwnd:
+                                current_time = time.time() * 1000
+                                if current_time - self._key_last_time.get('f1', 0) >= self._debounce_ms:
+                                    self._key_last_time['f1'] = current_time
+                                    self.root.after(0, self.toggle_overlay)
+                                    self.logger.info("[DEBUG] F1 перехвачена (целевое окно активно)")
+                                return False
+                            else:
+                                self.logger.info("[DEBUG] F1 пропущена в систему (не оверлей и не целевое окно)")
+                                return True
+                        except Exception as e:
+                            self.logger.warning(f"Ошибка проверки активного окна в хуке: {e}")
+                            return True
+                    else:
+                        self.logger.info("[DEBUG] F1 перехвачена (автоскрытие отключено)")
+                        current_time = time.time() * 1000
+                        if current_time - self._key_last_time.get('f1', 0) >= self._debounce_ms:
+                            self._key_last_time['f1'] = current_time
+                            self.root.after(0, self.toggle_overlay)
+                        return False
+
+                elif event.name == 'f2' and event.event_type == 'down':
+                    self.logger.info("[DEBUG] F2 нажата!")
+                    current_time = time.time() * 1000
+                    if current_time - self._key_last_time.get('f2', 0) >= self._debounce_ms:
+                        self._key_last_time['f2'] = current_time
+                        self.root.after(0, self.process)
+                        self.logger.info("[DEBUG] F2 перехвачена")
+                    return False
+
+                # Все остальные клавиши передаем в систему без логирования
+                return True
+
+            keyboard.hook(on_key, suppress=True)
+            self.logger.info("Горячие клавиши зарегистрированы (F1 - зависит от автоскрытия, F2 - всегда)")
+
+        except Exception as e:
+            self.logger.error(f"Ошибка регистрации горячих клавиш: {e}")
+            self._setup_tkinter_hotkeys()
+
+    def toggle_overlay(self):
+        """Переключает видимость оверлея переведенного скриншота"""
+        if not self.overlay:
+            self.logger.warning("toggle_overlay: оверлей не существует")
+            return
+
+        self.logger.info("[DEBUG] toggle_overlay вызван")
+
+        # Получаем настройку автоскрытия
+        auto_hide_enabled = self.settings.get_auto_hide_overlay()
+        self.logger.info(f"[DEBUG] toggle_overlay: auto_hide_enabled={auto_hide_enabled}")
+
+        target_hwnd = self.screenshot.get_last_hwnd()
+
+        # Если нет целевого окна - показываем статус
+        if target_hwnd is None:
+            self.logger.debug("toggle_overlay: нет сохраненного HWND целевого окна")
+            self.update_status("● Нет активного перевода", '#ff9800')
+            return
+
+        # Если автоскрытие выключено - переключаем без проверок
+        if not auto_hide_enabled:
+            self.logger.info("[DEBUG] toggle_overlay: автоскрытие отключено, переключаем без проверок")
+            self.overlay.toggle()
+            status = self.get_string('shown') if self.overlay.is_visible() else self.get_string('hidden')
+            self.update_status(f"● {self.get_string('overlay')} {status}", '#2196F3')
+            return
+
+        # Если автоскрытие включено - проверяем активное окно
+        try:
+            import win32gui
+            active_hwnd = win32gui.GetForegroundWindow()
+            self.logger.info(f"[DEBUG] toggle_overlay: active_hwnd={active_hwnd}, target_hwnd={target_hwnd}")
+
+            # Проверяем, является ли активное окно оверлеем
+            overlay_hwnd = None
+            if self.overlay and hasattr(self.overlay, 'root') and self.overlay.root.winfo_exists():
+                try:
+                    overlay_hwnd = int(self.overlay.root.winfo_id())
+                    self.logger.info(f"[DEBUG] toggle_overlay: overlay_hwnd={overlay_hwnd}")
+                except Exception as e:
+                    self.logger.info(f"[DEBUG] toggle_overlay: ошибка получения HWND оверлея: {e}")
+
+            is_overlay_active = False
+            try:
+                class_name = win32gui.GetClassName(active_hwnd)
+                window_text = win32gui.GetWindowText(active_hwnd)
+                self.logger.info(f"[DEBUG] toggle_overlay: active window: class='{class_name}', title='{window_text}'")
+                if class_name == "TkTopLevel" and window_text == "Перевод":
+                    is_overlay_active = True
+                    self.logger.info("[DEBUG] toggle_overlay: активное окно - это оверлей (TkTopLevel)")
+            except Exception as e:
+                self.logger.info(f"[DEBUG] toggle_overlay: ошибка получения класса окна: {e}")
+
+            if is_overlay_active or (overlay_hwnd is not None and active_hwnd == overlay_hwnd):
+                self.logger.info("[DEBUG] toggle_overlay: активен оверлей, разрешаем переключение")
+                self.overlay.toggle()
+                status = self.get_string('shown') if self.overlay.is_visible() else self.get_string('hidden')
+                self.update_status(f"● {self.get_string('overlay')} {status}", '#2196F3')
+                return
+
+            if active_hwnd != target_hwnd:
+                self.logger.debug(f"toggle_overlay: активное окно ({active_hwnd}) не является целевым ({target_hwnd})")
+                self.update_status("● F1 работает только в целевом окне", '#ff9800')
+                return
+
+            self.overlay.toggle()
+            status = self.get_string('shown') if self.overlay.is_visible() else self.get_string('hidden')
+            self.update_status(f"● {self.get_string('overlay')} {status}", '#2196F3')
+
+        except Exception as e:
+            self.logger.warning(f"toggle_overlay: ошибка проверки активного окна: {e}")
+            return
+
+    def _setup_tkinter_hotkeys(self):
+        """Запасной вариант через Tkinter bind_all"""
+        self.logger.warning("Используется запасной метод горячих клавиш (Tkinter)")
+
+        def handle_hotkey(event):
+            keysym = event.keysym
+            if keysym == "F1" or keysym == "f1":
+                self.toggle_overlay()
+                return "break"
+            if keysym == "F2" or keysym == "f2":
+                self.process()
+                return "break"
+            return None
+
+        self.root.bind_all("<Key-F1>", handle_hotkey)
+        self.root.bind_all("<Key-F2>", handle_hotkey)
+        self.root.focus_force()
+        self.logger.info("Tkinter горячие клавиши зарегистрированы")
+
+    def on_close(self):
+        """Обработчик закрытия приложения"""
+        self._hide_translation_overlay()
+        self._processor_running = False
+        try:
+            keyboard.unhook_all()
+        except:
+            pass
+        if hasattr(self, 'settings'):
+            self.settings.save()
+        if hasattr(self, 'browser_worker'):
+            self.browser_worker.stop()
+        if self.overlay:
+            self.overlay.close()
+        self.root.destroy()
+
+    def _start_key_monitor(self):
+        """Запускает периодическую проверку обработчика (без блокировки клавиш)"""
+
+        def check_handler():
+            try:
+                # Просто проверяем, что хук активен - ничего не блокируем
+                pass
+            except:
+                pass
+            if hasattr(self, 'root') and self.root:
+                self.root.after(5000, check_handler)
+
+        if hasattr(self, 'root') and self.root:
+            self.root.after(1000, check_handler)
+
+    def _start_key_block_monitor(self):
+        """Устаревший метод - больше не используется"""
+        pass
+
     def _init_translator_step(self):
-        """Инициализация переводчика в главном потоке"""
+        """Инициализация переводчика в фоновом режиме"""
         if self._init_done:
             return
         self.initializing = True
         self.update_status("● " + self.get_string('starting_browser'), '#ff9800')
         self.root.update_idletasks()
-        self.root.after(50, self._init_translator_sync)
+        self._start_result_processor()
+        show_browser = self.settings.get_show_browser()
+        target_lang = self.settings.get_target_language()
+        cmd_id = self.browser_worker.init_browser(
+            show_browser,
+            target_lang,
+            callback=self._on_init_complete
+        )
+        self._pending_command_ids[cmd_id] = 'init'
 
-    def _init_translator_sync(self):
-        """Инициализация переводчика в главном потоке (синхронно)"""
+    def _start_result_processor(self):
+        """Запускает постоянную проверку результатов из рабочего потока"""
+        if hasattr(self, '_processor_running') and self._processor_running:
+            return
+        self._processor_running = True
+        self._process_results_loop()
+
+    def _process_results_loop(self):
+        """Постоянный цикл проверки результатов"""
         try:
-            self.logger.info("Запуск инициализации браузера...")
-            show_browser = self.settings.get_show_browser()
-            target_lang = self.settings.get_target_language()
-            self.translator = GoogleTranslateDebug(
-                headless=not show_browser,
-                target_lang=target_lang,
-                settings=self.settings
-            )
-            self.translator.start_browser()
-            self.overlay = OverlayWindow()
+            processed = self.browser_worker.process_results()
+            if processed:
+                self.logger.info(f"Обработано {processed} результатов")
+        except Exception as e:
+            self.logger.error(f"Ошибка обработки результатов: {e}")
+            import traceback
+            traceback.print_exc()
+        if hasattr(self, '_processor_running') and self._processor_running:
+            self.root.after(100, self._process_results_loop)
+
+    def _check_results(self):
+        """Периодическая проверка результатов из рабочего потока"""
+        try:
+            self.browser_worker.process_results()
+        except Exception as e:
+            self.logger.error(f"Ошибка обработки результатов: {e}")
+        if self._pending_command_ids:
+            self.root.after(100, self._check_results)
+
+    def _on_init_complete(self, result, error):
+        """Обработчик завершения инициализации"""
+        self.logger.info(f"_on_init_complete вызван: result={result}, error={error}")
+        if error:
+            self.logger.error(f"Ошибка инициализации: {error}")
+            self._on_init_error(error)
+        else:
+            self.logger.info("Инициализация завершена успешно, обновляем UI")
             self.ready = True
             self.initializing = False
             self._init_done = True
+            if self.overlay is None:
+                self.logger.info("Создание оверлея")
+                from src.overlay import OverlayWindow
+                # Передаем настройку автоскрытия в оверлей
+                auto_hide_enabled = self.settings.get_auto_hide_overlay()
+                self.overlay = OverlayWindow(parent=self.root, app_title=self.app_title,
+                                             auto_hide_enabled=auto_hide_enabled)
+                self.logger.info(f"Оверлей создан: {self.overlay}")
+            else:
+                self.logger.info(f"Оверлей уже существует: {self.overlay}")
             self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
             self.update_status("● " + self.get_string('ready'), '#4CAF50')
-            self.logger.info("✅ Инициализация завершена успешно")
-        except Exception as e:
-            self.logger.error(f"Ошибка инициализации: {e}")
-            self.initializing = False
-            self._init_done = True
-            self.update_status("● " + self.get_string('error') + ": " + str(e)[:50], '#f44336')
+            self.logger.info("UI обновлен: статус 'Готово'")
+        self._pending_command_ids = {}
+
+    def _on_init_error(self, error_msg):
+        """Обработчик ошибки инициализации"""
+        self.initializing = False
+        self._init_done = True
+        if "Не найден" in error_msg and ("браузер" in error_msg or "Chrome" in error_msg):
+            self._handle_browser_not_found(error_msg)
+        else:
+            self.update_status("● " + self.get_string('error') + ": " + error_msg[:50], '#f44336')
             self.btn_capture.config(state=DISABLED, bg='#333', fg='#888')
+            self.logger.error(f"❌ Ошибка инициализации: {error_msg}")
 
     def _handle_browser_not_found(self, error_msg: str):
         """Обрабатывает ситуацию, когда браузер не найден"""
@@ -301,97 +595,40 @@ class ScreenshotTranslatorApp:
         show = self.show_browser_var.get()
         self.settings.set_show_browser(show)
         self.logger.info(f"Видимость браузера изменена: {'показывать' if show else 'скрывать'}")
-        if self._init_done and self.translator:
+        if self._init_done:
             self._restart_translator()
 
     def _restart_translator(self):
-        """Перезапускает переводчик с новыми настройками в главном потоке"""
+        """Перезапускает переводчик с новыми настройками в фоновом режиме"""
         if self._restarting:
             self.logger.info("Перезапуск уже выполняется, пропускаем")
             return
         self._restarting = True
         self.logger.info("Перезапуск переводчика с новыми настройками...")
         self.update_status("● Перезапуск браузера...", '#ff9800')
-        self.root.after(0, self._do_restart)
+        self.btn_capture.config(state=DISABLED, bg='#333')
+        show_browser = self.settings.get_show_browser()
+        target_lang = self.settings.get_target_language()
+        cmd_id = self.browser_worker.restart_browser(
+            show_browser,
+            target_lang,
+            callback=self._on_restart_complete
+        )
+        self._pending_command_ids[cmd_id] = 'restart'
+        self._check_results()
 
-    def _do_restart(self):
-        """Выполняет перезапуск в главном потоке"""
-        try:
-            if self.translator:
-                self.translator.close_browser()
-                self.translator = None
-                self.ready = False
-            show_browser = self.settings.get_show_browser()
-            target_lang = self.settings.get_target_language()
-            self.logger.info(
-                f"Запуск переводчика с параметрами: headless={not show_browser}, target_lang={target_lang}")
-            self.translator = GoogleTranslateDebug(
-                headless=not show_browser,
-                target_lang=target_lang,
-                settings=self.settings
-            )
-            self.translator.start_browser()
+    def _on_restart_complete(self, result, error):
+        """Обработчик завершения перезапуска"""
+        if error:
+            self.logger.error(f"Ошибка перезапуска: {error}")
+            self._on_restart_error(error)
+        else:
             self.ready = True
             self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
             self.update_status("● " + self.get_string('ready'), '#4CAF50')
             self.logger.info("✅ Переводчик перезапущен успешно")
-        except Exception as e:
-            self.logger.error(f"❌ Ошибка перезапуска: {e}")
-            self.update_status("● " + self.get_string('error') + ": " + str(e)[:50], '#f44336')
-            self.btn_capture.config(state=DISABLED, bg='#333', fg='#888')
-        finally:
-            self._restarting = False
-
-    def _init_translator_async(self):
-        """Инициализация переводчика в отдельном потоке"""
-
-        def init_task():
-            try:
-                self.logger.info("Запуск инициализации браузера...")
-                show_browser = self.settings.get_show_browser()
-                target_lang = self.settings.get_target_language()
-                translator = GoogleTranslateDebug(headless=not show_browser, target_lang=target_lang)
-                translator.start_browser()
-                self.root.after(0, lambda: self._on_init_complete(translator))
-            except Exception as e:
-                error_msg = str(e)
-                self.logger.error(f"Ошибка инициализации: {error_msg}")
-                self.root.after(0, lambda: self._on_init_error(error_msg))
-
-        threading.Thread(target=init_task, daemon=True).start()
-
-    def _on_init_complete(self, translator):
-        """Обработчик успешной инициализации"""
-        try:
-            self.translator = translator
-            self.overlay = OverlayWindow()
-            self.ready = True
-            self.initializing = False
-            self._init_done = True
-            self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
-            self.update_status("● " + self.get_string('ready'), '#4CAF50')
-            self.logger.info("✅ Инициализация завершена успешно")
-        except Exception as e:
-            self.logger.error(f"Ошибка при завершении инициализации: {e}")
-            self._on_init_error(str(e))
-
-    def _on_init_error(self, error_msg):
-        """Обработчик ошибки инициализации"""
-        self.initializing = False
-        self._init_done = True
-        if "Не найден" in error_msg and ("браузер" in error_msg or "Chrome" in error_msg):
-            self._handle_browser_not_found(error_msg)
-        else:
-            self.update_status("● " + self.get_string('error') + ": " + error_msg[:50], '#f44336')
-            self.btn_capture.config(state=DISABLED, bg='#333', fg='#888')
-            self.logger.error(f"❌ Ошибка инициализации: {error_msg}")
-
-    def _on_restart_complete(self):
-        """Обработчик успешного перезапуска"""
-        self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
-        self.update_status("● " + self.get_string('ready'), '#4CAF50')
-        self.logger.info("✅ Переводчик перезапущен успешно")
         self._restarting = False
+        self._pending_command_ids = {}
 
     def _on_restart_error(self, error_msg):
         """Обработчик ошибки перезапуска"""
@@ -399,30 +636,6 @@ class ScreenshotTranslatorApp:
         self.btn_capture.config(state=DISABLED, bg='#333', fg='#888')
         self.logger.error(f"❌ Ошибка перезапуска: {error_msg}")
         self._restarting = False
-
-    def _start_translator_after_restart(self):
-        """Запускает переводчик после перезапуска в главном потоке"""
-        try:
-            show_browser = self.settings.get_show_browser()
-            target_lang = self.settings.get_target_language()
-            self.logger.info(
-                f"Запуск переводчика с параметрами: headless={not show_browser}, target_lang={target_lang}")
-            self.translator = GoogleTranslateDebug(
-                headless=not show_browser,
-                target_lang=target_lang,
-                settings=self.settings
-            )
-            self.translator.start_browser()
-            self.ready = True
-            self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
-            self.update_status("● " + self.get_string('ready'), '#4CAF50')
-            self.logger.info("✅ Переводчик перезапущен успешно")
-        except Exception as e:
-            self.logger.error(f"❌ Ошибка запуска переводчика после перезапуска: {e}")
-            self.update_status("● " + self.get_string('error') + ": " + str(e)[:50], '#f44336')
-            self.btn_capture.config(state=DISABLED, bg='#333', fg='#888')
-        finally:
-            self._restarting = False
 
     def _setup_app_icon(self):
         """Устанавливает профессиональную иконку приложения для отображения в панели задач"""
@@ -542,8 +755,6 @@ class ScreenshotTranslatorApp:
             self.hotkeys_label.config(text=self.get_string('hotkeys_info'))
         if hasattr(self, 'show_browser_check'):
             self.show_browser_check.config(text=self.get_string('show_browser'))
-        if hasattr(self, 'show_indicator_check'):
-            self.show_indicator_check.config(text=self.get_string('show_translation_indicator'))
         if hasattr(self, 'target_lang_label'):
             self.target_lang_label.config(text=self.get_string('target_language'))
         self.update_menu_language()
@@ -587,32 +798,46 @@ class ScreenshotTranslatorApp:
         """Создает главное окно приложения с адаптивной версткой"""
         self.root = Tk()
         self.root.title(self.get_string('app_title'))
+
+        # Скрываем окно до полной настройки
+        self.root.withdraw()
+
         self.root.geometry("520x520")
         self.root.minsize(520, 520)
         self.root.maxsize(520, 520)
         self.root.resizable(False, False)
         self.root.configure(bg='#1e1e1e')
+
         self.create_menu()
         self.show_browser_var = BooleanVar(value=self.settings.get_show_browser())
         self.target_lang_var = StringVar(value=self.settings.get_target_language())
         self.show_indicator_var = BooleanVar(value=self.settings.get_show_translation_indicator())
+        self.auto_hide_var = BooleanVar(value=self.settings.get_auto_hide_overlay())
+
         main = Frame(self.root, bg='#1e1e1e')
         main.pack(expand=True, fill=BOTH, padx=25, pady=20)
+
         header_frame = Frame(main, bg='#1e1e1e', height=60)
         header_frame.pack(fill=X, pady=(0, 15))
         header_frame.pack_propagate(False)
+
         title_frame = Frame(header_frame, bg='#1e1e1e')
         title_frame.pack(side=LEFT, expand=True, fill=X)
+
         icon_label = Label(title_frame, text="📸",
                            bg='#1e1e1e', fg='white', font=("Arial", 26))
         icon_label.pack(side=LEFT, padx=(0, 10))
+
         self.title_label = Label(title_frame, text=self.get_string('app_title'),
                                  bg='#1e1e1e', fg='#4CAF50', font=("Arial", 15, "bold"))
         self.title_label.pack(side=LEFT)
+
         header_right = Frame(header_frame, bg='#1e1e1e')
         header_right.pack(side=RIGHT, padx=(10, 0))
+
         current_lang = self.settings.get_language()
         lang_text = "EN" if current_lang == "ru" else "RU"
+
         self.lang_btn = Button(
             header_right,
             text=lang_text,
@@ -627,6 +852,7 @@ class ScreenshotTranslatorApp:
             cursor="hand2"
         )
         self.lang_btn.pack(side=RIGHT, padx=(0, 5))
+
         self.settings_btn = Button(
             header_right,
             text="⚙️",
@@ -659,11 +885,14 @@ class ScreenshotTranslatorApp:
 
         self.settings_btn.bind('<Enter>', on_settings_enter)
         self.settings_btn.bind('<Leave>', on_settings_leave)
+
         self.status = Label(main, text="● " + self.get_string('starting'),
                             fg='#ff9800', bg='#1e1e1e', font=("Arial", 11), height=1)
         self.status.pack(pady=(5, 10), fill=X)
+
         lang_select_frame = Frame(main, bg='#1e1e1e')
         lang_select_frame.pack(fill=X, pady=(5, 10))
+
         self.target_lang_label = Label(
             lang_select_frame,
             text=self.get_string('target_language'),
@@ -673,10 +902,13 @@ class ScreenshotTranslatorApp:
             anchor='w'
         )
         self.target_lang_label.pack(anchor=W, fill=X)
+
         lang_combo_frame = Frame(lang_select_frame, bg='#1e1e1e')
         lang_combo_frame.pack(fill=X, pady=(5, 0))
+
         lang_codes = sorted(LANGUAGES.keys())
         self._all_lang_items = [f"{LANGUAGES[code]} ({code})" for code in lang_codes]
+
         self.target_lang_combo = ttk.Combobox(
             lang_combo_frame,
             textvariable=self.target_lang_var,
@@ -689,11 +921,14 @@ class ScreenshotTranslatorApp:
         self.target_lang_combo.bind('<KeyRelease>', self._on_lang_search)
         self.target_lang_combo.bind('<Return>', self._on_lang_enter)
         self.target_lang_combo.bind('<<ComboboxSelected>>', self._on_target_lang_changed)
+
         current_lang_code = self.settings.get_target_language()
         current_display = f"{LANGUAGES.get(current_lang_code, 'Russian')} ({current_lang_code})"
         self.target_lang_combo.set(current_display)
+
         btn_frame = Frame(main, bg='#1e1e1e')
         btn_frame.pack(fill=X, pady=5)
+
         self.btn_capture = Button(
             btn_frame,
             text=self.get_string('btn_capture'),
@@ -707,6 +942,7 @@ class ScreenshotTranslatorApp:
             state=DISABLED
         )
         self.btn_capture.pack(fill=X, pady=(0, 10), ipady=2)
+
         self.btn_toggle = Button(
             btn_frame,
             text=self.get_string('btn_toggle'),
@@ -719,22 +955,7 @@ class ScreenshotTranslatorApp:
             pady=12
         )
         self.btn_toggle.pack(fill=X, ipady=2)
-        checkbox_frame = Frame(main, bg='#1e1e1e')
-        checkbox_frame.pack(fill=X, pady=(10, 5))
-        self.show_indicator_check = Checkbutton(
-            checkbox_frame,
-            text=self.get_string('show_translation_indicator'),
-            variable=self.show_indicator_var,
-            command=self.toggle_indicator_visibility,
-            bg='#1e1e1e',
-            fg='#cccccc',
-            selectcolor='#1e1e1e',
-            font=("Arial", 10),
-            activebackground='#1e1e1e',
-            activeforeground='#4CAF50',
-            anchor='w'
-        )
-        self.show_indicator_check.pack(anchor=W, pady=(2, 0), fill=X)
+
         self.hotkeys_label = Label(
             main,
             text=self.get_string('hotkeys_info'),
@@ -745,12 +966,19 @@ class ScreenshotTranslatorApp:
             justify='left'
         )
         self.hotkeys_label.pack(pady=(15, 5), fill=X)
+
+        # Центрируем окно до его отображения
         self.root.update_idletasks()
         w = self.root.winfo_width()
         h = self.root.winfo_height()
         x = (self.root.winfo_screenwidth() - w) // 2
         y = (self.root.winfo_screenheight() - h) // 2
         self.root.geometry(f"{w}x{h}+{x}+{y}")
+
+        # Показываем окно после всех настроек
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
 
     def create_menu(self):
         """Создает главное меню приложения"""
@@ -759,7 +987,8 @@ class ScreenshotTranslatorApp:
     def open_settings(self):
         """Открывает окно настроек"""
         from src.settings_window import SettingsWindow
-        SettingsWindow(self.root, self.settings, self.on_settings_changed)
+        # Передаем self вместо self.root
+        SettingsWindow(self, self.settings, self.on_settings_changed)
 
     def on_settings_changed(self):
         """Обработчик изменения настроек"""
@@ -781,6 +1010,10 @@ class ScreenshotTranslatorApp:
             current_display = f"{LANGUAGES.get(self.settings.get_target_language(), 'Russian')} ({self.settings.get_target_language()})"
             self.target_lang_combo.set(current_display)
             self.show_indicator_var.set(self.settings.get_show_translation_indicator())
+            self.auto_hide_var.set(self.settings.get_auto_hide_overlay())
+            # Обновляем оверлей если он существует
+            if self.overlay:
+                self.overlay.set_auto_hide(self.settings.get_auto_hide_overlay())
             messagebox.showinfo(self.get_string('settings_title'), self.get_string('settings_reset_done'))
 
     def show_shortcuts(self):
@@ -828,9 +1061,8 @@ class ScreenshotTranslatorApp:
             lang_code = "ru"
         self.logger.info(f"Выбран целевой язык: {lang_code}")
         self.settings.set_target_language(lang_code)
-        if self.translator:
-            self.translator.update_target_language(lang_code)
-            self.logger.info(f"Язык перевода обновлен на: {lang_code}")
+        if self.ready:
+            self.browser_worker.update_language(lang_code)
 
     def _on_target_lang_changed(self, event):
         """Обработчик изменения целевого языка перевода"""
@@ -851,10 +1083,6 @@ class ScreenshotTranslatorApp:
             self.target_lang_combo.config(font=("Arial", 9))
             if hasattr(self, 'hotkeys_label'):
                 self.hotkeys_label.config(font=("Arial", 9), wraplength=width - 60)
-            if hasattr(self, 'show_browser_check'):
-                self.show_browser_check.config(font=("Arial", 9))
-            if hasattr(self, 'show_indicator_check'):
-                self.show_indicator_check.config(font=("Arial", 9))
         else:
             self.title_label.config(font=("Arial", 15, "bold"))
             self.lang_btn.config(font=("Arial", 12, "bold"), padx=12, pady=6)
@@ -866,66 +1094,12 @@ class ScreenshotTranslatorApp:
             self.target_lang_combo.config(font=("Arial", 10))
             if hasattr(self, 'hotkeys_label'):
                 self.hotkeys_label.config(font=("Arial", 10), wraplength=min(width - 50, 480))
-            if hasattr(self, 'show_browser_check'):
-                self.show_browser_check.config(font=("Arial", 10))
-            if hasattr(self, 'show_indicator_check'):
-                self.show_indicator_check.config(font=("Arial", 10))
 
     def toggle_indicator_visibility(self):
         """Переключает видимость индикатора перевода"""
         show = self.show_indicator_var.get()
         self.settings.set_show_translation_indicator(show)
         self.logger.info(f"Видимость индикатора перевода изменена: {'показывать' if show else 'скрывать'}")
-
-    def setup_hotkeys(self):
-        """Настройка глобальных горячих клавиш"""
-        try:
-            keyboard.unhook_all()
-            keyboard.block_key('f1')
-            keyboard.block_key('f2')
-
-            def on_key(event):
-                if event.name == 'f1' and event.event_type == 'down':
-                    if not self._key_states.get('f1', False):
-                        current_time = time.time() * 1000
-                        if current_time - self._key_last_time.get('f1', 0) >= self._debounce_ms:
-                            self._key_states['f1'] = True
-                            self._key_last_time['f1'] = current_time
-                            self.root.after(0, self.toggle_overlay)
-                            self.root.after(100, lambda: self._key_states.__setitem__('f1', False))
-                    return False
-                if event.name == 'f2' and event.event_type == 'down':
-                    if not self._key_states.get('f2', False):
-                        current_time = time.time() * 1000
-                        if current_time - self._key_last_time.get('f2', 0) >= self._debounce_ms:
-                            self._key_states['f2'] = True
-                            self._key_last_time['f2'] = current_time
-                            self.root.after(0, self.process)
-                            self.root.after(100, lambda: self._key_states.__setitem__('f2', False))
-                    return False
-                return True
-
-            keyboard.hook(on_key, suppress=True)
-            self.logger.info("Горячие клавиши зарегистрированы")
-        except Exception as e:
-            self.logger.error(f"Ошибка регистрации горячих клавиш: {e}")
-            self._setup_tkinter_hotkeys()
-
-    def _setup_tkinter_hotkeys(self):
-        """Запасной вариант через Tkinter bind_all"""
-
-        def handle_hotkey(event):
-            keysym = event.keysym
-            if keysym == "F1" or keysym == "f1":
-                self.toggle_overlay()
-                return "break"
-            if keysym == "F2" or keysym == "f2":
-                self.process()
-                return "break"
-
-        self.root.bind_all("<Key>", handle_hotkey)
-        self.root.focus_force()
-        self.logger.info("Tkinter горячие клавиши зарегистрированы")
 
     def update_status(self, text, color='white'):
         """Обновляет статус в интерфейсе"""
@@ -960,66 +1134,67 @@ class ScreenshotTranslatorApp:
         threading.Thread(target=capture_task, daemon=True).start()
 
     def _do_translate(self, image_path: Path):
-        """Выполняет перевод в основном потоке"""
-        import time
-        start_time = time.time()
-        try:
-            out = self.temp_dir / "translated"
-            result = self.translator.translate_image(image_path, out)
-            elapsed = time.time() - start_time
-            self.logger.info(f"⏱️ Перевод выполнен за {elapsed:.2f} секунд")
-            self._on_translate_finished(result, elapsed)
-        except Exception as e:
-            elapsed = time.time() - start_time
-            error_msg = str(e)
-            self.logger.error(f"Ошибка перевода (через {elapsed:.2f}с): {error_msg}")
-            self._on_translate_error(error_msg)
+        """Выполняет перевод в фоновом режиме через BrowserWorker"""
+        out = self.temp_dir / "translated"
+        cmd_id = self.browser_worker.translate_image(
+            image_path,
+            out,
+            callback=self._on_translate_finished
+        )
+        self._pending_command_ids[cmd_id] = 'translate'
+        self._check_results()
 
-    def _do_translate_async(self, image_path: Path):
-        """Выполняет перевод в отдельном потоке"""
-
-        def translate_task():
-            try:
-                out = self.temp_dir / "translated"
-                result = self.translator.translate_image(image_path, out)
-                self.root.after(0, lambda: self._on_translate_finished(result))
-            except Exception as e:
-                self.logger.error(f"Ошибка перевода: {e}")
-                self.root.after(0, lambda: self._on_translate_error(str(e)))
-
-        threading.Thread(target=translate_task, daemon=True).start()
-
-    def _on_translate_finished(self, result, elapsed=None):
+    def _on_translate_finished(self, result, error):
         """Обработчик завершения перевода"""
+        self.logger.info(f"_on_translate_finished вызван: result={result}, error={error}")
         try:
-            if self.translation_overlay:
-                self.translation_overlay.finish()
-                time.sleep(0.3)
-            if result and self.overlay:
-                window_rect = self.screenshot.get_last_window_rect()
-                if window_rect and hasattr(self.overlay, 'show_for_window'):
-                    self.overlay.show_for_window(result, window_rect)
+            if error:
+                self.logger.error(f"Ошибка перевода: {error}")
+                self._on_translate_error(error)
+                return
+            if result:
+                self.logger.info(f"Результат перевода получен: {result}")
+                if isinstance(result, Path) and result.exists():
+                    self.logger.info(f"Файл перевода существует: {result}, размер: {result.stat().st_size} байт")
                 else:
-                    self.overlay.show_fullscreen(result)
-                self.logger.info("Подготовка страницы для следующего перевода...")
-                try:
-                    self.translator._page.goto(self.translator.base_url, wait_until="domcontentloaded", timeout=10000)
-                    self.logger.info("✅ Страница подготовлена для следующего перевода")
-                except Exception as e:
-                    self.logger.warning(f"Не удалось подготовить страницу: {e}")
-                if elapsed is not None:
-                    self.update_status(f"● {self.get_string('ready')} ({elapsed:.1f}с)", '#4CAF50')
+                    self.logger.warning(f"Результат не является файлом или не существует: {result}")
+                if self.translation_overlay:
+                    self.logger.info("Завершаем оверлей прогресса")
+                    self.translation_overlay.finish()
+                    time.sleep(0.3)
+                self.logger.info(f"Попытка показать оверлей с результатом")
+                self.logger.info(f"self.overlay = {self.overlay}")
+                if self.overlay:
+                    window_rect = self.screenshot.get_last_window_rect()
+                    target_hwnd = self.screenshot.get_last_hwnd()
+                    self.logger.info(f"window_rect = {window_rect}, target_hwnd = {target_hwnd}")
+                    if window_rect and hasattr(self.overlay, 'show_for_window'):
+                        self.logger.info(f"Вызов show_for_window с rect={window_rect}, hwnd={target_hwnd}")
+                        self.overlay.show_for_window(result, window_rect, target_hwnd)
+                        self.logger.info("show_for_window выполнен")
+                    else:
+                        self.logger.info("Вызов show_fullscreen")
+                        self.overlay.show_fullscreen(result)
+                        self.logger.info("show_fullscreen выполнен")
+                    self.root.update_idletasks()
+                    self.root.update()
+                    self.logger.info("Результат перевода показан")
                 else:
-                    self.update_status(self.get_string('ready'), '#4CAF50')
+                    self.logger.error("self.overlay is None! Оверлей не создан.")
+                self.update_status(self.get_string('ready'), '#4CAF50')
             else:
+                self.logger.warning("Результат перевода пустой (None)")
                 self.update_status(self.get_string('translate_error'), '#f44336')
         except Exception as e:
             self.logger.error(f"Ошибка показа результата: {e}")
+            import traceback
+            traceback.print_exc()
             self.update_status(self.get_string('error'), '#f44336')
         finally:
             self.translating = False
             self._hide_translation_overlay()
             self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+            self._pending_command_ids = {}
 
     def _on_translate_error(self, error_msg):
         """Обработчик ошибки перевода"""
@@ -1036,7 +1211,7 @@ class ScreenshotTranslatorApp:
         try:
             if self.translation_overlay is None:
                 from src.translation_overlay import TranslationOverlay
-                self.translation_overlay = TranslationOverlay()
+                self.translation_overlay = TranslationOverlay(parent=self.root)
             self.translation_overlay.show(self.get_string('translating'))
         except Exception as e:
             self.logger.warning(f"Не удалось показать оверлей: {e}")
@@ -1048,30 +1223,6 @@ class ScreenshotTranslatorApp:
                 self.translation_overlay.hide()
         except:
             pass
-
-    def toggle_overlay(self):
-        """Переключает видимость оверлея переведенного скриншота"""
-        if self.overlay:
-            self.overlay.toggle()
-            status = self.get_string('shown') if self.overlay.is_visible() else self.get_string('hidden')
-            self.update_status(f"● {self.get_string('overlay')} {status}", '#2196F3')
-
-    def on_close(self):
-        """Обработчик закрытия приложения"""
-        self._hide_translation_overlay()
-        try:
-            keyboard.unblock_key('f1')
-            keyboard.unblock_key('f2')
-            keyboard.unhook_all()
-        except:
-            pass
-        if hasattr(self, 'settings'):
-            self.settings.save()
-        if self.translator:
-            self.translator.close_browser()
-        if self.overlay:
-            self.overlay.close()
-        self.root.destroy()
 
     def run(self):
         """Запускает главный цикл приложения"""

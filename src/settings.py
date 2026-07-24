@@ -21,7 +21,8 @@ class Settings:
         "current_profile": "default",
         "show_browser": True,
         "show_translation_indicator": True,
-        "browser_path": ""
+        "browser_path": "",
+        "auto_hide_overlay": True  # Новая настройка
     }
 
     def __init__(self):
@@ -41,6 +42,15 @@ class Settings:
         self.settings["browser_path"] = path
         self.save()
 
+    def get_auto_hide_overlay(self) -> bool:
+        """Возвращает настройку автоскрытия оверлея"""
+        return self.settings.get("auto_hide_overlay", True)
+
+    def set_auto_hide_overlay(self, enabled: bool):
+        """Устанавливает настройку автоскрытия оверлея"""
+        self.settings["auto_hide_overlay"] = enabled
+        self.save()
+
     def _ensure_config_dir(self):
         """Создает директорию для конфигурации"""
         if not self._config_dir.exists():
@@ -50,13 +60,11 @@ class Settings:
         """Сохраняет настройки в файл"""
         try:
             self._ensure_config_dir()
-
             config_data = {
                 "settings": self.settings,
                 "profiles": self.profiles,
                 "current_profile": self.current_profile
             }
-
             with open(self._config_file, 'w', encoding='utf-8') as f:
                 json.dump(config_data, f, indent=4, ensure_ascii=False, default=str)
             return True
@@ -68,21 +76,16 @@ class Settings:
         """Загружает настройки из файла"""
         try:
             self._ensure_config_dir()
-
             if self._config_file.exists():
                 with open(self._config_file, 'r', encoding='utf-8') as f:
                     loaded = json.load(f)
-
                 if "settings" in loaded:
                     for key, value in loaded["settings"].items():
                         self.settings[key] = value
-
                 if "profiles" in loaded:
                     self.profiles = loaded["profiles"]
-
                 if "current_profile" in loaded:
                     self.current_profile = loaded["current_profile"]
-
                 if not self.profiles:
                     self.profiles = {
                         "default": {
@@ -170,7 +173,6 @@ class Settings:
         """Создает новый профиль"""
         if profile_id in self.profiles:
             return False
-
         self.profiles[profile_id] = {
             "name": name or profile_id,
             "pairs": []

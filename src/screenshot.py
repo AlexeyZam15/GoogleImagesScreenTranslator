@@ -15,6 +15,8 @@ class ScreenshotCapturer:
 
     def __init__(self):
         self.logger = logging.getLogger(__name__)
+        self._last_window_rect = None
+        self._last_hwnd = None
 
     def get_active_window_rect(self) -> Optional[Tuple[int, int, int, int]]:
         """Возвращает координаты активного окна (x1, y1, x2, y2)"""
@@ -29,12 +31,16 @@ class ScreenshotCapturer:
             return None
 
     def capture_active_window(self) -> Optional[Image.Image]:
-        """Захватывает скриншот активного окна"""
+        """Захватывает скриншот активного окна и сохраняет его HWND"""
         try:
             hwnd = win32gui.GetForegroundWindow()
             if not hwnd:
                 self.logger.error("Не удалось получить активное окно")
                 return None
+
+            # Сохраняем HWND для использования в оверлее
+            self._last_hwnd = hwnd
+            self.logger.info(f"Сохранен HWND активного окна: {hwnd}")
 
             rect = win32gui.GetWindowRect(hwnd)
             x1, y1, x2, y2 = rect
@@ -72,7 +78,7 @@ class ScreenshotCapturer:
             win32gui.ReleaseDC(hwnd, hwnd_dc)
             win32gui.DeleteObject(bitmap.GetHandle())
 
-            self.logger.info(f"Скриншот сделан: {width}x{height}")
+            self.logger.info(f"Скриншот сделан: {width}x{height}, HWND={hwnd}")
             return img
 
         except Exception as e:
@@ -84,3 +90,7 @@ class ScreenshotCapturer:
     def get_last_window_rect(self) -> Optional[Tuple[int, int, int, int]]:
         """Возвращает размеры последнего захваченного окна"""
         return getattr(self, '_last_window_rect', None)
+
+    def get_last_hwnd(self) -> Optional[int]:
+        """Возвращает HWND последнего захваченного окна"""
+        return getattr(self, '_last_hwnd', None)
