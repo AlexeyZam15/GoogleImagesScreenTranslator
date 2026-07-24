@@ -147,12 +147,18 @@ class ScreenshotCapturer:
 
             self._last_window_rect = rect
 
-            # Создаем камеру для региона окна
+            # Создаем камеру для региона окна с явным указанием цветового формата
             if self.camera is None:
-                self.camera = dxcam.create(region=(x1, y1, x2, y2))
+                self.camera = dxcam.create(
+                    region=(x1, y1, x2, y2),
+                    output_color="RGB"  # Явно указываем, что хотим RGB формат
+                )
             else:
                 # Обновляем регион
                 self.camera.region = (x1, y1, x2, y2)
+                # Убеждаемся, что цветовой формат правильный
+                if hasattr(self.camera, 'output_color'):
+                    self.camera.output_color = "RGB"
 
             # Захватываем кадр
             frame = self.camera.grab()
@@ -161,9 +167,12 @@ class ScreenshotCapturer:
                 self.logger.warning("DXcam не вернул кадр, пробуем fallback")
                 return self._capture_fullscreen_fallback(hwnd)
 
-            # Конвертируем BGR в RGB и создаем PIL Image
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            img = Image.fromarray(frame_rgb)
+            # DXcam с output_color="RGB" уже возвращает RGB, конвертация не нужна
+            # Но проверяем формат на всякий случай
+            self.logger.info(f"DXcam кадр: shape={frame.shape}, dtype={frame.dtype}")
+
+            # Создаем PIL Image напрямую из массива RGB
+            img = Image.fromarray(frame, 'RGB')
 
             self.logger.info(f"Скриншот через DXcam: {img.width}x{img.height}")
             return img
