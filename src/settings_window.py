@@ -12,18 +12,19 @@ import os
 class SettingsWindow:
     """Окно настроек программы"""
 
-    def __init__(self, parent, settings, on_settings_changed):
-        self.parent = parent
+    def __init__(self, app_instance, settings, on_settings_changed):
+        self.app = app_instance  # Сохраняем ссылку на экземпляр приложения
+        self.parent = app_instance.root  # Родительское окно - главное окно приложения
         self.settings = settings
         self.on_settings_changed = on_settings_changed
 
-        self.window = tk.Toplevel(parent)
+        self.window = tk.Toplevel(self.parent)
         self.window.title(self.get_string('settings_title'))
         self.window.geometry("580x650")
         self.window.minsize(550, 600)
         self.window.resizable(True, True)
         self.window.configure(bg='#1e1e1e')
-        self.window.transient(parent)
+        self.window.transient(self.parent)
         self.window.grab_set()
 
         # Скрываем окно до полной настройки
@@ -266,7 +267,6 @@ class SettingsWindow:
 
     def save_settings(self):
         """Сохраняет настройки"""
-        # Сохраняем путь к браузеру
         browser_path = self.browser_path_var.get().strip()
         if browser_path and not os.path.exists(browser_path):
             messagebox.showerror(
@@ -280,12 +280,18 @@ class SettingsWindow:
         self.settings.set_auto_hide_overlay(self.auto_hide_var.get())
         self.settings.save()
 
-        # Обновляем оверлей если он существует
-        if hasattr(self, 'parent') and hasattr(self.parent, 'overlay') and self.parent.overlay:
-            self.parent.overlay.set_auto_hide(self.auto_hide_var.get())
-        # Пересоздаем горячие клавиши для применения новой логики
-        if hasattr(self, 'parent') and hasattr(self.parent, 'setup_hotkeys'):
-            self.parent.setup_hotkeys()
+        print(f"[DEBUG] Сохранена настройка автоскрытия: {self.auto_hide_var.get()}")
+
+        # Используем self.app вместо self.parent
+        if hasattr(self, 'app') and hasattr(self.app, 'overlay') and self.app.overlay:
+            print(f"[DEBUG] Вызываем overlay.set_auto_hide({self.auto_hide_var.get()})")
+            self.app.overlay.set_auto_hide(self.auto_hide_var.get())
+            print(f"[DEBUG] Обновлен режим автоскрытия оверлея: {self.auto_hide_var.get()}")
+        else:
+            print(f"[DEBUG] app.overlay = {getattr(self.app, 'overlay', None)}")
+
+        if hasattr(self, 'app') and hasattr(self.app, 'setup_hotkeys'):
+            self.app.setup_hotkeys()
 
         messagebox.showinfo(
             self.get_string('settings_title'),

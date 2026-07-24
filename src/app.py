@@ -150,73 +150,100 @@ class ScreenshotTranslatorApp:
             keyboard.unhook_all()
 
             def on_key(event):
+                # Логируем только наши горячие клавиши
                 if event.name == 'f1' and event.event_type == 'down':
+                    self.logger.info("[DEBUG] F1 нажата!")
+
                     # Получаем настройку автоскрытия
                     auto_hide_enabled = self.settings.get_auto_hide_overlay()
+                    self.logger.info(f"[DEBUG] auto_hide_enabled = {auto_hide_enabled}")
 
                     if auto_hide_enabled:
-                        # Если автоскрытие ВКЛЮЧЕНО - работаем как сейчас (только в целевом окне)
+                        self.logger.info("[DEBUG] Автоскрытие ВКЛЮЧЕНО, проверяем активное окно")
                         target_hwnd = self.screenshot.get_last_hwnd()
-                        if target_hwnd is not None:
+                        try:
+                            import win32gui
+                            active_hwnd = win32gui.GetForegroundWindow()
+                            self.logger.info(f"[DEBUG] active_hwnd={active_hwnd}, target_hwnd={target_hwnd}")
+
+                            class_name = ""
+                            window_text = ""
                             try:
-                                import win32gui
-                                active_hwnd = win32gui.GetForegroundWindow()
+                                class_name = win32gui.GetClassName(active_hwnd)
+                                window_text = win32gui.GetWindowText(active_hwnd)
+                                self.logger.info(f"[DEBUG] active window: class='{class_name}', title='{window_text}'")
+                            except:
+                                pass
 
-                                # Проверяем, не является ли активное окно временным окном перетаскивания
+                            is_overlay_active = (class_name == "TkTopLevel" and window_text == "Перевод")
+
+                            overlay_hwnd = None
+                            overlay_exists = False
+                            if self.overlay and hasattr(self.overlay, 'root') and self.overlay.root.winfo_exists():
+                                overlay_exists = True
                                 try:
-                                    class_name = win32gui.GetClassName(active_hwnd)
-                                    window_text = win32gui.GetWindowText(active_hwnd)
-                                    # Если это TkTopLevel с заголовком "Перевод" - это наше временное окно
-                                    if class_name == "TkTopLevel" and window_text == "Перевод":
-                                        self.logger.debug("[DEBUG] F1 перехвачена (временное окно перетаскивания)")
-                                        current_time = time.time() * 1000
-                                        if current_time - self._key_last_time.get('f1', 0) >= self._debounce_ms:
-                                            self._key_last_time['f1'] = current_time
-                                            self.root.after(0, self.toggle_overlay)
-                                        return False
-                                except:
-                                    pass
+                                    overlay_hwnd = int(self.overlay.root.winfo_id())
+                                    self.logger.info(f"[DEBUG] overlay_hwnd={overlay_hwnd}")
+                                except Exception as e:
+                                    self.logger.info(f"[DEBUG] Ошибка получения HWND оверлея: {e}")
 
-                                if active_hwnd == target_hwnd:
+                            if is_overlay_active:
+                                self.logger.info("[DEBUG] F1 перехвачена (активно окно оверлея TkTopLevel)")
+                                if overlay_exists:
                                     current_time = time.time() * 1000
                                     if current_time - self._key_last_time.get('f1', 0) >= self._debounce_ms:
                                         self._key_last_time['f1'] = current_time
                                         self.root.after(0, self.toggle_overlay)
-                                        self.logger.debug("[DEBUG] F1 перехвачена (целевое окно активно)")
-                                    # Подавляем F1 в целевом окне
-                                    return False
-                                else:
-                                    self.logger.debug("[DEBUG] F1 пропущена в систему (не целевое окно)")
-                                    # Не подавляем F1 в других окнах - передаем в систему
-                                    return True
-                            except Exception as e:
-                                self.logger.warning(f"Ошибка проверки активного окна в хуке: {e}")
+                                        self.logger.info("[DEBUG] Вызван toggle_overlay")
+                                return False
+
+                            if overlay_hwnd is not None and active_hwnd == overlay_hwnd:
+                                self.logger.info("[DEBUG] F1 перехвачена (окно оверлея по HWND)")
+                                if overlay_exists:
+                                    current_time = time.time() * 1000
+                                    if current_time - self._key_last_time.get('f1', 0) >= self._debounce_ms:
+                                        self._key_last_time['f1'] = current_time
+                                        self.root.after(0, self.toggle_overlay)
+                                        self.logger.info("[DEBUG] Вызван toggle_overlay")
+                                return False
+
+                            if self.overlay and hasattr(self.overlay, '_is_dragging') and self.overlay._is_dragging:
+                                self.logger.info("[DEBUG] F1 перехвачена (идет перетаскивание оверлея)")
+                                return False
+
+                            if target_hwnd is not None and active_hwnd == target_hwnd:
+                                current_time = time.time() * 1000
+                                if current_time - self._key_last_time.get('f1', 0) >= self._debounce_ms:
+                                    self._key_last_time['f1'] = current_time
+                                    self.root.after(0, self.toggle_overlay)
+                                    self.logger.info("[DEBUG] F1 перехвачена (целевое окно активно)")
+                                return False
+                            else:
+                                self.logger.info("[DEBUG] F1 пропущена в систему (не оверлей и не целевое окно)")
                                 return True
-                        else:
-                            # Нет целевого окна - передаем в систему
+                        except Exception as e:
+                            self.logger.warning(f"Ошибка проверки активного окна в хуке: {e}")
                             return True
                     else:
-                        # Если автоскрытие ВЫКЛЮЧЕНО - перехватываем ВСЕГДА
+                        self.logger.info("[DEBUG] F1 перехвачена (автоскрытие отключено)")
                         current_time = time.time() * 1000
                         if current_time - self._key_last_time.get('f1', 0) >= self._debounce_ms:
                             self._key_last_time['f1'] = current_time
                             self.root.after(0, self.toggle_overlay)
-                            self.logger.debug("[DEBUG] F1 перехвачена (автоскрытие отключено)")
-                        # Подавляем F1 всегда, когда автоскрытие выключено
                         return False
 
                 elif event.name == 'f2' and event.event_type == 'down':
+                    self.logger.info("[DEBUG] F2 нажата!")
                     current_time = time.time() * 1000
                     if current_time - self._key_last_time.get('f2', 0) >= self._debounce_ms:
                         self._key_last_time['f2'] = current_time
                         self.root.after(0, self.process)
-                        self.logger.debug("[DEBUG] F2 перехвачена")
-                    # F2 всегда подавляем (не передаем в систему)
+                        self.logger.info("[DEBUG] F2 перехвачена")
                     return False
-                # Все остальные клавиши передаем в систему
+
+                # Все остальные клавиши передаем в систему без логирования
                 return True
 
-            # Используем suppress=True для возможности подавления клавиш
             keyboard.hook(on_key, suppress=True)
             self.logger.info("Горячие клавиши зарегистрированы (F1 - зависит от автоскрытия, F2 - всегда)")
 
@@ -226,33 +253,77 @@ class ScreenshotTranslatorApp:
 
     def toggle_overlay(self):
         """Переключает видимость оверлея переведенного скриншота"""
-        if self.overlay:
-            target_hwnd = self.screenshot.get_last_hwnd()
+        if not self.overlay:
+            self.logger.warning("toggle_overlay: оверлей не существует")
+            return
 
-            # Если автоскрытие выключено - показываем/скрываем без проверки окна
-            auto_hide_enabled = self.settings.get_auto_hide_overlay()
+        self.logger.info("[DEBUG] toggle_overlay вызван")
 
-            if auto_hide_enabled and target_hwnd is None:
-                self.logger.debug("toggle_overlay: нет сохраненного HWND целевого окна")
-                self.update_status("● Нет активного перевода", '#ff9800')
+        # Получаем настройку автоскрытия
+        auto_hide_enabled = self.settings.get_auto_hide_overlay()
+        self.logger.info(f"[DEBUG] toggle_overlay: auto_hide_enabled={auto_hide_enabled}")
+
+        target_hwnd = self.screenshot.get_last_hwnd()
+
+        # Если нет целевого окна - показываем статус
+        if target_hwnd is None:
+            self.logger.debug("toggle_overlay: нет сохраненного HWND целевого окна")
+            self.update_status("● Нет активного перевода", '#ff9800')
+            return
+
+        # Если автоскрытие выключено - переключаем без проверок
+        if not auto_hide_enabled:
+            self.logger.info("[DEBUG] toggle_overlay: автоскрытие отключено, переключаем без проверок")
+            self.overlay.toggle()
+            status = self.get_string('shown') if self.overlay.is_visible() else self.get_string('hidden')
+            self.update_status(f"● {self.get_string('overlay')} {status}", '#2196F3')
+            return
+
+        # Если автоскрытие включено - проверяем активное окно
+        try:
+            import win32gui
+            active_hwnd = win32gui.GetForegroundWindow()
+            self.logger.info(f"[DEBUG] toggle_overlay: active_hwnd={active_hwnd}, target_hwnd={target_hwnd}")
+
+            # Проверяем, является ли активное окно оверлеем
+            overlay_hwnd = None
+            if self.overlay and hasattr(self.overlay, 'root') and self.overlay.root.winfo_exists():
+                try:
+                    overlay_hwnd = int(self.overlay.root.winfo_id())
+                    self.logger.info(f"[DEBUG] toggle_overlay: overlay_hwnd={overlay_hwnd}")
+                except Exception as e:
+                    self.logger.info(f"[DEBUG] toggle_overlay: ошибка получения HWND оверлея: {e}")
+
+            is_overlay_active = False
+            try:
+                class_name = win32gui.GetClassName(active_hwnd)
+                window_text = win32gui.GetWindowText(active_hwnd)
+                self.logger.info(f"[DEBUG] toggle_overlay: active window: class='{class_name}', title='{window_text}'")
+                if class_name == "TkTopLevel" and window_text == "Перевод":
+                    is_overlay_active = True
+                    self.logger.info("[DEBUG] toggle_overlay: активное окно - это оверлей (TkTopLevel)")
+            except Exception as e:
+                self.logger.info(f"[DEBUG] toggle_overlay: ошибка получения класса окна: {e}")
+
+            if is_overlay_active or (overlay_hwnd is not None and active_hwnd == overlay_hwnd):
+                self.logger.info("[DEBUG] toggle_overlay: активен оверлей, разрешаем переключение")
+                self.overlay.toggle()
+                status = self.get_string('shown') if self.overlay.is_visible() else self.get_string('hidden')
+                self.update_status(f"● {self.get_string('overlay')} {status}", '#2196F3')
                 return
 
-            if auto_hide_enabled:
-                try:
-                    import win32gui
-                    active_hwnd = win32gui.GetForegroundWindow()
-                    if active_hwnd != target_hwnd:
-                        self.logger.debug(
-                            f"toggle_overlay: активное окно ({active_hwnd}) не является целевым ({target_hwnd})")
-                        self.update_status("● F1 работает только в целевом окне", '#ff9800')
-                        return
-                except Exception as e:
-                    self.logger.warning(f"toggle_overlay: ошибка проверки активного окна: {e}")
-                    return
+            if active_hwnd != target_hwnd:
+                self.logger.debug(f"toggle_overlay: активное окно ({active_hwnd}) не является целевым ({target_hwnd})")
+                self.update_status("● F1 работает только в целевом окне", '#ff9800')
+                return
 
             self.overlay.toggle()
             status = self.get_string('shown') if self.overlay.is_visible() else self.get_string('hidden')
             self.update_status(f"● {self.get_string('overlay')} {status}", '#2196F3')
+
+        except Exception as e:
+            self.logger.warning(f"toggle_overlay: ошибка проверки активного окна: {e}")
+            return
 
     def _setup_tkinter_hotkeys(self):
         """Запасной вариант через Tkinter bind_all"""
@@ -916,7 +987,8 @@ class ScreenshotTranslatorApp:
     def open_settings(self):
         """Открывает окно настроек"""
         from src.settings_window import SettingsWindow
-        SettingsWindow(self.root, self.settings, self.on_settings_changed)
+        # Передаем self вместо self.root
+        SettingsWindow(self, self.settings, self.on_settings_changed)
 
     def on_settings_changed(self):
         """Обработчик изменения настроек"""
