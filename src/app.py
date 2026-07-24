@@ -1,5 +1,7 @@
 """
+
 Главный модуль приложения для перевода скриншотов
+
 """
 
 import logging
@@ -18,119 +20,56 @@ from src.translator import GoogleTranslateDebug
 from src.screenshot import ScreenshotCapturer
 from src.overlay import OverlayWindow
 from src.settings import Settings
-from src.strings import STRINGS
+from src.strings import get_strings
 
-LANGUAGES = {
-    "af": "Afrikaans",
-    "sq": "Albanian",
-    "am": "Amharic",
-    "ar": "Arabic",
-    "hy": "Armenian",
-    "az": "Azerbaijani",
-    "eu": "Basque",
-    "be": "Belarusian",
-    "bn": "Bengali",
-    "bs": "Bosnian",
-    "bg": "Bulgarian",
-    "ca": "Catalan",
-    "ceb": "Cebuano",
-    "ny": "Chichewa",
-    "zh-cn": "Chinese (Simplified)",
-    "zh-tw": "Chinese (Traditional)",
-    "co": "Corsican",
-    "hr": "Croatian",
-    "cs": "Czech",
-    "da": "Danish",
-    "nl": "Dutch",
-    "en": "English",
-    "eo": "Esperanto",
-    "et": "Estonian",
-    "tl": "Filipino",
-    "fi": "Finnish",
-    "fr": "French",
-    "fy": "Frisian",
-    "gl": "Galician",
-    "ka": "Georgian",
-    "de": "German",
-    "el": "Greek",
-    "gu": "Gujarati",
-    "ht": "Haitian Creole",
-    "ha": "Hausa",
-    "haw": "Hawaiian",
-    "iw": "Hebrew",
-    "hi": "Hindi",
-    "hmn": "Hmong",
-    "hu": "Hungarian",
-    "is": "Icelandic",
-    "ig": "Igbo",
-    "id": "Indonesian",
-    "ga": "Irish",
-    "it": "Italian",
-    "ja": "Japanese",
-    "jw": "Javanese",
-    "kn": "Kannada",
-    "kk": "Kazakh",
-    "km": "Khmer",
-    "rw": "Kinyarwanda",
-    "ko": "Korean",
-    "ku": "Kurdish (Kurmanji)",
-    "ky": "Kyrgyz",
-    "lo": "Lao",
-    "la": "Latin",
-    "lv": "Latvian",
-    "lt": "Lithuanian",
-    "lb": "Luxembourgish",
-    "mk": "Macedonian",
-    "mg": "Malagasy",
-    "ms": "Malay",
-    "ml": "Malayalam",
-    "mt": "Maltese",
-    "mi": "Maori",
-    "mr": "Marathi",
-    "mn": "Mongolian",
-    "my": "Myanmar (Burmese)",
-    "ne": "Nepali",
-    "no": "Norwegian",
-    "or": "Odia (Oriya)",
-    "ps": "Pashto",
-    "fa": "Persian",
-    "pl": "Polish",
-    "pt": "Portuguese",
-    "pa": "Punjabi",
-    "ro": "Romanian",
-    "ru": "Russian",
-    "sm": "Samoan",
-    "gd": "Scots Gaelic",
-    "sr": "Serbian",
-    "st": "Sesotho",
-    "sn": "Shona",
-    "sd": "Sindhi",
-    "si": "Sinhala",
-    "sk": "Slovak",
-    "sl": "Slovenian",
-    "so": "Somali",
-    "es": "Spanish",
-    "su": "Sundanese",
-    "sw": "Swahili",
-    "sv": "Swedish",
-    "tg": "Tajik",
-    "ta": "Tamil",
-    "tt": "Tatar",
-    "te": "Telugu",
-    "th": "Thai",
-    "tr": "Turkish",
-    "tk": "Turkmen",
-    "uk": "Ukrainian",
-    "ur": "Urdu",
-    "ug": "Uyghur",
-    "uz": "Uzbek",
-    "vi": "Vietnamese",
-    "cy": "Welsh",
-    "xh": "Xhosa",
-    "yi": "Yiddish",
-    "yo": "Yoruba",
-    "zu": "Zulu"
-}
+LANGUAGES = {"af": "Afrikaans", "sq": "Albanian", "am": "Amharic", "ar": "Arabic", "hy": "Armenian",
+             "az": "Azerbaijani", "eu": "Basque", "be": "Belarusian", "bn": "Bengali", "bs": "Bosnian",
+             "bg": "Bulgarian", "ca": "Catalan", "ceb": "Cebuano", "ny": "Chichewa", "zh-cn": "Chinese (Simplified)",
+             "zh-tw": "Chinese (Traditional)", "co": "Corsican", "hr": "Croatian", "cs": "Czech", "da": "Danish",
+             "nl": "Dutch", "en": "English", "eo": "Esperanto", "et": "Estonian", "tl": "Filipino", "fi": "Finnish",
+             "fr": "French", "fy": "Frisian", "gl": "Galician", "ka": "Georgian", "de": "German", "el": "Greek",
+             "gu": "Gujarati", "ht": "Haitian Creole", "ha": "Hausa", "haw": "Hawaiian", "iw": "Hebrew", "hi": "Hindi",
+             "hmn": "Hmong", "hu": "Hungarian", "is": "Icelandic", "ig": "Igbo", "id": "Indonesian", "ga": "Irish",
+             "it": "Italian", "ja": "Japanese", "jw": "Javanese", "kn": "Kannada", "kk": "Kazakh", "km": "Khmer",
+             "rw": "Kinyarwanda", "ko": "Korean", "ku": "Kurdish (Kurmanji)", "ky": "Kyrgyz", "lo": "Lao",
+             "la": "Latin", "lv": "Latvian", "lt": "Lithuanian", "lb": "Luxembourgish", "mk": "Macedonian",
+             "mg": "Malagasy", "ms": "Malay", "ml": "Malayalam", "mt": "Maltese", "mi": "Maori", "mr": "Marathi",
+             "mn": "Mongolian", "my": "Myanmar (Burmese)", "ne": "Nepali", "no": "Norwegian", "or": "Odia (Oriya)",
+             "ps": "Pashto", "fa": "Persian", "pl": "Polish", "pt": "Portuguese", "pa": "Punjabi", "ro": "Romanian",
+             "ru": "Russian", "sm": "Samoan", "gd": "Scots Gaelic", "sr": "Serbian", "st": "Sesotho", "sn": "Shona",
+             "sd": "Sindhi", "si": "Sinhala", "sk": "Slovak", "sl": "Slovenian", "so": "Somali", "es": "Spanish",
+             "su": "Sundanese", "sw": "Swahili", "sv": "Swedish", "tg": "Tajik", "ta": "Tamil", "tt": "Tatar",
+             "te": "Telugu", "th": "Thai", "tr": "Turkish", "tk": "Turkmen", "uk": "Ukrainian", "ur": "Urdu",
+             "ug": "Uyghur", "uz": "Uzbek", "vi": "Vietnamese", "cy": "Welsh", "xh": "Xhosa", "yi": "Yiddish",
+             "yo": "Yoruba", "zu": "Zulu"}
+
+
+def cleanup_old_logs(log_dir, keep_count=5):
+    """
+    Очищает старые логи, оставляя только указанное количество последних
+
+    Args:
+        log_dir: Путь к папке с логами
+        keep_count: Количество последних лог-файлов для сохранения
+    """
+    try:
+        if not log_dir.exists():
+            return
+        log_files = list(log_dir.glob("app_*.log"))
+        log_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+        if len(log_files) > keep_count:
+            files_to_delete = log_files[keep_count:]
+            deleted_count = 0
+            for file_path in files_to_delete:
+                try:
+                    file_path.unlink()
+                    deleted_count += 1
+                except Exception as e:
+                    print(f"Не удалось удалить {file_path.name}: {e}")
+            if deleted_count > 0:
+                print(f"Очистка логов: удалено {deleted_count} старых файлов, оставлено {keep_count}")
+    except Exception as e:
+        print(f"Ошибка при очистке старых логов: {e}")
 
 
 def setup_logging():
@@ -154,6 +93,7 @@ def setup_logging():
         logging.info(f"Запуск GoogleScreenTranslate")
         logging.info(f"Лог файл: {log_file}")
         logging.info("=" * 70)
+        cleanup_old_logs(log_dir, keep_count=5)
         return log_file
     except Exception as e:
         print(f"Ошибка настройки логирования: {e}")
@@ -208,19 +148,16 @@ class ScreenshotTranslatorApp:
             self.logger.info("Запуск инициализации браузера...")
             show_browser = self.settings.get_show_browser()
             target_lang = self.settings.get_target_language()
-
-            # ПЕРЕДАЕМ НАСТРОЙКИ В ПЕРЕВОДЧИК
             self.translator = GoogleTranslateDebug(
                 headless=not show_browser,
                 target_lang=target_lang,
-                settings=self.settings  # <--- ДОБАВЛЯЕМ ПЕРЕДАЧУ НАСТРОЕК
+                settings=self.settings
             )
             self.translator.start_browser()
             self.overlay = OverlayWindow()
             self.ready = True
             self.initializing = False
             self._init_done = True
-
             self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
             self.update_status("● " + self.get_string('ready'), '#4CAF50')
             self.logger.info("✅ Инициализация завершена успешно")
@@ -236,8 +173,6 @@ class ScreenshotTranslatorApp:
         self.logger.error(f"Браузер не найден: {error_msg}")
         self.update_status("● Браузер не найден", '#f44336')
         self.btn_capture.config(state=DISABLED, bg='#333', fg='#888')
-
-        # Показываем диалог с инструкцией
         result = messagebox.askquestion(
             "Браузер не найден",
             "Не удалось найти Яндекс Браузер или Google Chrome.\n\n"
@@ -248,7 +183,6 @@ class ScreenshotTranslatorApp:
             "Хотите указать путь к браузеру вручную?",
             icon='warning'
         )
-
         if result == 'yes':
             self._show_browser_path_dialog()
         else:
@@ -261,10 +195,7 @@ class ScreenshotTranslatorApp:
     def _show_browser_path_dialog(self):
         """Показывает диалог для ручного указания пути к браузеру"""
         import tkinter.filedialog as filedialog
-
         current_path = self.settings.get_browser_path()
-
-        # Создаем простое окно для ввода пути
         dialog = Toplevel(self.root)
         dialog.title("Укажите путь к браузеру")
         dialog.geometry("600x200")
@@ -272,13 +203,10 @@ class ScreenshotTranslatorApp:
         dialog.configure(bg='#1e1e1e')
         dialog.transient(self.root)
         dialog.grab_set()
-
-        # Центрируем окно
         dialog.update_idletasks()
         x = self.root.winfo_x() + (self.root.winfo_width() - 600) // 2
         y = self.root.winfo_y() + (self.root.winfo_height() - 200) // 2
         dialog.geometry(f"+{x}+{y}")
-
         Label(
             dialog,
             text="Укажите полный путь к исполняемому файлу браузера:",
@@ -286,7 +214,6 @@ class ScreenshotTranslatorApp:
             fg='white',
             font=("Arial", 10)
         ).pack(pady=(20, 5))
-
         Label(
             dialog,
             text="Например: C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
@@ -294,10 +221,8 @@ class ScreenshotTranslatorApp:
             fg='#888',
             font=("Arial", 9)
         ).pack(pady=(0, 10))
-
         path_frame = Frame(dialog, bg='#1e1e1e')
         path_frame.pack(fill=X, padx=20, pady=5)
-
         path_var = StringVar(value=current_path)
         path_entry = Entry(
             path_frame,
@@ -329,7 +254,6 @@ class ScreenshotTranslatorApp:
             pady=5
         )
         browse_btn.pack(side=RIGHT)
-
         btn_frame = Frame(dialog, bg='#1e1e1e')
         btn_frame.pack(pady=20)
 
@@ -338,7 +262,6 @@ class ScreenshotTranslatorApp:
             if new_path and os.path.exists(new_path):
                 self.settings.set_browser_path(new_path)
                 dialog.destroy()
-                # Перезапускаем инициализацию с новым путем
                 self.root.after(100, self._retry_init)
             elif new_path:
                 messagebox.showerror("Ошибка", "Указанный файл не существует!")
@@ -355,7 +278,6 @@ class ScreenshotTranslatorApp:
             padx=20,
             pady=8
         ).pack(side=LEFT, padx=5)
-
         Button(
             btn_frame,
             text="Отмена",
@@ -399,21 +321,17 @@ class ScreenshotTranslatorApp:
                 self.translator.close_browser()
                 self.translator = None
                 self.ready = False
-
             show_browser = self.settings.get_show_browser()
             target_lang = self.settings.get_target_language()
             self.logger.info(
                 f"Запуск переводчика с параметрами: headless={not show_browser}, target_lang={target_lang}")
-
-            # ПЕРЕДАЕМ НАСТРОЙКИ В ПЕРЕВОДЧИК
             self.translator = GoogleTranslateDebug(
                 headless=not show_browser,
                 target_lang=target_lang,
-                settings=self.settings  # <--- ДОБАВЛЯЕМ ПЕРЕДАЧУ НАСТРОЕК
+                settings=self.settings
             )
             self.translator.start_browser()
             self.ready = True
-
             self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
             self.update_status("● " + self.get_string('ready'), '#4CAF50')
             self.logger.info("✅ Переводчик перезапущен успешно")
@@ -432,10 +350,8 @@ class ScreenshotTranslatorApp:
                 self.logger.info("Запуск инициализации браузера...")
                 show_browser = self.settings.get_show_browser()
                 target_lang = self.settings.get_target_language()
-
                 translator = GoogleTranslateDebug(headless=not show_browser, target_lang=target_lang)
                 translator.start_browser()
-
                 self.root.after(0, lambda: self._on_init_complete(translator))
             except Exception as e:
                 error_msg = str(e)
@@ -452,7 +368,6 @@ class ScreenshotTranslatorApp:
             self.ready = True
             self.initializing = False
             self._init_done = True
-
             self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
             self.update_status("● " + self.get_string('ready'), '#4CAF50')
             self.logger.info("✅ Инициализация завершена успешно")
@@ -464,7 +379,6 @@ class ScreenshotTranslatorApp:
         """Обработчик ошибки инициализации"""
         self.initializing = False
         self._init_done = True
-
         if "Не найден" in error_msg and ("браузер" in error_msg or "Chrome" in error_msg):
             self._handle_browser_not_found(error_msg)
         else:
@@ -493,15 +407,12 @@ class ScreenshotTranslatorApp:
             target_lang = self.settings.get_target_language()
             self.logger.info(
                 f"Запуск переводчика с параметрами: headless={not show_browser}, target_lang={target_lang}")
-
-            # ПЕРЕДАЕМ НАСТРОЙКИ В ПЕРЕВОДЧИК
             self.translator = GoogleTranslateDebug(
                 headless=not show_browser,
                 target_lang=target_lang,
-                settings=self.settings  # <--- ДОБАВЛЯЕМ ПЕРЕДАЧУ НАСТРОЕК
+                settings=self.settings
             )
             self.translator.start_browser()
-
             self.ready = True
             self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
             self.update_status("● " + self.get_string('ready'), '#4CAF50')
@@ -635,56 +546,61 @@ class ScreenshotTranslatorApp:
             self.show_indicator_check.config(text=self.get_string('show_translation_indicator'))
         if hasattr(self, 'target_lang_label'):
             self.target_lang_label.config(text=self.get_string('target_language'))
-
-        # ОБНОВЛЯЕМ МЕНЮ
         self.update_menu_language()
 
     def update_menu_language(self):
         """Обновляет язык главного меню"""
-        # Удаляем старое меню
         self.root.config(menu=Menu())
-
-        # Создаем новое меню
         menubar = Menu(self.root, bg='#1e1e1e', fg='white')
         self.root.config(menu=menubar)
-
-        # Меню "Файл"
         file_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white')
         menubar.add_cascade(label=self.get_string('menu_file'), menu=file_menu)
+        file_menu.add_command(label=self.get_string('menu_open_folder'), command=self.open_app_folder)
+        file_menu.add_separator()
         file_menu.add_command(label=self.get_string('menu_exit'), command=self.on_close)
-
-        # Меню "Настройки"
         settings_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white')
         menubar.add_cascade(label=self.get_string('menu_settings'), menu=settings_menu)
         settings_menu.add_command(label=self.get_string('menu_settings_item'), command=self.open_settings)
         settings_menu.add_separator()
         settings_menu.add_command(label=self.get_string('menu_reset_settings'), command=self.reset_settings)
-
-        # Меню "Помощь"
         help_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white')
         menubar.add_cascade(label=self.get_string('menu_help'), menu=help_menu)
         help_menu.add_command(label=self.get_string('menu_shortcuts'), command=self.show_shortcuts)
         help_menu.add_command(label=self.get_string('menu_about'), command=self.show_about)
 
+    def open_app_folder(self):
+        """Открывает папку приложения в проводнике"""
+        try:
+            app_folder = Path.home() / "Documents" / "GoogleScreenTranslate"
+            if app_folder.exists():
+                os.startfile(str(app_folder))
+                self.logger.info(f"Открыта папка приложения: {app_folder}")
+            else:
+                app_folder.mkdir(parents=True, exist_ok=True)
+                os.startfile(str(app_folder))
+                self.logger.info(f"Создана и открыта папка приложения: {app_folder}")
+        except Exception as e:
+            self.logger.error(f"Ошибка открытия папки: {e}")
+            messagebox.showerror("Ошибка", f"Не удалось открыть папку:\n{e}")
+
     def create_gui(self):
         """Создает главное окно приложения с адаптивной версткой"""
         self.root = Tk()
         self.root.title(self.get_string('app_title'))
-        self.root.geometry("520x480")
-        self.root.minsize(480, 430)
-        self.root.resizable(True, True)
+        self.root.geometry("520x520")
+        self.root.minsize(520, 520)
+        self.root.maxsize(520, 520)
+        self.root.resizable(False, False)
         self.root.configure(bg='#1e1e1e')
-
-        # СОЗДАЕМ ГЛАВНОЕ МЕНЮ
         self.create_menu()
-
         self.show_browser_var = BooleanVar(value=self.settings.get_show_browser())
         self.target_lang_var = StringVar(value=self.settings.get_target_language())
         self.show_indicator_var = BooleanVar(value=self.settings.get_show_translation_indicator())
         main = Frame(self.root, bg='#1e1e1e')
         main.pack(expand=True, fill=BOTH, padx=25, pady=20)
-        header_frame = Frame(main, bg='#1e1e1e')
+        header_frame = Frame(main, bg='#1e1e1e', height=60)
         header_frame.pack(fill=X, pady=(0, 15))
+        header_frame.pack_propagate(False)
         title_frame = Frame(header_frame, bg='#1e1e1e')
         title_frame.pack(side=LEFT, expand=True, fill=X)
         icon_label = Label(title_frame, text="📸",
@@ -693,12 +609,8 @@ class ScreenshotTranslatorApp:
         self.title_label = Label(title_frame, text=self.get_string('app_title'),
                                  bg='#1e1e1e', fg='#4CAF50', font=("Arial", 15, "bold"))
         self.title_label.pack(side=LEFT)
-
-        # Правая часть хедера - кнопки языка и настроек
         header_right = Frame(header_frame, bg='#1e1e1e')
         header_right.pack(side=RIGHT, padx=(10, 0))
-
-        # Кнопка языка (EN/RU) - БЕЗ ФИКСИРОВАННОЙ ШИРИНЫ
         current_lang = self.settings.get_language()
         lang_text = "EN" if current_lang == "ru" else "RU"
         self.lang_btn = Button(
@@ -709,13 +621,12 @@ class ScreenshotTranslatorApp:
             bg='#3c3c3c',
             fg='#4CAF50',
             relief=FLAT,
-            padx=12,
+            width=4,
+            padx=0,
             pady=6,
             cursor="hand2"
         )
         self.lang_btn.pack(side=RIGHT, padx=(0, 5))
-
-        # Кнопка настроек (шестеренка) - БЕЗ ФИКСИРОВАННОЙ ШИРИНЫ
         self.settings_btn = Button(
             header_right,
             text="⚙️",
@@ -724,7 +635,8 @@ class ScreenshotTranslatorApp:
             bg='#3c3c3c',
             fg='#cccccc',
             relief=FLAT,
-            padx=12,
+            width=4,
+            padx=0,
             pady=6,
             cursor="hand2"
         )
@@ -747,9 +659,8 @@ class ScreenshotTranslatorApp:
 
         self.settings_btn.bind('<Enter>', on_settings_enter)
         self.settings_btn.bind('<Leave>', on_settings_leave)
-
         self.status = Label(main, text="● " + self.get_string('starting'),
-                            fg='#ff9800', bg='#1e1e1e', font=("Arial", 11))
+                            fg='#ff9800', bg='#1e1e1e', font=("Arial", 11), height=1)
         self.status.pack(pady=(5, 10), fill=X)
         lang_select_frame = Frame(main, bg='#1e1e1e')
         lang_select_frame.pack(fill=X, pady=(5, 10))
@@ -758,9 +669,10 @@ class ScreenshotTranslatorApp:
             text=self.get_string('target_language'),
             bg='#1e1e1e',
             fg='#cccccc',
-            font=("Arial", 10)
+            font=("Arial", 10),
+            anchor='w'
         )
-        self.target_lang_label.pack(anchor=W)
+        self.target_lang_label.pack(anchor=W, fill=X)
         lang_combo_frame = Frame(lang_select_frame, bg='#1e1e1e')
         lang_combo_frame.pack(fill=X, pady=(5, 0))
         lang_codes = sorted(LANGUAGES.keys())
@@ -770,7 +682,8 @@ class ScreenshotTranslatorApp:
             textvariable=self.target_lang_var,
             values=self._all_lang_items,
             font=("Arial", 10),
-            state="normal"
+            state="normal",
+            width=45
         )
         self.target_lang_combo.pack(fill=X)
         self.target_lang_combo.bind('<KeyRelease>', self._on_lang_search)
@@ -789,11 +702,11 @@ class ScreenshotTranslatorApp:
             bg='#333',
             fg='#888',
             relief=FLAT,
-            padx=20,
+            height=1,
             pady=12,
             state=DISABLED
         )
-        self.btn_capture.pack(fill=X, pady=(0, 10))
+        self.btn_capture.pack(fill=X, pady=(0, 10), ipady=2)
         self.btn_toggle = Button(
             btn_frame,
             text=self.get_string('btn_toggle'),
@@ -802,10 +715,10 @@ class ScreenshotTranslatorApp:
             bg='#2196F3',
             fg='white',
             relief=FLAT,
-            padx=20,
+            height=1,
             pady=12
         )
-        self.btn_toggle.pack(fill=X)
+        self.btn_toggle.pack(fill=X, ipady=2)
         checkbox_frame = Frame(main, bg='#1e1e1e')
         checkbox_frame.pack(fill=X, pady=(10, 5))
         self.show_indicator_check = Checkbutton(
@@ -818,19 +731,20 @@ class ScreenshotTranslatorApp:
             selectcolor='#1e1e1e',
             font=("Arial", 10),
             activebackground='#1e1e1e',
-            activeforeground='#4CAF50'
+            activeforeground='#4CAF50',
+            anchor='w'
         )
-        self.show_indicator_check.pack(anchor=W, pady=(2, 0))
+        self.show_indicator_check.pack(anchor=W, pady=(2, 0), fill=X)
         self.hotkeys_label = Label(
             main,
             text=self.get_string('hotkeys_info'),
             bg='#1e1e1e',
             fg='#888',
             font=("Arial", 10),
-            wraplength=450
+            wraplength=470,
+            justify='left'
         )
         self.hotkeys_label.pack(pady=(15, 5), fill=X)
-        self.root.bind('<Configure>', self._on_resize)
         self.root.update_idletasks()
         w = self.root.winfo_width()
         h = self.root.winfo_height()
@@ -849,9 +763,7 @@ class ScreenshotTranslatorApp:
 
     def on_settings_changed(self):
         """Обработчик изменения настроек"""
-        # Обновляем язык интерфейса
         self.update_ui_language()
-        # Обновляем статус
         status_text = self.get_string('ready') if self.ready else self.get_string('starting_browser')
         self.update_status("● " + status_text, '#4CAF50' if self.ready else '#ff9800')
         self.logger.info("Настройки применены")
@@ -864,7 +776,6 @@ class ScreenshotTranslatorApp:
             for key, value in Settings.DEFAULT_SETTINGS.items():
                 self.settings.set(key, value)
             self.settings.save()
-            # Обновляем интерфейс
             self.update_ui_language()
             self.target_lang_var.set(self.settings.get_target_language())
             current_display = f"{LANGUAGES.get(self.settings.get_target_language(), 'Russian')} ({self.settings.get_target_language()})"
@@ -929,15 +840,10 @@ class ScreenshotTranslatorApp:
     def _on_resize(self, event):
         """Обработчик изменения размера окна"""
         width = self.root.winfo_width()
-
         if width < 460:
-            # Маленькое окно - уменьшаем все элементы
             self.title_label.config(font=("Arial", 13, "bold"))
-
-            # Уменьшаем кнопки языка и настроек
             self.lang_btn.config(font=("Arial", 10, "bold"), padx=8, pady=4)
             self.settings_btn.config(font=("Arial", 12), padx=8, pady=4)
-
             self.btn_capture.config(font=("Arial", 10), padx=15, pady=10)
             self.btn_toggle.config(font=("Arial", 10), padx=15, pady=10)
             self.status.config(font=("Arial", 10))
@@ -950,13 +856,9 @@ class ScreenshotTranslatorApp:
             if hasattr(self, 'show_indicator_check'):
                 self.show_indicator_check.config(font=("Arial", 9))
         else:
-            # Большое окно - увеличиваем все элементы
             self.title_label.config(font=("Arial", 15, "bold"))
-
-            # Увеличиваем кнопки языка и настроек
             self.lang_btn.config(font=("Arial", 12, "bold"), padx=12, pady=6)
             self.settings_btn.config(font=("Arial", 14), padx=12, pady=6)
-
             self.btn_capture.config(font=("Arial", 11), padx=20, pady=12)
             self.btn_toggle.config(font=("Arial", 11), padx=20, pady=12)
             self.status.config(font=("Arial", 11))
@@ -1093,21 +995,18 @@ class ScreenshotTranslatorApp:
             if self.translation_overlay:
                 self.translation_overlay.finish()
                 time.sleep(0.3)
-
             if result and self.overlay:
                 window_rect = self.screenshot.get_last_window_rect()
                 if window_rect and hasattr(self.overlay, 'show_for_window'):
                     self.overlay.show_for_window(result, window_rect)
                 else:
                     self.overlay.show_fullscreen(result)
-
                 self.logger.info("Подготовка страницы для следующего перевода...")
                 try:
                     self.translator._page.goto(self.translator.base_url, wait_until="domcontentloaded", timeout=10000)
                     self.logger.info("✅ Страница подготовлена для следующего перевода")
                 except Exception as e:
                     self.logger.warning(f"Не удалось подготовить страницу: {e}")
-
                 if elapsed is not None:
                     self.update_status(f"● {self.get_string('ready')} ({elapsed:.1f}с)", '#4CAF50')
                 else:

@@ -114,8 +114,10 @@ class Settings:
 
     def get_string(self, key):
         """Возвращает локализованную строку"""
+        from src.strings import get_strings
         lang = self.get_language()
-        return STRINGS.get(lang, STRINGS['ru']).get(key, key)
+        strings = get_strings(lang)
+        return strings.get(key, key)
 
     def get_show_browser(self):
         """Возвращает настройку показа браузера"""

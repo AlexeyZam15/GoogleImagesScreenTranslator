@@ -109,9 +109,10 @@ class SettingsWindow:
             text=status_text,
             bg='#1e1e1e',
             fg=status_color,
-            font=('Segoe UI', 11, 'bold')
+            font=('Segoe UI', 11, 'bold'),
+            anchor='w'
         )
-        status_label.pack(anchor=tk.W, pady=(0, 10))
+        status_label.pack(anchor=tk.W, pady=(0, 10), fill=tk.X)
 
         # Поле для пути
         path_frame = tk.Frame(browser_frame, bg='#1e1e1e')
@@ -143,19 +144,22 @@ class SettingsWindow:
             relief=tk.FLAT,
             padx=10,
             pady=4,
-            cursor='hand2'
+            cursor='hand2',
+            width=10
         )
         browse_btn.pack(side=tk.RIGHT)
 
-        # Подсказка
+        # Подсказка - ФИКСИРОВАННАЯ ШИРИНА
         tk.Label(
             browser_frame,
             text=self.get_string('settings_browser_path_hint'),
             bg='#1e1e1e',
             fg='#666666',
             font=('Segoe UI', 9),
-            wraplength=400
-        ).pack(anchor=tk.W, pady=(5, 0))
+            wraplength=420,
+            anchor='w',
+            justify='left'
+        ).pack(anchor=tk.W, pady=(5, 0), fill=tk.X)
 
         # --- КНОПКИ ---
         btn_frame = tk.Frame(main, bg='#1e1e1e')
@@ -169,11 +173,11 @@ class SettingsWindow:
             fg='white',
             font=('Segoe UI', 11, 'bold'),
             relief=tk.FLAT,
-            padx=20,
+            height=1,
             pady=10,
             cursor='hand2'
         )
-        save_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 5))
+        save_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 5), ipady=2)
 
         cancel_btn = tk.Button(
             btn_frame,
@@ -183,11 +187,11 @@ class SettingsWindow:
             fg='white',
             font=('Segoe UI', 11),
             relief=tk.FLAT,
-            padx=20,
+            height=1,
             pady=10,
             cursor='hand2'
         )
-        cancel_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(5, 0))
+        cancel_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(5, 0), ipady=2)
 
         # Привязка ESC
         self.window.bind('<Escape>', lambda e: self.window.destroy())
