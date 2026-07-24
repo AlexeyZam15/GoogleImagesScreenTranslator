@@ -44,20 +44,33 @@ class TranslationOverlay:
     def _create_window(self):
         """Создает окно оверлея как Toplevel от главного окна"""
         try:
+            import tkinter as tk
+            print(f"[DEBUG] _create_window() - начат")
+            print(f"[DEBUG] self.parent = {self.parent}")
+
             # Ищем родительское окно
             if not self.parent:
                 # Пытаемся найти главное окно
-                import tkinter as tk
                 root = tk._default_root
                 if root:
                     self.parent = root
+                    print(f"[DEBUG] Найден корневой Tk: {root}")
+                else:
+                    print(f"[DEBUG] Нет корневого Tk, создаем новый Tk")
+                    self.parent = tk.Tk()
 
-            # Создаем Toplevel от родителя или нового Tk если родителя нет
+            # Проверяем, существует ли родитель
             if self.parent:
+                print(f"[DEBUG] Родитель существует: {self.parent}")
+                print(
+                    f"[DEBUG] Родитель видим: {self.parent.winfo_ismapped() if hasattr(self.parent, 'winfo_ismapped') else 'unknown'}")
+                # Создаем Toplevel от родителя
                 self.root = tk.Toplevel(self.parent)
+                print(f"[DEBUG] Toplevel создан от родителя")
             else:
-                # Если нет родителя, создаем Tk (но это не рекомендуется)
+                print(f"[DEBUG] Нет родителя, создаем Tk")
                 self.root = tk.Tk()
+                print(f"[DEBUG] Tk создан")
 
             self.root.title("")
             self.root.overrideredirect(True)
@@ -75,7 +88,13 @@ class TranslationOverlay:
             x = (screen_width - width) // 2
             y = (screen_height - height) // 2
             self.root.geometry(f"{width}x{height}+{x}+{y}")
+
+            # Принудительно показываем окно
+            self.root.deiconify()
             self.root.lift()
+            self.root.focus_force()
+
+            print(f"[DEBUG] Окно настроено: {width}x{height}+{x}+{y}")
 
             main = tk.Frame(self.root, bg='#1e1e1e', bd=2, relief=tk.RAISED)
             main.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
@@ -119,7 +138,13 @@ class TranslationOverlay:
 
             self.root.bind('<Escape>', self._on_escape)
 
-            print(f"[DEBUG] Окно прогресса создано (Toplevel)")
+            # Принудительно обновляем
+            self.root.update_idletasks()
+            self.root.update()
+
+            print(f"[DEBUG] Окно прогресса создано и показано (Toplevel)")
+            print(f"[DEBUG] root.winfo_exists() = {self.root.winfo_exists() if self.root else False}")
+            print(f"[DEBUG] root.winfo_ismapped() = {self.root.winfo_ismapped() if self.root else False}")
 
         except Exception as e:
             print(f"[DEBUG] Ошибка при создании окна: {e}")
