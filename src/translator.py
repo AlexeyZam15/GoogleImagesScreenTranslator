@@ -23,7 +23,7 @@ class GoogleTranslateDebug:
     def __init__(self, headless: bool = True, target_lang: str = "ru", settings=None):
         self.headless = headless
         self.target_lang = target_lang
-        self.settings = settings  # <--- СОХРАНЯЕМ НАСТРОЙКИ
+        self.settings = settings
         self.base_url = f"https://translate.google.com/details?hl=ru&sl=auto&tl={target_lang}&op=images"
         self._pw = None
         self._context = None
@@ -33,8 +33,6 @@ class GoogleTranslateDebug:
     def _find_yandex_browser(self) -> Optional[str]:
         """Ищет Яндекс Браузер через реестр Windows"""
         self.logger.info("Поиск Яндекс Браузера через реестр Windows...")
-
-        # 1. Поиск через App Paths (самый надежный способ)
         try:
             key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
                                  r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\browser.exe", 0, winreg.KEY_READ)
@@ -47,8 +45,6 @@ class GoogleTranslateDebug:
                 winreg.CloseKey(key)
         except WindowsError:
             pass
-
-        # 2. Поиск через установку для текущего пользователя
         try:
             key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Yandex\YandexBrowser", 0, winreg.KEY_READ)
             try:
@@ -61,8 +57,6 @@ class GoogleTranslateDebug:
                 winreg.CloseKey(key)
         except WindowsError:
             pass
-
-        # 3. Поиск через установку для всех пользователей (64-bit)
         try:
             key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Yandex\YandexBrowser", 0,
                                  winreg.KEY_READ)
@@ -76,8 +70,6 @@ class GoogleTranslateDebug:
                 winreg.CloseKey(key)
         except WindowsError:
             pass
-
-        # 4. Поиск через установку для всех пользователей (32-bit)
         try:
             key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Yandex\YandexBrowser", 0, winreg.KEY_READ)
             try:
@@ -90,8 +82,6 @@ class GoogleTranslateDebug:
                 winreg.CloseKey(key)
         except WindowsError:
             pass
-
-        # 5. Поиск через Uninstall реестр (информация об установке)
         try:
             key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall", 0,
                                  winreg.KEY_READ)
@@ -119,15 +109,12 @@ class GoogleTranslateDebug:
             winreg.CloseKey(key)
         except WindowsError:
             pass
-
         self.logger.warning("❌ Яндекс Браузер не найден в реестре")
         return None
 
     def _find_chrome_browser(self) -> Optional[str]:
         """Ищет Google Chrome через реестр Windows"""
         self.logger.info("Поиск Google Chrome через реестр Windows...")
-
-        # 1. Поиск через App Paths
         try:
             key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
                                  r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe", 0, winreg.KEY_READ)
@@ -140,8 +127,6 @@ class GoogleTranslateDebug:
                 winreg.CloseKey(key)
         except WindowsError:
             pass
-
-        # 2. Поиск через Uninstall реестр
         try:
             key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall", 0,
                                  winreg.KEY_READ)
@@ -169,15 +154,12 @@ class GoogleTranslateDebug:
             winreg.CloseKey(key)
         except WindowsError:
             pass
-
         self.logger.warning("❌ Google Chrome не найден в реестре")
         return None
 
     def _find_browser_in_path(self) -> Optional[str]:
         """Ищет браузер в системном PATH"""
         self.logger.info("Поиск браузера в системном PATH...")
-
-        # Проверяем, есть ли Yandex в PATH
         try:
             result = subprocess.run(['where', 'yandex'], capture_output=True, text=True, shell=True)
             if result.returncode == 0:
@@ -188,8 +170,6 @@ class GoogleTranslateDebug:
                         return path
         except:
             pass
-
-        # Проверяем, есть ли Chrome в PATH
         try:
             result = subprocess.run(['where', 'chrome'], capture_output=True, text=True, shell=True)
             if result.returncode == 0:
@@ -200,21 +180,16 @@ class GoogleTranslateDebug:
                         return path
         except:
             pass
-
         return None
 
     def _find_any_browser(self) -> Optional[str]:
         """Ищет любой доступный Chromium-браузер"""
-        # СНАЧАЛА ИЩЕМ ЯНДЕКС БРАУЗЕР
         browser_path = self._find_yandex_browser()
         if browser_path:
-            # СОХРАНЯЕМ НАЙДЕННЫЙ ПУТЬ В НАСТРОЙКИ
             if hasattr(self, 'settings'):
                 self.settings.set_browser_path(browser_path)
                 self.logger.info(f"✅ Путь к браузеру сохранен в настройки: {browser_path}")
             return browser_path
-
-        # ЕСЛИ ЯНДЕКС НЕ НАЙДЕН - ИЩЕМ CHROME
         browser_path = self._find_chrome_browser()
         if browser_path:
             self.logger.info("⚠️ Яндекс Браузер не найден, будет использован Google Chrome")
@@ -222,8 +197,6 @@ class GoogleTranslateDebug:
                 self.settings.set_browser_path(browser_path)
                 self.logger.info(f"✅ Путь к браузеру сохранен в настройки: {browser_path}")
             return browser_path
-
-        # ЕСЛИ CHROME НЕ НАЙДЕН - ИЩЕМ ДРУГИЕ БРАУЗЕРЫ
         chromium_paths = [
             r"C:\Program Files\Chromium\Application\chrome.exe",
             r"C:\Program Files (x86)\Chromium\Application\chrome.exe",
@@ -232,7 +205,6 @@ class GoogleTranslateDebug:
             r"C:\Program Files\Vivaldi\Application\vivaldi.exe",
             r"C:\Program Files (x86)\Vivaldi\Application\vivaldi.exe",
         ]
-
         for path in chromium_paths:
             if os.path.exists(path):
                 self.logger.info(f"✅ Найден Chromium-браузер: {path}")
@@ -240,37 +212,43 @@ class GoogleTranslateDebug:
                     self.settings.set_browser_path(path)
                     self.logger.info(f"✅ Путь к браузеру сохранен в настройки: {path}")
                 return path
-
         self.logger.error("❌ Не найден ни один Chromium-браузер")
         return None
+
+    def update_interface_language(self, lang_code: str):
+        """Обновляет язык интерфейса в URL и перезагружает страницу"""
+        self.logger.info(f"Обновление языка интерфейса на: {lang_code}")
+        hl_param = "ru" if lang_code == "ru" else "en"
+        self.base_url = f"https://translate.google.com/details?hl={hl_param}&sl=auto&tl={self.target_lang}&op=images"
+        if self._page:
+            try:
+                self.logger.info(f"Переход на URL: {self.base_url}")
+                self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=15000)
+                self.logger.info(f"✅ Страница обновлена с языком: {hl_param}")
+            except Exception as e:
+                self.logger.error(f"Ошибка обновления страницы: {e}")
+                raise
+        else:
+            self.logger.warning("Страница не инициализирована, URL обновлен для следующего запуска")
 
     def start_browser(self):
         """Запускает браузер с Playwright"""
         import shutil
         import tempfile
-
         self.logger.info("Запуск Playwright...")
         self._pw = sync_playwright().start()
-
         self.logger.info("Поиск браузера...")
-
-        # Проверяем пользовательский путь
         browser_path = None
         if hasattr(self, 'settings'):
             custom_path = self.settings.get_browser_path()
             if custom_path and os.path.exists(custom_path):
                 browser_path = custom_path
                 self.logger.info(f"✅ Используется пользовательский путь: {browser_path}")
-
-        # Если пользовательский путь не задан или не существует, ищем автоматически
         if not browser_path:
             browser_path = self._find_any_browser()
-
-            # Если найден автоматически, сохраняем путь в настройки для отображения
             if browser_path and hasattr(self, 'settings'):
                 self.settings.set_browser_path(browser_path)
                 self.logger.info(f"✅ Автоматически найденный путь сохранен: {browser_path}")
-
         if not browser_path:
             error_msg = (
                 "Не найден Яндекс Браузер или Google Chrome.\n"
@@ -279,21 +257,17 @@ class GoogleTranslateDebug:
             )
             self.logger.error(error_msg)
             raise Exception(error_msg)
-
         self.logger.info(f"Используется браузер: {browser_path}")
-
         if getattr(sys, 'frozen', False):
             profile_dir = Path(tempfile.gettempdir()) / "google_translate_profile"
         else:
             profile_dir = Path("metadata/google_translate_profile")
-
         if profile_dir.exists():
             try:
                 shutil.rmtree(profile_dir)
                 self.logger.info("✅ Старый профиль удален")
             except Exception as e:
                 self.logger.warning(f"Не удалось удалить профиль: {e}")
-
         try:
             self._context = self._pw.chromium.launch_persistent_context(
                 user_data_dir=str(profile_dir),
@@ -317,12 +291,9 @@ class GoogleTranslateDebug:
                 permissions=["clipboard-read", "clipboard-write"],
                 executable_path=browser_path,
             )
-
             self.logger.info("✅ Браузер запущен")
-
             self.logger.info("Ожидание инициализации браузера (3с)...")
             time.sleep(3)
-
             pages = self._context.pages
             if pages:
                 self.logger.info(f"Закрытие {len(pages)} существующих вкладок...")
@@ -332,10 +303,8 @@ class GoogleTranslateDebug:
                     except Exception as e:
                         self.logger.warning(f"Не удалось закрыть вкладку: {e}")
                 self.logger.info("Все вкладки закрыты")
-
             self._page = self._context.new_page()
             self.logger.info("Создана новая вкладка")
-
             self.logger.info("Открытие Google Translate...")
             try:
                 self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=15000)
@@ -349,7 +318,6 @@ class GoogleTranslateDebug:
                 except Exception as e2:
                     self.logger.error(f"Повторная ошибка при открытии: {e2}")
                     raise
-
         except Exception as e:
             self.logger.error(f"Ошибка запуска браузера: {e}")
             raise
@@ -359,18 +327,14 @@ class GoogleTranslateDebug:
         try:
             if not self._context:
                 return
-
             pages = self._context.pages
             page_count = len(pages)
-
             if page_count == 0:
                 self._page = self._context.new_page()
                 self.logger.info("Создана новая вкладка")
                 return
-
             self._page = pages[0]
             self.logger.info(f"Используем существующую вкладку (всего {page_count})")
-
             if page_count > 1:
                 for i in range(page_count - 1, 0, -1):
                     try:
@@ -378,7 +342,6 @@ class GoogleTranslateDebug:
                     except:
                         pass
                 self.logger.info(f"Закрыты лишние вкладки, осталась 1")
-
         except Exception as e:
             self.logger.warning(f"Ошибка при обнулении вкладок: {e}")
             try:
@@ -394,17 +357,14 @@ class GoogleTranslateDebug:
         """
         import time
         total_start = time.time()
-
         if not self.is_browser_alive():
             self.logger.warning("Браузер закрыт, перезапуск...")
             self.close_browser()
             self.start_browser()
             time.sleep(1)
-
         self.logger.info("=" * 60)
         self.logger.info("🚀 ЗАПУСК ПЕРЕВОДА ИЗОБРАЖЕНИЯ")
         self.logger.info("=" * 60)
-
         try:
             step_start = time.time()
             self.logger.info("Шаг 1: Проверка готовности страницы")
@@ -425,7 +385,6 @@ class GoogleTranslateDebug:
                         self.logger.error(f"Не удалось открыть страницу: {e3}")
                         return None
             self.logger.info(f"  ✓ Шаг 1 выполнен за {time.time() - step_start:.3f}с")
-
             step_start = time.time()
             self.logger.info("Шаг 2: Ожидание загрузки интерфейса")
             if not self._wait_for_upload_zone(timeout=10000):
@@ -434,65 +393,69 @@ class GoogleTranslateDebug:
                     self.logger.error("Интерфейс не загрузился")
                     return None
             self.logger.info(f"  ✓ Шаг 2 выполнен за {time.time() - step_start:.3f}с")
-
             step_start = time.time()
             self.logger.info("Шаг 3: Копирование изображения в буфер обмена")
             if not self._copy_image_to_clipboard(image_path):
                 self.logger.error("Не удалось скопировать изображение")
                 return None
             self.logger.info(f"  ✓ Шаг 3 выполнен за {time.time() - step_start:.3f}с")
-
             step_start = time.time()
             self.logger.info("Шаг 4: Нажатие кнопки 'Вставить из буфера обмена'")
             if not self._find_and_click_paste_button():
                 self.logger.error("Не найдена кнопка вставки")
                 return None
             self.logger.info(f"  ✓ Шаг 4 выполнен за {time.time() - step_start:.3f}с")
-
             step_start = time.time()
             self.logger.info("Шаг 5: Ожидание перевода")
             if not self._wait_for_blob(timeout=20):
                 self.logger.error("Перевод не завершился")
                 return None
             self.logger.info(f"  ✓ Шаг 5 выполнен за {time.time() - step_start:.3f}с")
-
             step_start = time.time()
             self.logger.info("Шаг 6: Скачивание переведенного изображения")
             output_path = output_dir / f"translated_{image_path.stem}.png"
-
             download_button = self._find_download_button()
             if not download_button:
                 self.logger.error("Не найдена видимая кнопка скачивания")
                 return None
-
             download_button.scroll_into_view_if_needed()
-
             if not download_button.is_visible():
                 self.logger.error("Кнопка перестала быть видимой")
                 return None
-
             with self._page.expect_download(timeout=20000) as download_info:
                 download_button.click()
                 self.logger.info("Нажата кнопка скачивания, ожидание загрузки...")
-
             download = download_info.value
             self.logger.info(f"Скачивание перехвачено: {download.suggested_filename}")
-
             output_dir.mkdir(parents=True, exist_ok=True)
             download.save_as(str(output_path))
-
             self.logger.info(f"  ✓ Шаг 6 выполнен за {time.time() - step_start:.3f}с")
-
             if output_path.exists():
                 size = output_path.stat().st_size
                 total_elapsed = time.time() - total_start
                 self.logger.info(f"✅ Изображение сохранено: {output_path} ({size} байт)")
                 self.logger.info(f"⏱️ ОБЩЕЕ ВРЕМЯ ПЕРЕВОДА: {total_elapsed:.3f} секунд")
+                # Перезагружаем страницу для следующего перевода - ВОЗВРАЩАЕМСЯ НА op=images
+                self.logger.info("Шаг 7: Переход на страницу загрузки для следующего перевода...")
+                try:
+                    # Используем self.base_url, который всегда содержит op=images
+                    self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=15000)
+                    self.logger.info(f"✅ Переход на страницу загрузки: {self.base_url}")
+                    if self._wait_for_upload_zone(timeout=5000):
+                        self.logger.info("✅ Интерфейс загружен")
+                    else:
+                        self.logger.warning("Интерфейс не загрузился после перехода")
+                except Exception as e:
+                    self.logger.warning(f"Ошибка при переходе на страницу загрузки: {e}")
+                    try:
+                        self._page.reload()
+                        self.logger.info("✅ Страница перезагружена")
+                    except Exception as e2:
+                        self.logger.warning(f"Не удалось перезагрузить страницу: {e2}")
                 return output_path
             else:
                 self.logger.error("Файл не был сохранен")
                 return None
-
         except Exception as e:
             total_elapsed = time.time() - total_start
             self.logger.error(f"Критическая ошибка (через {total_elapsed:.3f}с): {e}")
@@ -516,7 +479,6 @@ class GoogleTranslateDebug:
                         self.logger.info("Все вкладки закрыты")
                 except Exception as e:
                     self.logger.error(f"Ошибка при закрытии вкладок: {e}")
-
                 try:
                     self._context.close()
                     self.logger.info("Контекст закрыт")
@@ -524,7 +486,6 @@ class GoogleTranslateDebug:
                     self.logger.error(f"Ошибка при закрытии контекста: {e}")
                 self._context = None
                 self._page = None
-
             if self._pw:
                 try:
                     self._pw.stop()
@@ -563,18 +524,14 @@ class GoogleTranslateDebug:
     def _copy_image_to_clipboard(self, image_path: Path) -> bool:
         """Копирует изображение в буфер обмена через Playwright (быстро)"""
         self.logger.info(f"Копирование изображения в буфер обмена: {image_path}")
-
         if not image_path.exists():
             self.logger.error(f"Файл не найден: {image_path}")
             return False
-
         try:
             with open(image_path, 'rb') as f:
                 image_data = f.read()
-
             import base64
             b64_data = base64.b64encode(image_data).decode('utf-8')
-
             js_code = """
                 (b64Data) => {
                     const byteCharacters = atob(b64Data);
@@ -591,16 +548,13 @@ class GoogleTranslateDebug:
                     ]).then(() => true).catch(() => false);
                 }
             """
-
             result = self._page.evaluate(js_code, b64_data)
-
             if result:
                 self.logger.info("✅ Изображение скопировано в буфер обмена")
                 return True
             else:
                 self.logger.error("❌ Не удалось скопировать изображение в буфер обмена")
                 return False
-
         except Exception as e:
             self.logger.error(f"Ошибка при копировании в буфер: {e}")
             return False
@@ -608,7 +562,6 @@ class GoogleTranslateDebug:
     def _find_and_click_paste_button(self) -> bool:
         """Быстро нажимает кнопку 'Вставить из буфера обмена'"""
         self.logger.info("Вставка изображения из буфера обмена...")
-
         try:
             self._page.click('body')
             self._page.keyboard.press("Control+V")
@@ -616,7 +569,6 @@ class GoogleTranslateDebug:
             return True
         except Exception as e:
             self.logger.warning(f"Ctrl+V не сработал: {e}")
-
         try:
             button = self._page.locator('button[aria-label="Вставить изображение из буфера обмена"]')
             if button.count() > 0:
@@ -625,14 +577,12 @@ class GoogleTranslateDebug:
                 return True
         except Exception as e:
             self.logger.debug(f"Не удалось нажать кнопку: {e}")
-
         self.logger.warning("Не удалось вставить изображение")
         return False
 
     def _wait_for_upload_zone(self, timeout: int = 15000) -> bool:
         """Ожидает появления зоны загрузки на вкладке 'Изображения'"""
         self.logger.info("Ожидание загрузки интерфейса...")
-
         selectors = [
             'button[aria-label="Вставить изображение из буфера обмена"]',
             'button:has-text("Вставить из буфера обмена")',
@@ -641,7 +591,6 @@ class GoogleTranslateDebug:
             '.T12pLd',
             'div:has-text("Или выберите файл")',
         ]
-
         start_time = time.time()
         while (time.time() - start_time) * 1000 < timeout:
             for selector in selectors:
@@ -654,7 +603,6 @@ class GoogleTranslateDebug:
                 except Exception:
                     pass
             time.sleep(0.5)
-
         self.logger.warning("Не удалось найти зону загрузки")
         return False
 
@@ -663,9 +611,7 @@ class GoogleTranslateDebug:
         Ожидает появления переведенного изображения (blob).
         """
         self.logger.info(f"Ожидание появления переведенного изображения (таймаут: {timeout}с)...")
-
         start_time = time.time()
-
         while time.time() - start_time < timeout:
             try:
                 all_blobs = self._page.locator('img[src^="blob:"]')
@@ -682,9 +628,7 @@ class GoogleTranslateDebug:
                             return True
             except Exception as e:
                 self.logger.debug(f"Ошибка при поиске blob: {e}")
-
             time.sleep(0.3)
-
         self.logger.warning("Переведенное изображение не появилось")
         return False
 
@@ -693,31 +637,25 @@ class GoogleTranslateDebug:
         Находит видимую кнопку скачивания. Возвращает locator или None.
         """
         self.logger.info("Поиск видимой кнопки скачивания...")
-
         buttons = self._page.locator('button[jsname="hRZeKc"]')
         count = buttons.count()
         self.logger.info(f"Найдено {count} кнопок с jsname='hRZeKc'")
-
         for i in range(count):
             btn = buttons.nth(i)
             is_visible = btn.is_visible()
             aria = btn.get_attribute("aria-label") or ""
             self.logger.info(f"  Кнопка #{i + 1}: visible={is_visible}, aria='{aria}'")
-
             if is_visible:
                 self.logger.info(f"✅ Найдена видимая кнопка #{i + 1}")
                 return btn
-
         self.logger.info("Пробуем поиск по aria-label...")
         buttons = self._page.locator('button[aria-label="Скачать перевод"]')
         count = buttons.count()
-
         for i in range(count):
             btn = buttons.nth(i)
             is_visible = btn.is_visible()
             if is_visible:
                 self.logger.info(f"✅ Найдена видимая кнопка по aria-label #{i + 1}")
                 return btn
-
         self.logger.warning("Не найдена видимая кнопка скачивания")
         return None

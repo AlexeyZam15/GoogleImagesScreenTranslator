@@ -33,7 +33,6 @@ class BrowserWorker:
         """Запускает рабочий поток"""
         if self._running:
             return
-
         self._running = True
         self._thread = threading.Thread(target=self._worker_loop, daemon=True)
         self._thread.start()
@@ -54,27 +53,20 @@ class BrowserWorker:
     def _worker_loop(self):
         """Главный цикл рабочего потока"""
         self.logger.info("Рабочий цикл BrowserWorker запущен")
-
         while self._running:
             try:
-                # Проверяем наличие команд с таймаутом
                 try:
                     command = self._command_queue.get(timeout=0.5)
                 except queue.Empty:
                     continue
-
                 if command is None:
                     break
-
-                # Выполняем команду
                 cmd_type = command.get('type')
                 cmd_id = command.get('id')
                 args = command.get('args', [])
                 kwargs = command.get('kwargs', {})
                 callback = command.get('callback')
-
                 self.logger.info(f"Выполнение команды: {cmd_type} (id={cmd_id})")
-
                 try:
                     result = self._execute_command(cmd_type, *args, **kwargs)
                     self._result_queue.put({
@@ -94,19 +86,15 @@ class BrowserWorker:
                         'error': str(e),
                         'callback': callback
                     })
-
             except Exception as e:
                 self.logger.error(f"Ошибка в рабочем цикле: {e}")
                 time.sleep(0.1)
-
-        # Закрываем браузер при остановке
         if self.translator:
             try:
                 self.translator.close_browser()
             except:
                 pass
             self.translator = None
-
         self.logger.info("Рабочий цикл BrowserWorker завершен")
 
     def _execute_command(self, cmd_type: str, *args, **kwargs):
@@ -121,6 +109,8 @@ class BrowserWorker:
                 return self._restart_browser(*args, **kwargs)
             elif cmd_type == 'update_language':
                 return self._update_language(*args, **kwargs)
+            elif cmd_type == 'update_interface_language':
+                return self._update_interface_language(*args, **kwargs)
             elif cmd_type == 'close':
                 return self._close_browser()
             else:
@@ -133,28 +123,20 @@ class BrowserWorker:
         """Инициализация браузера"""
         self.logger.info("Инициализация браузера...")
         self._initializing = True
-
         try:
-            # Закрываем старый браузер если есть
             if self.translator:
                 self.translator.close_browser()
                 self.translator = None
-
-            # Создаем новый переводчик
             self.translator = GoogleTranslateDebug(
                 headless=not show_browser,
                 target_lang=target_lang,
                 settings=self.settings
             )
-
-            # Запускаем браузер
             self.translator.start_browser()
             self._ready = True
             self._initializing = False
-
             self.logger.info("Браузер инициализирован успешно")
             return {'ready': True}
-
         except Exception as e:
             self._initializing = False
             self._ready = False
@@ -164,22 +146,16 @@ class BrowserWorker:
     def _restart_browser(self, show_browser: bool, target_lang: str):
         """Перезапуск браузера"""
         self.logger.info("Перезапуск браузера...")
-
-        # Закрываем старый браузер
         if self.translator:
             self.translator.close_browser()
             self.translator = None
-
         self._ready = False
-
-        # Создаем новый
         return self._init_browser(show_browser, target_lang)
 
     def _translate_image(self, image_path: Path, output_dir: Path):
         """Перевод изображения"""
         if not self._ready or not self.translator:
             raise RuntimeError("Браузер не готов")
-
         self.logger.info(f"Перевод изображения: {image_path}")
         return self.translator.translate_image(image_path, output_dir)
 
@@ -190,6 +166,14 @@ class BrowserWorker:
             self.logger.info(f"Язык обновлен на: {target_lang}")
         return {'success': True}
 
+    def _update_interface_language(self, lang_code: str):
+        """Обновляет язык интерфейса браузера"""
+        if not self.translator:
+            raise RuntimeError("Браузер не инициализирован")
+        self.logger.info(f"Обновление языка интерфейса на: {lang_code}")
+        self.translator.update_interface_language(lang_code)
+        return {'success': True}
+
     def _close_browser(self):
         """Закрытие браузера"""
         if self.translator:
@@ -197,8 +181,6 @@ class BrowserWorker:
             self.translator = None
         self._ready = False
         return {'success': True}
-
-    # --- Публичные методы для вызова из основного потока ---
 
     def init_browser(self, show_browser: bool, target_lang: str,
                      callback: Optional[Callable] = None) -> int:
@@ -253,6 +235,19 @@ class BrowserWorker:
         })
         return cmd_id
 
+    def update_interface_language(self, lang_code: str,
+                                  callback: Optional[Callable] = None) -> int:
+        """Отправляет команду обновления языка интерфейса"""
+        cmd_id = id(self) + len(self._command_queue.queue)
+        self._command_queue.put({
+            'type': 'update_interface_language',
+            'id': cmd_id,
+            'args': [lang_code],
+            'kwargs': {},
+            'callback': callback
+        })
+        return cmd_id
+
     def close_browser(self, callback: Optional[Callable] = None) -> int:
         """Отправляет команду закрытия браузера"""
         cmd_id = id(self) + len(self._command_queue.queue)
@@ -273,7 +268,6 @@ class BrowserWorker:
                 result = self._result_queue.get_nowait()
                 processed += 1
                 self.logger.info(f"Обработка результата: id={result.get('id')}, success={result.get('success')}")
-
                 callback = result.get('callback')
                 if callback:
                     self.logger.info(f"Вызов колбэка для id={result.get('id')}")
