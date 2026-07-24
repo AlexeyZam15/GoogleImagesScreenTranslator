@@ -4,24 +4,24 @@
 
 import tkinter as tk
 from tkinter import ttk
-import threading
 import time
 
 
 class TranslationOverlay:
-    """Оверлейный индикатор выполнения перевода с независимым циклом событий"""
+    """Оверлейный индикатор выполнения перевода (Toplevel, работает в главном потоке)"""
 
-    def __init__(self):
+    def __init__(self, parent=None):
+        self.parent = parent
         self.root = None
         self.progress = None
         self.status_label = None
         self.visible = False
         self._stop_animation = False
-        self._thread = None
         self._status_text = "Перевод..."
+        self._close_after = None
 
     def show(self, text="Перевод..."):
-        """Показывает оверлей с индикатором в отдельном потоке"""
+        """Показывает оверлей с индикатором"""
         try:
             # Если уже виден, не создаем новый
             if self.visible:
@@ -32,23 +32,41 @@ class TranslationOverlay:
             self._status_text = text
             self.visible = True
 
-            # Запускаем окно в отдельном потоке
-            self._thread = threading.Thread(target=self._run_window, daemon=True)
-            self._thread.start()
+            # Создаем окно в главном потоке
+            self._create_window()
+            print(f"[DEBUG] TranslationOverlay.show() - окно создано")
 
-            print(f"[DEBUG] TranslationOverlay.show() - запущен в отдельном потоке")
         except Exception as e:
             print(f"Ошибка при создании оверлея: {e}")
+            import traceback
+            traceback.print_exc()
 
-    def _run_window(self):
-        """Создает и запускает окно в отдельном потоке"""
+    def _create_window(self):
+        """Создает окно оверлея как Toplevel от главного окна"""
         try:
-            self.root = tk.Tk()
+            # Ищем родительское окно
+            if not self.parent:
+                # Пытаемся найти главное окно
+                import tkinter as tk
+                root = tk._default_root
+                if root:
+                    self.parent = root
+
+            # Создаем Toplevel от родителя или нового Tk если родителя нет
+            if self.parent:
+                self.root = tk.Toplevel(self.parent)
+            else:
+                # Если нет родителя, создаем Tk (но это не рекомендуется)
+                self.root = tk.Tk()
+
             self.root.title("")
             self.root.overrideredirect(True)
             self.root.attributes('-topmost', True)
             self.root.attributes('-alpha', 0.95)
             self.root.configure(bg='#1e1e1e')
+
+            # Обработчик закрытия окна
+            self.root.protocol("WM_DELETE_WINDOW", self.hide)
 
             width = 350
             height = 120
@@ -101,37 +119,36 @@ class TranslationOverlay:
 
             self.root.bind('<Escape>', self._on_escape)
 
-            print(f"[DEBUG] Окно прогресса создано, запускаем mainloop")
+            print(f"[DEBUG] Окно прогресса создано (Toplevel)")
 
-            # Запускаем главный цикл
-            self.root.mainloop()
-
-            print(f"[DEBUG] Окно прогресса закрыто")
         except Exception as e:
-            print(f"Ошибка в окне прогресса: {e}")
+            print(f"[DEBUG] Ошибка при создании окна: {e}")
             import traceback
             traceback.print_exc()
+            self.visible = False
 
     def _update_status_animation(self):
         """Обновляет текст статуса с точками для имитации активности"""
         if not self.visible or self._stop_animation or not self.root:
             return
 
-        # Меняем количество точек для имитации работы
-        dots_count = (int(time.time() * 1.5) % 4)
-        dots = '.' * dots_count
-        spaces = ' ' * (3 - dots_count)
-        status_text = f"Перевод{dots}{spaces}"
-
         try:
-            if self.status_label:
+            # Меняем количество точек для имитации работы
+            dots_count = (int(time.time() * 1.5) % 4)
+            dots = '.' * dots_count
+            spaces = ' ' * (3 - dots_count)
+            status_text = f"Перевод{dots}{spaces}"
+
+            if self.status_label and self.root.winfo_exists():
                 self.status_label.config(text=status_text)
 
             # Планируем следующее обновление
             if self.visible and not self._stop_animation and self.root:
-                self.root.after(300, self._update_status_animation)
+                if self.root.winfo_exists():
+                    self.root.after(300, self._update_status_animation)
+
         except Exception as e:
-            print(f"Ошибка обновления статуса: {e}")
+            print(f"[DEBUG] Ошибка обновления статуса: {e}")
 
     def _on_escape(self, event):
         self.hide()
@@ -141,13 +158,16 @@ class TranslationOverlay:
         """Завершает перевод - останавливает анимацию и закрывает окно"""
         print(f"[DEBUG] Перевод завершен, закрываем окно прогресса")
         self._stop_animation = True
-        self.visible = False
 
-        if self.root:
+        if self.root and self.root.winfo_exists():
             try:
                 self.root.after(0, self._set_finished_ui)
-            except:
-                pass
+            except Exception as e:
+                print(f"[DEBUG] Ошибка при завершении: {e}")
+                self._close_window()
+        else:
+            print("[DEBUG] Нет активного окна для завершения")
+            self.visible = False
 
     def _set_finished_ui(self):
         """Устанавливает UI в состояние 'Готово' и закрывает окно"""
@@ -155,6 +175,12 @@ class TranslationOverlay:
             return
 
         try:
+            # Проверяем, существует ли окно
+            if not self.root.winfo_exists():
+                print("[DEBUG] Окно уже закрыто, пропускаем")
+                self.visible = False
+                return
+
             if self.progress:
                 try:
                     self.progress.stop()
@@ -168,28 +194,38 @@ class TranslationOverlay:
 
             # Обновляем UI перед закрытием
             self.root.update_idletasks()
-            self.root.update()
-
-            # Закрываем окно через 1 секунду
-            self.root.after(1000, self._close_window)
 
             print(f"[DEBUG] Прогресс установлен на 100%")
+
+            # Закрываем окно через 1 секунду
+            if self.root and self.root.winfo_exists():
+                self.root.after(1000, self._close_window)
+
         except Exception as e:
-            print(f"Ошибка установки завершения: {e}")
+            print(f"[DEBUG] Ошибка установки завершения: {e}")
             self._close_window()
 
     def _close_window(self):
-        """Закрывает окно и завершает mainloop"""
+        """Закрывает окно"""
         try:
             self.visible = False
-            if self.root:
-                self.root.quit()
+            self._stop_animation = True
+
+            if self.root and self.root.winfo_exists():
+                print("[DEBUG] Закрытие окна прогресса...")
+                # Просто уничтожаем окно (без quit, так как это Toplevel)
                 self.root.destroy()
-                self.root = None
-                self.progress = None
-                self.status_label = None
-        except:
-            pass
+                print("[DEBUG] Окно прогресса закрыто")
+
+            self.root = None
+            self.progress = None
+            self.status_label = None
+
+        except Exception as e:
+            print(f"[DEBUG] Ошибка при закрытии окна: {e}")
+            self.root = None
+            self.progress = None
+            self.status_label = None
 
     def hide(self):
         """Скрывает оверлей"""

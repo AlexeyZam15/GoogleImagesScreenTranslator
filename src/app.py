@@ -143,6 +143,137 @@ class ScreenshotTranslatorApp:
         # Инициализируем браузер
         self.root.after(100, self._init_translator_step)
 
+    def setup_hotkeys(self):
+        """Настройка глобальных горячих клавиш"""
+        try:
+            # Отключаем все предыдущие хуки
+            keyboard.unhook_all()
+
+            # Блокируем системные клавиши несколькими способами
+            try:
+                # Блокируем через keyboard
+                keyboard.block_key('f1')
+                keyboard.block_key('f2')
+
+                # Дополнительная блокировка через системный вызов (для Windows)
+                # Это более надежный способ блокировки системных клавиш
+                try:
+                    import ctypes
+                    from ctypes import wintypes
+
+                    # Определяем константы для RegisterHotKey
+                    MOD_NOREPEAT = 0x4000
+                    MOD_ALT = 0x0001
+                    MOD_CONTROL = 0x0002
+                    MOD_SHIFT = 0x0004
+                    MOD_WIN = 0x0008
+
+                    # Регистрируем горячие клавиши для блокировки
+                    # Это предотвращает их обработку системой
+                    user32 = ctypes.windll.user32
+
+                    # Отменяем регистрацию, если уже зарегистрированы
+                    user32.UnregisterHotKey(None, 1)
+                    user32.UnregisterHotKey(None, 2)
+
+                    # Регистрируем F1 и F2 как горячие клавиши с модификатором NOREPEAT
+                    # Это перехватывает их на уровне системы
+                    user32.RegisterHotKey(None, 1, MOD_NOREPEAT, 0x70)  # F1 = 0x70
+                    user32.RegisterHotKey(None, 2, MOD_NOREPEAT, 0x71)  # F2 = 0x71
+
+                    self.logger.info("✅ Системные клавиши F1 и F2 заблокированы через RegisterHotKey")
+                except Exception as e:
+                    self.logger.warning(f"Не удалось зарегистрировать системные горячие клавиши: {e}")
+            except Exception as e:
+                self.logger.warning(f"Не удалось заблокировать клавиши: {e}")
+
+            # Используем add_hotkey для более надежной обработки
+            # Это более надежный способ, чем ручной хук
+
+            # Обработчик для F1
+            def on_f1():
+                try:
+                    current_time = time.time() * 1000
+                    if current_time - self._key_last_time.get('f1', 0) >= self._debounce_ms:
+                        self._key_last_time['f1'] = current_time
+                        # Используем root.after для безопасного вызова из любого потока
+                        if hasattr(self, 'root'):
+                            self.root.after(0, self.toggle_overlay)
+                        else:
+                            self.toggle_overlay()
+                        self.logger.debug("[DEBUG] F1 обработана (add_hotkey)")
+                except Exception as e:
+                    self.logger.error(f"Ошибка обработки F1: {e}")
+
+            # Обработчик для F2
+            def on_f2():
+                try:
+                    current_time = time.time() * 1000
+                    if current_time - self._key_last_time.get('f2', 0) >= self._debounce_ms:
+                        self._key_last_time['f2'] = current_time
+                        if hasattr(self, 'root'):
+                            self.root.after(0, self.process)
+                        else:
+                            self.process()
+                        self.logger.debug("[DEBUG] F2 обработана (add_hotkey)")
+                except Exception as e:
+                    self.logger.error(f"Ошибка обработки F2: {e}")
+
+            # Регистрируем горячие клавиши с подавлением системного поведения
+            keyboard.add_hotkey('f1', on_f1, suppress=True)
+            keyboard.add_hotkey('f2', on_f2, suppress=True)
+
+            self.logger.info("Горячие клавиши зарегистрированы через add_hotkey")
+
+            # Оставляем резервный обработчик для надежности (но с более низким приоритетом)
+            def on_key(event):
+                # Обрабатываем только если add_hotkey не сработал
+                if event.name == 'f1' and event.event_type == 'down':
+                    current_time = time.time() * 1000
+                    if current_time - self._key_last_time.get('f1', 0) >= self._debounce_ms:
+                        self._key_last_time['f1'] = current_time
+                        self.root.after(0, self.toggle_overlay)
+                        self.logger.debug("[DEBUG] F1 обработана (fallback hook)")
+                    return False
+                elif event.name == 'f2' and event.event_type == 'down':
+                    current_time = time.time() * 1000
+                    if current_time - self._key_last_time.get('f2', 0) >= self._debounce_ms:
+                        self._key_last_time['f2'] = current_time
+                        self.root.after(0, self.process)
+                        self.logger.debug("[DEBUG] F2 обработана (fallback hook)")
+                    return False
+                return True
+
+            # Регистрируем дополнительный хук как запасной вариант
+            keyboard.hook(on_key, suppress=True)
+
+            # Периодически проверяем, что клавиши заблокированы
+            self._start_key_block_monitor()
+
+            self.logger.info("✅ Горячие клавиши настроены успешно")
+
+        except Exception as e:
+            self.logger.error(f"Ошибка регистрации горячих клавиш: {e}")
+            self._setup_tkinter_hotkeys()
+
+    def _start_key_block_monitor(self):
+        """Запускает периодическую проверку блокировки клавиш"""
+
+        def check_block():
+            try:
+                # Периодически переблокируем клавиши, если они были разблокированы
+                keyboard.block_key('f1')
+                keyboard.block_key('f2')
+            except:
+                pass
+            # Планируем следующую проверку через 5 секунд
+            if hasattr(self, 'root') and self.root:
+                self.root.after(5000, check_block)
+
+        # Запускаем первую проверку через 1 секунду
+        if hasattr(self, 'root') and self.root:
+            self.root.after(1000, check_block)
+
     def _init_translator_step(self):
         """Инициализация переводчика в фоновом режиме"""
         if self._init_done:
@@ -873,53 +1004,6 @@ class ScreenshotTranslatorApp:
         self.settings.set_show_translation_indicator(show)
         self.logger.info(f"Видимость индикатора перевода изменена: {'показывать' if show else 'скрывать'}")
 
-    def setup_hotkeys(self):
-        """Настройка глобальных горячих клавиш"""
-        try:
-            keyboard.unhook_all()
-
-            # Пытаемся заблокировать системные клавиши через keyblock
-            try:
-                # Блокируем F1 и F2 на системном уровне
-                keyboard.block_key('f1')
-                keyboard.block_key('f2')
-            except:
-                pass
-
-            def on_key(event):
-                # Перехватываем F1
-                if event.name == 'f1' and event.event_type == 'down':
-                    # Подавляем событие
-                    if not self._key_states.get('f1', False):
-                        current_time = time.time() * 1000
-                        if current_time - self._key_last_time.get('f1', 0) >= self._debounce_ms:
-                            self._key_states['f1'] = True
-                            self._key_last_time['f1'] = current_time
-                            self.root.after(0, self.toggle_overlay)
-                            self.root.after(100, lambda: self._key_states.__setitem__('f1', False))
-                    return False  # Блокируем дальнейшую обработку события
-
-                # Перехватываем F2
-                if event.name == 'f2' and event.event_type == 'down':
-                    if not self._key_states.get('f2', False):
-                        current_time = time.time() * 1000
-                        if current_time - self._key_last_time.get('f2', 0) >= self._debounce_ms:
-                            self._key_states['f2'] = True
-                            self._key_last_time['f2'] = current_time
-                            self.root.after(0, self.process)
-                            self.root.after(100, lambda: self._key_states.__setitem__('f2', False))
-                    return False  # Блокируем дальнейшую обработку события
-
-                return True
-
-            # Регистрируем хук с подавлением
-            keyboard.hook(on_key, suppress=True)
-            self.logger.info("Горячие клавиши зарегистрированы")
-
-        except Exception as e:
-            self.logger.error(f"Ошибка регистрации горячих клавиш: {e}")
-            self._setup_tkinter_hotkeys()
-
     def _setup_tkinter_hotkeys(self):
         """Запасной вариант через Tkinter bind_all"""
         self.logger.warning("Используется запасной метод горячих клавиш (Tkinter)")
@@ -1062,7 +1146,8 @@ class ScreenshotTranslatorApp:
         try:
             if self.translation_overlay is None:
                 from src.translation_overlay import TranslationOverlay
-                self.translation_overlay = TranslationOverlay()
+                # Передаем главное окно как родителя
+                self.translation_overlay = TranslationOverlay(parent=self.root)
             self.translation_overlay.show(self.get_string('translating'))
         except Exception as e:
             self.logger.warning(f"Не удалось показать оверлей: {e}")
@@ -1072,6 +1157,8 @@ class ScreenshotTranslatorApp:
         try:
             if self.translation_overlay:
                 self.translation_overlay.hide()
+                # После скрытия можно обнулить для пересоздания
+                # self.translation_overlay = None
         except:
             pass
 
