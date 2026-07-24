@@ -130,13 +130,7 @@ class ScreenshotTranslatorApp:
         self.browser_worker = BrowserWorker(self.settings)
         self.browser_worker.start()
         self._pending_command_ids = {}
-
         self.create_gui()
-
-        # Убираем эти строки, так как теперь все в create_gui
-        # self.root.update_idletasks()
-        # self.root.update()
-
         self.update_ui_language()
         self.app_title = self.get_string('app_title')
         self.logger.info(f"Заголовок приложения: {self.app_title}")
@@ -150,14 +144,10 @@ class ScreenshotTranslatorApp:
             keyboard.unhook_all()
 
             def on_key(event):
-                # Логируем только наши горячие клавиши
                 if event.name == 'f1' and event.event_type == 'down':
                     self.logger.info("[DEBUG] F1 нажата!")
-
-                    # Получаем настройку автоскрытия
                     auto_hide_enabled = self.settings.get_auto_hide_overlay()
                     self.logger.info(f"[DEBUG] auto_hide_enabled = {auto_hide_enabled}")
-
                     if auto_hide_enabled:
                         self.logger.info("[DEBUG] Автоскрытие ВКЛЮЧЕНО, проверяем активное окно")
                         target_hwnd = self.screenshot.get_last_hwnd()
@@ -165,7 +155,6 @@ class ScreenshotTranslatorApp:
                             import win32gui
                             active_hwnd = win32gui.GetForegroundWindow()
                             self.logger.info(f"[DEBUG] active_hwnd={active_hwnd}, target_hwnd={target_hwnd}")
-
                             class_name = ""
                             window_text = ""
                             try:
@@ -174,9 +163,7 @@ class ScreenshotTranslatorApp:
                                 self.logger.info(f"[DEBUG] active window: class='{class_name}', title='{window_text}'")
                             except:
                                 pass
-
                             is_overlay_active = (class_name == "TkTopLevel" and window_text == "Перевод")
-
                             overlay_hwnd = None
                             overlay_exists = False
                             if self.overlay and hasattr(self.overlay, 'root') and self.overlay.root.winfo_exists():
@@ -186,7 +173,6 @@ class ScreenshotTranslatorApp:
                                     self.logger.info(f"[DEBUG] overlay_hwnd={overlay_hwnd}")
                                 except Exception as e:
                                     self.logger.info(f"[DEBUG] Ошибка получения HWND оверлея: {e}")
-
                             if is_overlay_active:
                                 self.logger.info("[DEBUG] F1 перехвачена (активно окно оверлея TkTopLevel)")
                                 if overlay_exists:
@@ -196,7 +182,6 @@ class ScreenshotTranslatorApp:
                                         self.root.after(0, self.toggle_overlay)
                                         self.logger.info("[DEBUG] Вызван toggle_overlay")
                                 return False
-
                             if overlay_hwnd is not None and active_hwnd == overlay_hwnd:
                                 self.logger.info("[DEBUG] F1 перехвачена (окно оверлея по HWND)")
                                 if overlay_exists:
@@ -206,11 +191,9 @@ class ScreenshotTranslatorApp:
                                         self.root.after(0, self.toggle_overlay)
                                         self.logger.info("[DEBUG] Вызван toggle_overlay")
                                 return False
-
                             if self.overlay and hasattr(self.overlay, '_is_dragging') and self.overlay._is_dragging:
                                 self.logger.info("[DEBUG] F1 перехвачена (идет перетаскивание оверлея)")
                                 return False
-
                             if target_hwnd is not None and active_hwnd == target_hwnd:
                                 current_time = time.time() * 1000
                                 if current_time - self._key_last_time.get('f1', 0) >= self._debounce_ms:
@@ -231,7 +214,6 @@ class ScreenshotTranslatorApp:
                             self._key_last_time['f1'] = current_time
                             self.root.after(0, self.toggle_overlay)
                         return False
-
                 elif event.name == 'f2' and event.event_type == 'down':
                     self.logger.info("[DEBUG] F2 нажата!")
                     current_time = time.time() * 1000
@@ -240,13 +222,10 @@ class ScreenshotTranslatorApp:
                         self.root.after(0, self.process)
                         self.logger.info("[DEBUG] F2 перехвачена")
                     return False
-
-                # Все остальные клавиши передаем в систему без логирования
                 return True
 
             keyboard.hook(on_key, suppress=True)
             self.logger.info("Горячие клавиши зарегистрированы (F1 - зависит от автоскрытия, F2 - всегда)")
-
         except Exception as e:
             self.logger.error(f"Ошибка регистрации горячих клавиш: {e}")
             self._setup_tkinter_hotkeys()
@@ -256,36 +235,24 @@ class ScreenshotTranslatorApp:
         if not self.overlay:
             self.logger.warning("toggle_overlay: оверлей не существует")
             return
-
         self.logger.info("[DEBUG] toggle_overlay вызван")
-
-        # Получаем настройку автоскрытия
         auto_hide_enabled = self.settings.get_auto_hide_overlay()
         self.logger.info(f"[DEBUG] toggle_overlay: auto_hide_enabled={auto_hide_enabled}")
-
         target_hwnd = self.screenshot.get_last_hwnd()
-
-        # Если нет целевого окна - показываем статус
         if target_hwnd is None:
             self.logger.debug("toggle_overlay: нет сохраненного HWND целевого окна")
             self.update_status("● Нет активного перевода", '#ff9800')
             return
-
-        # Если автоскрытие выключено - переключаем без проверок
         if not auto_hide_enabled:
             self.logger.info("[DEBUG] toggle_overlay: автоскрытие отключено, переключаем без проверок")
             self.overlay.toggle()
             status = self.get_string('shown') if self.overlay.is_visible() else self.get_string('hidden')
             self.update_status(f"● {self.get_string('overlay')} {status}", '#2196F3')
             return
-
-        # Если автоскрытие включено - проверяем активное окно
         try:
             import win32gui
             active_hwnd = win32gui.GetForegroundWindow()
             self.logger.info(f"[DEBUG] toggle_overlay: active_hwnd={active_hwnd}, target_hwnd={target_hwnd}")
-
-            # Проверяем, является ли активное окно оверлеем
             overlay_hwnd = None
             if self.overlay and hasattr(self.overlay, 'root') and self.overlay.root.winfo_exists():
                 try:
@@ -293,7 +260,6 @@ class ScreenshotTranslatorApp:
                     self.logger.info(f"[DEBUG] toggle_overlay: overlay_hwnd={overlay_hwnd}")
                 except Exception as e:
                     self.logger.info(f"[DEBUG] toggle_overlay: ошибка получения HWND оверлея: {e}")
-
             is_overlay_active = False
             try:
                 class_name = win32gui.GetClassName(active_hwnd)
@@ -304,23 +270,19 @@ class ScreenshotTranslatorApp:
                     self.logger.info("[DEBUG] toggle_overlay: активное окно - это оверлей (TkTopLevel)")
             except Exception as e:
                 self.logger.info(f"[DEBUG] toggle_overlay: ошибка получения класса окна: {e}")
-
             if is_overlay_active or (overlay_hwnd is not None and active_hwnd == overlay_hwnd):
                 self.logger.info("[DEBUG] toggle_overlay: активен оверлей, разрешаем переключение")
                 self.overlay.toggle()
                 status = self.get_string('shown') if self.overlay.is_visible() else self.get_string('hidden')
                 self.update_status(f"● {self.get_string('overlay')} {status}", '#2196F3')
                 return
-
             if active_hwnd != target_hwnd:
                 self.logger.debug(f"toggle_overlay: активное окно ({active_hwnd}) не является целевым ({target_hwnd})")
                 self.update_status("● F1 работает только в целевом окне", '#ff9800')
                 return
-
             self.overlay.toggle()
             status = self.get_string('shown') if self.overlay.is_visible() else self.get_string('hidden')
             self.update_status(f"● {self.get_string('overlay')} {status}", '#2196F3')
-
         except Exception as e:
             self.logger.warning(f"toggle_overlay: ошибка проверки активного окна: {e}")
             return
@@ -365,7 +327,6 @@ class ScreenshotTranslatorApp:
 
         def check_handler():
             try:
-                # Просто проверяем, что хук активен - ничего не блокируем
                 pass
             except:
                 pass
@@ -439,7 +400,6 @@ class ScreenshotTranslatorApp:
             if self.overlay is None:
                 self.logger.info("Создание оверлея")
                 from src.overlay import OverlayWindow
-                # Передаем настройку автоскрытия в оверлей
                 auto_hide_enabled = self.settings.get_auto_hide_overlay()
                 self.overlay = OverlayWindow(parent=self.root, app_title=self.app_title,
                                              auto_hide_enabled=auto_hide_enabled)
@@ -731,7 +691,7 @@ class ScreenshotTranslatorApp:
         return self.settings.get_string(key)
 
     def toggle_language(self):
-        """Переключает язык интерфейса"""
+        """Переключает язык интерфейса и обновляет URL браузера"""
         current_lang = self.settings.get_language()
         new_lang = "en" if current_lang == "ru" else "ru"
         self.settings.set_language(new_lang)
@@ -741,6 +701,9 @@ class ScreenshotTranslatorApp:
         status_text = self.get_string('ready') if self.ready else self.get_string('starting_browser')
         self.update_status("● " + status_text, '#4CAF50' if self.ready else '#ff9800')
         self.logger.info(f"Язык переключен на: {new_lang}")
+        if self._init_done and self.ready and self.browser_worker:
+            self.logger.info(f"Обновление URL браузера на язык: {new_lang}")
+            self.browser_worker.update_interface_language(new_lang)
 
     def update_ui_language(self):
         """Обновляет язык интерфейса"""
@@ -798,46 +761,34 @@ class ScreenshotTranslatorApp:
         """Создает главное окно приложения с адаптивной версткой"""
         self.root = Tk()
         self.root.title(self.get_string('app_title'))
-
-        # Скрываем окно до полной настройки
         self.root.withdraw()
-
         self.root.geometry("520x520")
         self.root.minsize(520, 520)
         self.root.maxsize(520, 520)
         self.root.resizable(False, False)
         self.root.configure(bg='#1e1e1e')
-
         self.create_menu()
         self.show_browser_var = BooleanVar(value=self.settings.get_show_browser())
         self.target_lang_var = StringVar(value=self.settings.get_target_language())
         self.show_indicator_var = BooleanVar(value=self.settings.get_show_translation_indicator())
         self.auto_hide_var = BooleanVar(value=self.settings.get_auto_hide_overlay())
-
         main = Frame(self.root, bg='#1e1e1e')
         main.pack(expand=True, fill=BOTH, padx=25, pady=20)
-
         header_frame = Frame(main, bg='#1e1e1e', height=60)
         header_frame.pack(fill=X, pady=(0, 15))
         header_frame.pack_propagate(False)
-
         title_frame = Frame(header_frame, bg='#1e1e1e')
         title_frame.pack(side=LEFT, expand=True, fill=X)
-
         icon_label = Label(title_frame, text="📸",
                            bg='#1e1e1e', fg='white', font=("Arial", 26))
         icon_label.pack(side=LEFT, padx=(0, 10))
-
         self.title_label = Label(title_frame, text=self.get_string('app_title'),
                                  bg='#1e1e1e', fg='#4CAF50', font=("Arial", 15, "bold"))
         self.title_label.pack(side=LEFT)
-
         header_right = Frame(header_frame, bg='#1e1e1e')
         header_right.pack(side=RIGHT, padx=(10, 0))
-
         current_lang = self.settings.get_language()
         lang_text = "EN" if current_lang == "ru" else "RU"
-
         self.lang_btn = Button(
             header_right,
             text=lang_text,
@@ -852,7 +803,6 @@ class ScreenshotTranslatorApp:
             cursor="hand2"
         )
         self.lang_btn.pack(side=RIGHT, padx=(0, 5))
-
         self.settings_btn = Button(
             header_right,
             text="⚙️",
@@ -885,14 +835,11 @@ class ScreenshotTranslatorApp:
 
         self.settings_btn.bind('<Enter>', on_settings_enter)
         self.settings_btn.bind('<Leave>', on_settings_leave)
-
         self.status = Label(main, text="● " + self.get_string('starting'),
                             fg='#ff9800', bg='#1e1e1e', font=("Arial", 11), height=1)
         self.status.pack(pady=(5, 10), fill=X)
-
         lang_select_frame = Frame(main, bg='#1e1e1e')
         lang_select_frame.pack(fill=X, pady=(5, 10))
-
         self.target_lang_label = Label(
             lang_select_frame,
             text=self.get_string('target_language'),
@@ -902,13 +849,10 @@ class ScreenshotTranslatorApp:
             anchor='w'
         )
         self.target_lang_label.pack(anchor=W, fill=X)
-
         lang_combo_frame = Frame(lang_select_frame, bg='#1e1e1e')
         lang_combo_frame.pack(fill=X, pady=(5, 0))
-
         lang_codes = sorted(LANGUAGES.keys())
         self._all_lang_items = [f"{LANGUAGES[code]} ({code})" for code in lang_codes]
-
         self.target_lang_combo = ttk.Combobox(
             lang_combo_frame,
             textvariable=self.target_lang_var,
@@ -921,14 +865,11 @@ class ScreenshotTranslatorApp:
         self.target_lang_combo.bind('<KeyRelease>', self._on_lang_search)
         self.target_lang_combo.bind('<Return>', self._on_lang_enter)
         self.target_lang_combo.bind('<<ComboboxSelected>>', self._on_target_lang_changed)
-
         current_lang_code = self.settings.get_target_language()
         current_display = f"{LANGUAGES.get(current_lang_code, 'Russian')} ({current_lang_code})"
         self.target_lang_combo.set(current_display)
-
         btn_frame = Frame(main, bg='#1e1e1e')
         btn_frame.pack(fill=X, pady=5)
-
         self.btn_capture = Button(
             btn_frame,
             text=self.get_string('btn_capture'),
@@ -942,7 +883,6 @@ class ScreenshotTranslatorApp:
             state=DISABLED
         )
         self.btn_capture.pack(fill=X, pady=(0, 10), ipady=2)
-
         self.btn_toggle = Button(
             btn_frame,
             text=self.get_string('btn_toggle'),
@@ -955,7 +895,6 @@ class ScreenshotTranslatorApp:
             pady=12
         )
         self.btn_toggle.pack(fill=X, ipady=2)
-
         self.hotkeys_label = Label(
             main,
             text=self.get_string('hotkeys_info'),
@@ -966,16 +905,12 @@ class ScreenshotTranslatorApp:
             justify='left'
         )
         self.hotkeys_label.pack(pady=(15, 5), fill=X)
-
-        # Центрируем окно до его отображения
         self.root.update_idletasks()
         w = self.root.winfo_width()
         h = self.root.winfo_height()
         x = (self.root.winfo_screenwidth() - w) // 2
         y = (self.root.winfo_screenheight() - h) // 2
         self.root.geometry(f"{w}x{h}+{x}+{y}")
-
-        # Показываем окно после всех настроек
         self.root.deiconify()
         self.root.lift()
         self.root.focus_force()
@@ -987,7 +922,6 @@ class ScreenshotTranslatorApp:
     def open_settings(self):
         """Открывает окно настроек"""
         from src.settings_window import SettingsWindow
-        # Передаем self вместо self.root
         SettingsWindow(self, self.settings, self.on_settings_changed)
 
     def on_settings_changed(self):
@@ -1011,7 +945,6 @@ class ScreenshotTranslatorApp:
             self.target_lang_combo.set(current_display)
             self.show_indicator_var.set(self.settings.get_show_translation_indicator())
             self.auto_hide_var.set(self.settings.get_auto_hide_overlay())
-            # Обновляем оверлей если он существует
             if self.overlay:
                 self.overlay.set_auto_hide(self.settings.get_auto_hide_overlay())
             messagebox.showinfo(self.get_string('settings_title'), self.get_string('settings_reset_done'))
@@ -1045,13 +978,42 @@ class ScreenshotTranslatorApp:
         self.target_lang_combo['values'] = filtered_items
 
     def _on_lang_enter(self, event):
-        """Обработчик нажатия Enter - выбирает первый подходящий вариант"""
+        """Обработчик нажатия Enter - выбирает язык"""
+        current_text = self.target_lang_var.get().strip()
         current_values = self.target_lang_combo['values']
-        if current_values and len(current_values) > 0:
+        if not current_values or len(current_values) == 0:
+            return "break"
+        if current_text in current_values:
+            self.logger.info(f"Пользователь выбрал язык из списка: {current_text}")
+            self._apply_language(current_text)
+            self.target_lang_combo['values'] = self._all_lang_items
+            return "break"
+        typed_text = current_text.lower()
+        selected = None
+        for item in current_values:
+            if "(" in item and ")" in item:
+                code = item.split("(")[-1].replace(")", "").strip()
+                if code.lower() == typed_text:
+                    selected = item
+                    self.logger.info(f"Найдено совпадение по коду: '{typed_text}' -> '{item}'")
+                    break
+        if not selected:
+            for item in current_values:
+                name_part = item.split("(")[0].strip().lower()
+                if typed_text == name_part or typed_text in name_part:
+                    selected = item
+                    self.logger.info(f"Найдено совпадение по названию: '{typed_text}' -> '{item}'")
+                    break
+        if selected:
+            self.target_lang_combo.set(selected)
+            self._apply_language(selected)
+            self.target_lang_combo['values'] = self._all_lang_items
+        else:
             selected = current_values[0]
             self.target_lang_combo.set(selected)
             self._apply_language(selected)
-            return "break"
+            self.logger.info(f"Не найдено совпадений для '{typed_text}', выбран первый: {selected}")
+        return "break"
 
     def _apply_language(self, selected):
         """Применяет выбранный язык"""
