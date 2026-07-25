@@ -107,8 +107,9 @@ class ScreenshotTranslatorApp:
         setup_logging()
         self.logger = logging.getLogger(__name__)
         self.settings = Settings()
-        self.temp_dir = Path(tempfile.gettempdir()) / "screenshot_translator"
-        self.temp_dir.mkdir(exist_ok=True)
+        # ИСПРАВЛЕНО: используем безопасную временную папку
+        from src.utils import ensure_app_temp_dir
+        self.temp_dir = ensure_app_temp_dir()
         self.overlay = None
         self.screenshot = ScreenshotCapturer()
         self.ready = False
@@ -1122,10 +1123,22 @@ class ScreenshotTranslatorApp:
         self.btn_capture.config(state=DISABLED, bg='#333')
         self.translating = True
 
+        # Сохраняем HWND активного окна ДО того, как оверлей появится
+        try:
+            import win32gui
+            current_hwnd = win32gui.GetForegroundWindow()
+            if current_hwnd:
+                self.screenshot._last_hwnd = current_hwnd
+                # Сохраняем флаг полноэкранности в МОМЕНТ нажатия F2
+                self.screenshot._is_fullscreen = self.screenshot.is_window_fullscreen(current_hwnd)
+                self.logger.info(
+                    f"[DEBUG] Сохранен HWND активного окна для скриншота: {current_hwnd}, полноэкранный: {self.screenshot._is_fullscreen}")
+        except Exception as e:
+            self.logger.warning(f"[DEBUG] Не удалось сохранить HWND активного окна: {e}")
+
         def capture_task():
             """Захват скриншота в отдельном потоке"""
             try:
-                # Сначала захватываем скриншот (до появления оверлея)
                 self.update_status(self.get_string('capturing'), '#ff9800')
                 img = self.screenshot.capture_active_window()
 
@@ -1135,7 +1148,6 @@ class ScreenshotTranslatorApp:
                     self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
                     return
 
-                # После успешного захвата показываем оверлей индикатора перевода
                 self.root.after(0, self._show_translation_overlay)
 
                 path = self.temp_dir / f"scr_{int(time.time())}.png"
@@ -1147,17 +1159,6 @@ class ScreenshotTranslatorApp:
                 self.root.after(0, lambda: self._on_translate_error(str(e)))
 
         threading.Thread(target=capture_task, daemon=True).start()
-
-    def _do_translate(self, image_path: Path):
-        """Выполняет перевод в фоновом режиме через BrowserWorker"""
-        out = self.temp_dir / "translated"
-        cmd_id = self.browser_worker.translate_image(
-            image_path,
-            out,
-            callback=self._on_translate_finished
-        )
-        self._pending_command_ids[cmd_id] = 'translate'
-        self._check_results()
 
     def _on_translate_finished(self, result, error):
         """Обработчик завершения перевода"""
@@ -1175,11 +1176,9 @@ class ScreenshotTranslatorApp:
                 else:
                     self.logger.warning(f"Результат не является файлом или не существует: {result}")
 
-                # СНАЧАЛА ЗАКРЫВАЕМ ОКНО ПРОГРЕССА
                 if self.translation_overlay:
                     self.logger.info("Закрываем окно прогресса ДО показа основного оверлея")
                     self.translation_overlay.finish()
-                    # Даем время на закрытие окна
                     time.sleep(0.3)
                     self.translation_overlay = None
 
@@ -1189,11 +1188,32 @@ class ScreenshotTranslatorApp:
                 if self.overlay:
                     window_rect = self.screenshot.get_last_window_rect()
                     target_hwnd = self.screenshot.get_last_hwnd()
-                    self.logger.info(f"window_rect = {window_rect}, target_hwnd = {target_hwnd}")
+                    is_fullscreen = self.screenshot.is_last_window_fullscreen()
+                    self.logger.info(
+                        f"window_rect = {window_rect}, target_hwnd = {target_hwnd}, is_fullscreen = {is_fullscreen}")
+
+                    # Проверяем, активно ли целевое окно
+                    is_target_active = False
+                    if target_hwnd:
+                        try:
+                            import win32gui
+                            active_hwnd = win32gui.GetForegroundWindow()
+                            is_target_active = (active_hwnd == target_hwnd)
+                            self.logger.info(
+                                f"[DEBUG] Активное окно: {active_hwnd}, целевое: {target_hwnd}, is_target_active={is_target_active}")
+                        except Exception as e:
+                            self.logger.warning(f"[DEBUG] Не удалось проверить активное окно: {e}")
+
                     if window_rect and hasattr(self.overlay, 'show_for_window'):
-                        self.logger.info(f"Вызов show_for_window с rect={window_rect}, hwnd={target_hwnd}")
-                        self.overlay.show_for_window(result, window_rect, target_hwnd)
+                        # Сохраняем результат в оверлей, но показываем ТОЛЬКО если целевое окно активно
+                        self.logger.info(
+                            f"Вызов show_for_window с rect={window_rect}, hwnd={target_hwnd}, is_fullscreen={is_fullscreen}")
+                        self.overlay.show_for_window(result, window_rect, target_hwnd, is_fullscreen,
+                                                     show_immediately=is_target_active)
                         self.logger.info("show_for_window выполнен")
+                        if not is_target_active:
+                            self.logger.info("[DEBUG] Целевое окно не активно, оверлей сохранен но скрыт")
+                            self.update_status(f"● Перевод готов (вернитесь в игру)", '#ff9800')
                     else:
                         self.logger.info("Вызов show_fullscreen")
                         self.overlay.show_fullscreen(result)
@@ -1219,6 +1239,17 @@ class ScreenshotTranslatorApp:
             self._hide_translation_overlay()
             self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
             self._pending_command_ids = {}
+
+    def _do_translate(self, image_path: Path):
+        """Выполняет перевод в фоновом режиме через BrowserWorker"""
+        out = self.temp_dir / "translated"
+        cmd_id = self.browser_worker.translate_image(
+            image_path,
+            out,
+            callback=self._on_translate_finished
+        )
+        self._pending_command_ids[cmd_id] = 'translate'
+        self._check_results()
 
     def _on_translate_error(self, error_msg):
         """Обработчик ошибки перевода"""
