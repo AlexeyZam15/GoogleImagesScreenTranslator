@@ -235,20 +235,25 @@ class GoogleTranslateDebug:
         """Запускает браузер с Playwright"""
         import shutil
         import tempfile
+        from src.utils import get_safe_temp_dir  # ИСПРАВЛЕНО
+
         self.logger.info("Запуск Playwright...")
         self._pw = sync_playwright().start()
         self.logger.info("Поиск браузера...")
+
         browser_path = None
         if hasattr(self, 'settings'):
             custom_path = self.settings.get_browser_path()
             if custom_path and os.path.exists(custom_path):
                 browser_path = custom_path
                 self.logger.info(f"✅ Используется пользовательский путь: {browser_path}")
+
         if not browser_path:
             browser_path = self._find_any_browser()
             if browser_path and hasattr(self, 'settings'):
                 self.settings.set_browser_path(browser_path)
                 self.logger.info(f"✅ Автоматически найденный путь сохранен: {browser_path}")
+
         if not browser_path:
             error_msg = (
                 "Не найден Яндекс Браузер или Google Chrome.\n"
@@ -257,17 +262,23 @@ class GoogleTranslateDebug:
             )
             self.logger.error(error_msg)
             raise Exception(error_msg)
+
         self.logger.info(f"Используется браузер: {browser_path}")
+
+        # ИСПРАВЛЕНО: используем безопасную временную папку
+        safe_temp_dir = get_safe_temp_dir()
         if getattr(sys, 'frozen', False):
-            profile_dir = Path(tempfile.gettempdir()) / "google_translate_profile"
+            profile_dir = safe_temp_dir / "google_translate_profile"
         else:
             profile_dir = Path("metadata/google_translate_profile")
+
         if profile_dir.exists():
             try:
                 shutil.rmtree(profile_dir)
                 self.logger.info("✅ Старый профиль удален")
             except Exception as e:
                 self.logger.warning(f"Не удалось удалить профиль: {e}")
+
         try:
             self._context = self._pw.chromium.launch_persistent_context(
                 user_data_dir=str(profile_dir),
@@ -294,6 +305,7 @@ class GoogleTranslateDebug:
             self.logger.info("✅ Браузер запущен")
             self.logger.info("Ожидание инициализации браузера (3с)...")
             time.sleep(3)
+
             pages = self._context.pages
             if pages:
                 self.logger.info(f"Закрытие {len(pages)} существующих вкладок...")
@@ -303,9 +315,11 @@ class GoogleTranslateDebug:
                     except Exception as e:
                         self.logger.warning(f"Не удалось закрыть вкладку: {e}")
                 self.logger.info("Все вкладки закрыты")
+
             self._page = self._context.new_page()
             self.logger.info("Создана новая вкладка")
             self.logger.info("Открытие Google Translate...")
+
             try:
                 self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=15000)
                 self.logger.info(f"✅ Google Translate открыт: {self.base_url}")

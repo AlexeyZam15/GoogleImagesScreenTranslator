@@ -25,6 +25,63 @@ class ScreenshotCapturer:
         self._is_fullscreen = False
         self.camera = None
 
+    def _find_target_window(self) -> Optional[int]:
+        """Находит целевое окно (не оверлей) через EnumWindows"""
+        import win32gui
+        import win32con
+        import ctypes
+        from ctypes import wintypes
+
+        overlay_hwnd = None
+        # Пытаемся найти HWND оверлея из последнего захвата
+        if self._last_hwnd:
+            overlay_hwnd = self._last_hwnd
+
+        target_hwnd = None
+
+        def enum_callback(hwnd, lparam):
+            nonlocal target_hwnd
+            try:
+                if not win32gui.IsWindowVisible(hwnd):
+                    return True
+                # Пропускаем оверлей
+                if overlay_hwnd and hwnd == overlay_hwnd:
+                    return True
+                # Проверяем, не является ли окно оверлеем
+                try:
+                    class_name = win32gui.GetClassName(hwnd)
+                    window_text = win32gui.GetWindowText(hwnd)
+                    if class_name == "TkTopLevel" and window_text == "Перевод":
+                        return True
+                except:
+                    pass
+                # Пропускаем окна без заголовка и системные окна
+                try:
+                    window_text = win32gui.GetWindowText(hwnd)
+                    if not window_text or len(window_text) == 0:
+                        return True
+                except:
+                    return True
+                # Пропускаем окна с классом "Progman" (рабочий стол)
+                try:
+                    class_name = win32gui.GetClassName(hwnd)
+                    if class_name in ["Progman", "WorkerW", "Shell_TrayWnd", "SysListView32"]:
+                        return True
+                except:
+                    pass
+                # Это потенциальное целевое окно
+                target_hwnd = hwnd
+                return False  # Останавливаем перебор, нашли окно
+            except:
+                return True
+
+        try:
+            win32gui.EnumWindows(enum_callback, None)
+        except:
+            pass
+
+        return target_hwnd
+
     def is_window_fullscreen(self, hwnd: int) -> bool:
         """Проверяет, находится ли окно в полноэкранном режиме"""
         try:
@@ -67,8 +124,28 @@ class ScreenshotCapturer:
                 self.logger.error("Не удалось получить активное окно")
                 return None
 
+            # Проверяем, не является ли активное окно нашим оверлеем
+            import win32con
+            try:
+                class_name = win32gui.GetClassName(hwnd)
+                window_text = win32gui.GetWindowText(hwnd)
+                if class_name == "TkTopLevel" and window_text == "Перевод":
+                    if self._last_hwnd is not None:
+                        self.logger.info(f"Активное окно - оверлей, используем сохраненный HWND: {self._last_hwnd}")
+                        hwnd = self._last_hwnd
+                    else:
+                        target_hwnd = self._find_target_window()
+                        if target_hwnd:
+                            hwnd = target_hwnd
+                            self.logger.info(f"Найдено целевое окно через EnumWindows: {hwnd}")
+                        else:
+                            return None
+            except Exception as e:
+                self.logger.warning(f"Ошибка проверки активного окна: {e}")
+
             self._last_hwnd = hwnd
             self._is_fullscreen = self.is_window_fullscreen(hwnd)
+            self.logger.info(f"Окно {hwnd} определено как {'полноэкранное' if self._is_fullscreen else 'обычное'}")
 
             if self._is_fullscreen:
                 self.logger.info("Обнаружено полноэкранное приложение, используем DXcam")
@@ -82,6 +159,14 @@ class ScreenshotCapturer:
             import traceback
             traceback.print_exc()
             return None
+
+    def is_last_window_fullscreen(self) -> bool:
+        """Возвращает, было ли последнее захваченное окно полноэкранным"""
+        return getattr(self, '_is_fullscreen', False)
+
+    def get_last_hwnd(self) -> Optional[int]:
+        """Возвращает HWND последнего захваченного окна"""
+        return getattr(self, '_last_hwnd', None)
 
     def _capture_standard_window(self, hwnd: int) -> Optional[Image.Image]:
         """Стандартный метод захвата через BitBlt (для обычных окон)"""
@@ -240,9 +325,6 @@ class ScreenshotCapturer:
         """Возвращает размеры последнего захваченного окна"""
         return getattr(self, '_last_window_rect', None)
 
-    def get_last_hwnd(self) -> Optional[int]:
-        """Возвращает HWND последнего захваченного окна"""
-        return getattr(self, '_last_hwnd', None)
 
     def release_camera(self):
         """Освобождает DXcam камеру"""
