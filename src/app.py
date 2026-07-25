@@ -111,7 +111,7 @@ class ScreenshotTranslatorApp:
         # ИСПРАВЛЕНО: используем безопасную временную папку
         from src.utils import ensure_app_temp_dir
         self.temp_dir = ensure_app_temp_dir()
-        self.overlay = None
+        self.overlay_manager = None  # Изменено: вместо self.overlay
         self.screenshot = ScreenshotCapturer()
         self.ready = False
         self.translating = False
@@ -217,6 +217,10 @@ class ScreenshotTranslatorApp:
         import tkinter as tk
         from tkinter import messagebox
 
+        # Устанавливаем флаг захвата ДО создания окна
+        self._capture_mode = True
+        self.logger.info("[DEBUG] _capture_mode установлен в True")
+
         # Загружаем изображение
         img = Image.open(screenshot_path)
         img_width, img_height = img.size
@@ -225,11 +229,14 @@ class ScreenshotTranslatorApp:
         selection_window = tk.Toplevel()
         selection_window.attributes('-fullscreen', True)
         selection_window.attributes('-topmost', True)
-        selection_window.configure(bg='black')
+        selection_window.configure(bg='gray')
         selection_window.focus_force()
 
+        # Сохраняем ссылку на окно
+        self._selection_window = selection_window
+
         # Canvas для отображения
-        canvas = tk.Canvas(selection_window, cursor="cross", bg='black', highlightthickness=0)
+        canvas = tk.Canvas(selection_window, cursor="cross", bg='gray', highlightthickness=0)
         canvas.pack(fill=tk.BOTH, expand=True)
 
         # Масштабируем изображение под экран
@@ -316,6 +323,8 @@ class ScreenshotTranslatorApp:
 
                     # Закрываем окно выделения
                     selection_window.destroy()
+                    self._capture_mode = False
+                    self._selection_window = None
 
                     # Обрабатываем выделенную область
                     self._process_area_selection(orig_x1, orig_y1, orig_x2, orig_y2, screenshot_path)
@@ -328,6 +337,8 @@ class ScreenshotTranslatorApp:
         def on_escape(event):
             self.logger.info("[DEBUG] ESC - отмена выделения")
             selection_window.destroy()
+            self._capture_mode = False
+            self._selection_window = None
             self.translating = False
             self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
             self.root.deiconify()
@@ -340,15 +351,10 @@ class ScreenshotTranslatorApp:
         selection_window.bind("<Escape>", on_escape)
         canvas.bind("<Escape>", on_escape)
 
-        # Устанавливаем флаг для перехвата ESC
-        self._capture_mode = True
-
-        # Сохраняем ссылку на окно для очистки
-        self._selection_window = selection_window
-
         # При закрытии окна через X
         def on_close():
             self._capture_mode = False
+            self._selection_window = None
             self.translating = False
             self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
             self.root.deiconify()
@@ -363,12 +369,10 @@ class ScreenshotTranslatorApp:
         self._capture_mode = False
         self._selection_window = None
 
-        # Сбрасываем старый оверлей полностью
-        if self.overlay:
-            self.logger.info("[DEBUG] _process_area_selection: сбрасываем старый оверлей")
-            self.overlay.reset()
-            # Даем время на сброс
-            time.sleep(0.1)
+        # НЕ СКРЫВАЕМ старые оверлеи - они остаются видимыми
+        # Просто создаем новый оверлей поверх старых
+        self.logger.info(
+            f"[DEBUG] _process_area_selection: текущее количество оверлеев: {len(self.overlay_manager.overlays) if self.overlay_manager else 0}")
 
         # Сохраняем координаты выделенной области для использования при показе оверлея
         self._area_rect = (x1, y1, x2, y2)
@@ -537,83 +541,12 @@ class ScreenshotTranslatorApp:
 
                 if event.name == 'f1' and event.event_type == 'down':
                     self.logger.info("[DEBUG] F1 нажата!")
-                    auto_hide_enabled = self.settings.get_auto_hide_overlay()
-                    self.logger.info(f"[DEBUG] auto_hide_enabled = {auto_hide_enabled}")
-
-                    target_hwnd = self.screenshot.get_last_hwnd()
-                    has_translation = False
-
-                    if target_hwnd and self.overlay:
-                        if hasattr(self.overlay, '_last_image_path') and self.overlay._last_image_path:
-                            if hasattr(self.overlay, '_target_hwnd') and self.overlay._target_hwnd == target_hwnd:
-                                has_translation = True
-                                self.logger.info(f"[DEBUG] Есть перевод для окна {target_hwnd}")
-                            else:
-                                self.logger.info(f"[DEBUG] Нет перевода для окна {target_hwnd}")
-                        else:
-                            self.logger.info("[DEBUG] Нет сохраненного изображения")
-
-                    if not has_translation:
-                        self.logger.info("[DEBUG] F1 пропущена (нет перевода)")
-                        return True
-
-                    if auto_hide_enabled:
-                        try:
-                            import win32gui
-                            active_hwnd = win32gui.GetForegroundWindow()
-                            self.logger.info(f"[DEBUG] active_hwnd={active_hwnd}, target_hwnd={target_hwnd}")
-
-                            class_name = ""
-                            window_text = ""
-                            try:
-                                if active_hwnd:
-                                    class_name = win32gui.GetClassName(active_hwnd)
-                                    window_text = win32gui.GetWindowText(active_hwnd)
-                                    self.logger.info(
-                                        f"[DEBUG] active window: class='{class_name}', title='{window_text}'")
-                            except:
-                                pass
-
-                            overlay_hwnd = None
-                            if self.overlay and hasattr(self.overlay, 'root') and self.overlay.root.winfo_exists():
-                                try:
-                                    overlay_hwnd = int(self.overlay.root.winfo_id())
-                                    self.logger.info(f"[DEBUG] overlay_hwnd={overlay_hwnd}")
-                                except:
-                                    pass
-
-                            is_overlay_active = (class_name == "TkTopLevel" and window_text == "Перевод")
-                            is_overlay_active = is_overlay_active or (
-                                    overlay_hwnd is not None and active_hwnd == overlay_hwnd)
-
-                            if is_overlay_active or (target_hwnd is not None and active_hwnd == target_hwnd):
-                                self.logger.info("[DEBUG] F1: активен оверлей или целевое окно - переключаем")
-                                current_time = time.time() * 1000
-                                if current_time - self._key_last_time.get('f1', 0) >= self._debounce_ms:
-                                    self._key_last_time['f1'] = current_time
-                                    self.root.after(0, self.toggle_overlay)
-                                return False
-                            else:
-                                if self.overlay and self.overlay.visible:
-                                    self.logger.info("[DEBUG] F1: активное окно другое, оверлей виден - скрываем")
-                                    current_time = time.time() * 1000
-                                    if current_time - self._key_last_time.get('f1', 0) >= self._debounce_ms:
-                                        self._key_last_time['f1'] = current_time
-                                        self.root.after(0, self.toggle_overlay)
-                                    return False
-                                else:
-                                    self.logger.info("[DEBUG] F1 пропущена (не оверлей и не целевое окно)")
-                                    return True
-                        except Exception as e:
-                            self.logger.warning(f"Ошибка проверки активного окна: {e}")
-                            return True
-                    else:
-                        self.logger.info("[DEBUG] F1: автоскрытие отключено, переключаем")
-                        current_time = time.time() * 1000
-                        if current_time - self._key_last_time.get('f1', 0) >= self._debounce_ms:
-                            self._key_last_time['f1'] = current_time
-                            self.root.after(0, self.toggle_overlay)
-                        return False
+                    current_time = time.time() * 1000
+                    if current_time - self._key_last_time.get('f1', 0) >= self._debounce_ms:
+                        self._key_last_time['f1'] = current_time
+                        self.root.after(0, self.toggle_overlay)
+                        self.logger.info("[DEBUG] F1 перехвачена")
+                    return False
 
                 elif event.name == 'f2' and event.event_type == 'down':
                     self.logger.info("[DEBUG] F2 нажата!")
@@ -643,106 +576,67 @@ class ScreenshotTranslatorApp:
             self._setup_tkinter_hotkeys()
 
     def toggle_overlay(self):
-        """Переключает видимость оверлея переведенного скриншота"""
-        if not self.overlay:
-            self.logger.warning("toggle_overlay: оверлей не существует")
+        """Переключает видимость всех оверлеев (F1)."""
+        self.logger.info("[DEBUG] toggle_overlay вызван")
+        if not self.overlay_manager:
+            self.logger.warning("toggle_overlay: менеджер оверлеев не инициализирован")
             return
 
-        self.logger.info("[DEBUG] toggle_overlay вызван")
-
-        # Проверяем наличие перевода
-        target_hwnd = self.screenshot.get_last_hwnd()
-        has_translation = False
-
-        if target_hwnd and self.overlay:
-            if hasattr(self.overlay, '_last_image_path') and self.overlay._last_image_path:
-                if hasattr(self.overlay, '_target_hwnd') and self.overlay._target_hwnd == target_hwnd:
-                    has_translation = True
-                    self.logger.info(f"[DEBUG] toggle_overlay: есть перевод для окна {target_hwnd}")
-                else:
-                    self.logger.info(f"[DEBUG] toggle_overlay: нет перевода для окна {target_hwnd}")
-            else:
-                self.logger.info("[DEBUG] toggle_overlay: нет сохраненного изображения")
-
-        # Если нет перевода - не меняем статус, просто выходим
-        if not has_translation:
-            self.logger.info("[DEBUG] toggle_overlay: нет перевода, пропускаем")
+        if not self.overlay_manager.overlays:
+            self.logger.info("toggle_overlay: нет активных оверлеев")
+            self.update_status("● Нет активных оверлеев", '#ff9800')
             return
 
         auto_hide_enabled = self.settings.get_auto_hide_overlay()
         self.logger.info(f"[DEBUG] toggle_overlay: auto_hide_enabled={auto_hide_enabled}")
 
-        if target_hwnd is None:
-            self.logger.debug("toggle_overlay: нет сохраненного HWND целевого окна")
-            self.update_status("● Нет активного перевода", '#ff9800')
-            return
-
-        # Проверяем, является ли целевое окно полноэкранным
-        is_fullscreen_target = False
-        if hasattr(self.overlay, '_is_fullscreen_target'):
-            is_fullscreen_target = self.overlay._is_fullscreen_target
-
-        if not auto_hide_enabled:
-            self.logger.info("[DEBUG] toggle_overlay: автоскрытие отключено, переключаем без проверок")
-            self.overlay.toggle()
-            if is_fullscreen_target and self.overlay.visible:
-                if hasattr(self.overlay, '_restore_fullscreen_window'):
-                    self.overlay._restore_fullscreen_window()
-            status = self.get_string('shown') if self.overlay.is_visible() else self.get_string('hidden')
-            self.update_status(f"● {self.get_string('overlay')} {status}", '#2196F3')
-            return
-
-        try:
-            import win32gui
-            active_hwnd = win32gui.GetForegroundWindow()
-            self.logger.info(f"[DEBUG] toggle_overlay: active_hwnd={active_hwnd}, target_hwnd={target_hwnd}")
-
-            overlay_hwnd = None
-            if self.overlay and hasattr(self.overlay, 'root') and self.overlay.root.winfo_exists():
-                try:
-                    overlay_hwnd = int(self.overlay.root.winfo_id())
-                    self.logger.info(f"[DEBUG] toggle_overlay: overlay_hwnd={overlay_hwnd}")
-                except Exception as e:
-                    self.logger.info(f"[DEBUG] toggle_overlay: ошибка получения HWND оверлея: {e}")
-
-            is_overlay_active = False
+        if auto_hide_enabled:
+            # Проверяем активное окно
             try:
-                class_name = win32gui.GetClassName(active_hwnd)
-                window_text = win32gui.GetWindowText(active_hwnd)
-                self.logger.info(f"[DEBUG] toggle_overlay: active window: class='{class_name}', title='{window_text}'")
-                if class_name == "TkTopLevel" and window_text == "Перевод":
-                    is_overlay_active = True
-                    self.logger.info("[DEBUG] toggle_overlay: активное окно - это оверлей (TkTopLevel)")
+                import win32gui
+                active_hwnd = win32gui.GetForegroundWindow()
+                self.logger.info(f"[DEBUG] toggle_overlay: active_hwnd={active_hwnd}")
+
+                # Проверяем, является ли активное окно целевым ДЛЯ ЛЮБОГО оверлея
+                is_target_active = False
+                target_hwnd_found = None
+                for overlay in self.overlay_manager.overlays:
+                    target_hwnd = overlay.get_target_hwnd()
+                    if target_hwnd is not None and active_hwnd == target_hwnd:
+                        is_target_active = True
+                        target_hwnd_found = target_hwnd
+                        break
+
+                if is_target_active:
+                    self.logger.info(
+                        f"[DEBUG] toggle_overlay: активное окно {active_hwnd} является целевым для оверлея")
+                    # Переключаем ВСЕ оверлеи
+                    new_state = self.overlay_manager.toggle_all_overlays()
+                    status_text = "показаны" if new_state else "скрыты"
+                    self.update_status(f"● Все оверлеи {status_text} (всего: {len(self.overlay_manager.overlays)})",
+                                       '#2196F3' if new_state else '#ff9800')
+                    self.logger.info(f"F1: все оверлеи {status_text}")
+                    return
+                else:
+                    self.logger.info("[DEBUG] toggle_overlay: активное окно не является целевым для любого оверлея")
+                    self.update_status("● F1 работает только в целевом окне", '#ff9800')
+                    return
+
             except Exception as e:
-                self.logger.info(f"[DEBUG] toggle_overlay: ошибка получения класса окна: {e}")
-
-            if is_fullscreen_target:
-                self.logger.info("[DEBUG] toggle_overlay: полноэкранное приложение, разрешаем переключение")
-                self.overlay.toggle()
-                if self.overlay.visible and hasattr(self.overlay, '_restore_fullscreen_window'):
-                    self.overlay._restore_fullscreen_window()
-                status = self.get_string('shown') if self.overlay.is_visible() else self.get_string('hidden')
-                self.update_status(f"● {self.get_string('overlay')} {status}", '#2196F3')
+                self.logger.warning(f"toggle_overlay: ошибка проверки активного окна: {e}")
+                # В случае ошибки все равно переключаем
+                new_state = self.overlay_manager.toggle_all_overlays()
+                status_text = "показаны" if new_state else "скрыты"
+                self.update_status(f"● Все оверлеи {status_text} (всего: {len(self.overlay_manager.overlays)})",
+                                   '#2196F3' if new_state else '#ff9800')
                 return
-
-            if is_overlay_active or (overlay_hwnd is not None and active_hwnd == overlay_hwnd):
-                self.logger.info("[DEBUG] toggle_overlay: активен оверлей, разрешаем переключение")
-                self.overlay.toggle()
-                status = self.get_string('shown') if self.overlay.is_visible() else self.get_string('hidden')
-                self.update_status(f"● {self.get_string('overlay')} {status}", '#2196F3')
-                return
-
-            if active_hwnd != target_hwnd:
-                self.logger.debug(f"toggle_overlay: активное окно ({active_hwnd}) не является целевым ({target_hwnd})")
-                self.update_status("● F1 работает только в целевом окне", '#ff9800')
-                return
-
-            self.overlay.toggle()
-            status = self.get_string('shown') if self.overlay.is_visible() else self.get_string('hidden')
-            self.update_status(f"● {self.get_string('overlay')} {status}", '#2196F3')
-        except Exception as e:
-            self.logger.warning(f"toggle_overlay: ошибка проверки активного окна: {e}")
-            return
+        else:
+            # Автоскрытие отключено - переключаем все оверлеи без проверки
+            new_state = self.overlay_manager.toggle_all_overlays()
+            status_text = "показаны" if new_state else "скрыты"
+            self.update_status(f"● Все оверлеи {status_text} (всего: {len(self.overlay_manager.overlays)})",
+                               '#2196F3' if new_state else '#ff9800')
+            self.logger.info(f"F1: все оверлеи {status_text}")
 
     def _setup_tkinter_hotkeys(self):
         """Запасной вариант через Tkinter bind_all"""
@@ -779,8 +673,8 @@ class ScreenshotTranslatorApp:
             self.settings.save()
         if hasattr(self, 'browser_worker'):
             self.browser_worker.stop()
-        if self.overlay:
-            self.overlay.close()
+        if self.overlay_manager:
+            self.overlay_manager.close_all()
         self.root.destroy()
 
     def _start_key_monitor(self):
@@ -859,18 +753,15 @@ class ScreenshotTranslatorApp:
             self.initializing = False
             self._init_done = True
 
-            if self.overlay is None:
-                self.logger.info("Создание оверлея")
-                from src.overlay import OverlayWindow
-                auto_hide_enabled = self.settings.get_auto_hide_overlay()
-                self.overlay = OverlayWindow(parent=self.root, app_title=self.app_title,
-                                             auto_hide_enabled=auto_hide_enabled)
-                self.logger.info(f"Оверлей создан: {self.overlay}")
+            if self.overlay_manager is None:
+                self.logger.info("Создание OverlayManager")
+                from src.overlay_manager import OverlayManager
+                self.overlay_manager = OverlayManager(self)
+                self.logger.info(f"OverlayManager создан: {self.overlay_manager}")
             else:
-                self.logger.info(f"Оверлей уже существует: {self.overlay}")
+                self.logger.info(f"OverlayManager уже существует: {self.overlay_manager}")
 
             self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
-            # НЕ обновляем статус на "Оверлей скрыт" - просто показываем "Готово"
             self.update_status("● " + self.get_string('ready'), '#4CAF50')
             self.logger.info("UI обновлен: статус 'Готово'")
         self._pending_command_ids = {}
@@ -1599,9 +1490,9 @@ class ScreenshotTranslatorApp:
                     self.translation_overlay = None
 
                 self.logger.info(f"Попытка показать оверлей с результатом")
-                self.logger.info(f"self.overlay = {self.overlay}")
+                self.logger.info(f"self.overlay_manager = {self.overlay_manager}")
 
-                if self.overlay:
+                if self.overlay_manager:
                     window_rect = self.screenshot.get_last_window_rect()
                     target_hwnd = self.screenshot.get_last_hwnd()
                     is_fullscreen = self.screenshot.is_last_window_fullscreen()
@@ -1618,16 +1509,6 @@ class ScreenshotTranslatorApp:
                         area_window_rect = window_rect
                         self.logger.info(f"[DEBUG] Используем стандартный window_rect: {window_rect}")
 
-                    # Принудительно сбрасываем состояние оверлея перед показом нового
-                    # Это гарантирует, что старый оверлей не будет показан монитором
-                    self.overlay.reset()
-
-                    # Устанавливаем новые данные
-                    self.overlay._is_fullscreen_target = is_fullscreen
-                    self.overlay._target_hwnd = target_hwnd
-                    self.overlay._last_image_path = result
-                    self.overlay._last_window_rect = area_window_rect
-
                     # Проверяем, активно ли целевое окно
                     is_target_active = False
                     if target_hwnd:
@@ -1640,24 +1521,26 @@ class ScreenshotTranslatorApp:
                         except Exception as e:
                             self.logger.warning(f"[DEBUG] Не удалось проверить активное окно: {e}")
 
-                    if area_window_rect and hasattr(self.overlay, 'show_for_window'):
-                        self.logger.info(
-                            f"Вызов show_for_window с rect={area_window_rect}, hwnd={target_hwnd}, is_fullscreen={is_fullscreen}")
-                        self.overlay.show_for_window(result, area_window_rect, target_hwnd, is_fullscreen,
-                                                     show_immediately=is_target_active)
-                        self.logger.info("show_for_window выполнен")
-                        if not is_target_active:
-                            self.logger.info("[DEBUG] Целевое окно не активно, оверлей сохранен но скрыт")
-                            self.update_status(f"● Перевод готов (вернитесь в игру)", '#ff9800')
+                    # --- СОЗДАЕМ НОВЫЙ ОВЕРЛЕЙ ЧЕРЕЗ МЕНЕДЖЕР ---
+                    self.overlay_manager.create_overlay(
+                        image_path=result,
+                        window_rect=area_window_rect,
+                        target_hwnd=target_hwnd,
+                        is_fullscreen=is_fullscreen,
+                        show_immediately=is_target_active
+                    )
+                    self.logger.info("create_overlay выполнен")
+                    if not is_target_active:
+                        self.logger.info("[DEBUG] Целевое окно не активно, оверлей сохранен но скрыт")
+                        self.update_status(f"● Перевод готов (вернитесь в игру)", '#ff9800')
                     else:
-                        self.logger.info("Вызов show_fullscreen")
-                        self.overlay.show_fullscreen(result)
-                        self.logger.info("show_fullscreen выполнен")
+                        self.logger.info("[DEBUG] Целевое окно активно, оверлей показан")
+
                     self.root.update_idletasks()
                     self.root.update()
                     self.logger.info("Результат перевода показан")
                 else:
-                    self.logger.error("self.overlay is None! Оверлей не создан.")
+                    self.logger.error("self.overlay_manager is None! Менеджер не создан.")
 
                 self.update_status(self.get_string('ready'), '#4CAF50')
             else:
