@@ -1,3 +1,6 @@
+**Файл: README.en.md**
+
+```markdown
 <div align="center">
 
 # 📸 Google Screen Translate
@@ -35,10 +38,12 @@ Thank you for your support! ❤️
 
 ## Features
 
-📸 **Screenshot active window** — capture and translate any window on the screen  
+📸 **Window screenshot** — capture and translate the active window (F2)  
+🖥️ **Area selection** — choose any area on the screen (F3)  
 🌍 **Translation via Google Translate** — using the "Images" tab  
 🖼️ **Overlay with result** — display translated image over the original  
 📋 **Hotkeys** — mouse-free control  
+🗑️ **Clear all overlays** — quickly remove all translations from the screen (F4)  
 🌐 **Multiple languages** — support for 100+ languages  
 ⚙️ **Configurable browser** — browser selection, manual path  
 🔒 **Security** — minimal permissions, no external requests
@@ -51,26 +56,39 @@ Thank you for your support! ❤️
 
 | Action | Hotkey |
 |--------|--------|
-| Take screenshot and translate | `F2` |
+| Window screenshot and translate | `F2` |
+| Select area on screen | `F3` |
 | Show/hide overlay | `F1` |
-| Close overlay | `ESC` |
+| Clear all overlays | `F4` |
+| Close overlay (ESC) | `ESC` |
+
+### Features Overview
+
+- **F2 (window screenshot)** — takes a screenshot of the active window, removes all old overlays, and shows the translation result
+- **F3 (area selection)** — takes a screenshot of the entire screen, allows you to select any area with the mouse (old overlays remain visible)
+- **F4 (clear all)** — instantly removes all overlays from the screen
+- **ESC** — hides all overlays (works globally)
 
 ### Main Steps
 
 1. **Launch the program** — the main window will open
-2. **Activate the target window** — switch to the window you want to translate
-3. **Press `F2`** — the program will take a screenshot and translate it
-4. **View the result** — the translated image will appear over the original window
-5. **Press `ESC`** — to close the overlay
+2. **Choose capture method:**
+   - Press `F2` to translate the active window
+   - Press `F3` to select an area on the screen
+3. **View the result** — the translated image will appear over the original
+4. **Press `ESC` or `F4`** — to hide or remove overlays
 
 ### Main Window
 
 | Element | Description |
 |---------|-------------|
 | Button "Take screenshot (F2)" | Capture and translate the active window |
+| Button "Select area (F3)" | Capture an area on the screen |
 | Button "Show/Hide (F1)" | Toggle overlay visibility |
+| Button "Clear all (F4)" | Remove all overlays |
 | Target language selection | Language to translate the text into |
 | Checkbox "Show translation indicator" | Display translation progress |
+| Checkbox "Auto-hide overlay" | Automatically hide when switching windows |
 | Menu "File" → "Open App Folder" | Opens the folder with settings and logs |
 
 ---
@@ -83,7 +101,8 @@ On first launch, the program creates the following structure in the `Documents/G
 
 Documents/GoogleScreenTranslate/
 ├── config/
-│ └── settings.json # Program settings (language, target language, browser path, etc.)
+│ ├── settings.json # Program settings
+│ └── overlay_positions.json # Saved overlay positions
 ├── logs/
 │ └── app_*.log # Log files (only 5 most recent launches are kept)
 └── temp/ # Temporary screenshot files
@@ -91,8 +110,8 @@ Documents/GoogleScreenTranslate/
 ```
 
 **Important:**
-
 - Settings are saved automatically when the program closes
+- Overlay positions are saved between sessions
 - Log files are automatically cleaned up, only the 5 most recent are kept
 - Temporary files are deleted when the program exits
 
@@ -103,18 +122,19 @@ Documents/GoogleScreenTranslate/
 All settings are available in the settings window (opens via menu or by clicking ⚙️ in the main window):
 
 ### 🌐 Browser
-
 - **Browser path** — manually specify the path to the browser executable
 - **Automatic search** — the program will find Yandex Browser or Google Chrome
 - **Recommended** — Yandex Browser for better compatibility
 
-### 🌍 Language
+### 🎨 Interface
+- **Show translation indicator** — display progress during translation
+- **Auto-hide overlay** — automatically hide when switching to another window
 
+### 🌍 Language
 - **Русский** — interface in Russian
 - **English** — interface in English
 
 ### Target Translation Language
-
 - Selection from 100+ languages
 - Supports all Google Translate languages
 - Search by language name
@@ -126,7 +146,6 @@ All settings are available in the settings window (opens via menu or by clicking
 ### Browser
 
 The program requires one of the following browsers:
-
 - **Yandex Browser** (recommended)
 - **Google Chrome**
 - **Chromium**
@@ -134,19 +153,11 @@ The program requires one of the following browsers:
 
 If the browser is not found automatically, the program will prompt you to specify the path manually.
 
-### Installing dependencies (for developers)
-
-```bash
-pip install -r requirements.txt
-playwright install chromium
-```
-
 ---
 
 ## 🛠️ Building from source
 
 1. Clone the repository:
-
 ```bash
 git clone https://github.com/AlexeyZam15/GoogleImagesScreenTranslator.git
 cd GoogleImagesScreenTranslator
@@ -199,3 +210,4 @@ This project is distributed under the MIT license. This means free use, modifica
 **⭐ Star this project if you find it useful!**
 
 </div>
+```
