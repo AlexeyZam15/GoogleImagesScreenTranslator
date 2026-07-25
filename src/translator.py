@@ -235,7 +235,7 @@ class GoogleTranslateDebug:
         """Запускает браузер с Playwright"""
         import shutil
         import tempfile
-        from src.utils import get_safe_temp_dir  # ИСПРАВЛЕНО
+        from src.utils import get_safe_temp_dir
 
         self.logger.info("Запуск Playwright...")
         self._pw = sync_playwright().start()
@@ -265,12 +265,9 @@ class GoogleTranslateDebug:
 
         self.logger.info(f"Используется браузер: {browser_path}")
 
-        # ИСПРАВЛЕНО: используем безопасную временную папку
+        # ИСПРАВЛЕНО: используем безопасную временную папку ВСЕГДА
         safe_temp_dir = get_safe_temp_dir()
-        if getattr(sys, 'frozen', False):
-            profile_dir = safe_temp_dir / "google_translate_profile"
-        else:
-            profile_dir = Path("metadata/google_translate_profile")
+        profile_dir = safe_temp_dir / "google_translate_profile"
 
         if profile_dir.exists():
             try:
