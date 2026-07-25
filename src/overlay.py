@@ -73,6 +73,33 @@ class OverlayWindow:
 
         self.logger.info("OverlayWindow инициализирован")
 
+    def reset(self):
+        """Полностью сбрасывает состояние оверлея"""
+        self.logger.info("[DEBUG] reset() - сброс состояния оверлея")
+
+        # Скрываем оверлей
+        if self.visible:
+            self.hide()
+
+        # Сбрасываем все сохраненные данные
+        self._last_image_path = None
+        self._last_window_rect = None
+        self._target_hwnd = None
+        self._is_fullscreen_target = False
+        self._is_visible_by_user = False
+        self.visible = False
+        self._show_time = 0
+
+        # Останавливаем монитор
+        self._stop_visibility_monitor()
+        self._disable_esc_hook()
+
+        # Очищаем изображения
+        self._images.clear()
+        self.tk_image = None
+
+        self.logger.info("[DEBUG] reset() - состояние оверлея сброшено")
+
     def get_overlay_hwnd(self) -> Optional[int]:
         """Возвращает HWND окна оверлея"""
         try:
@@ -92,8 +119,26 @@ class OverlayWindow:
             import win32api
 
             x1, y1, x2, y2 = window_rect
-            win_width = x2 - x1
+
+            # Реальная ширина окна - это x2 - x1, НО если x1 отрицательный,
+            # то реальная видимая ширина = x2 (так как окно начинается с 0)
+            # Однако скриншот делается с обрезанными координатами (0, 0, x2, y2)
+            # поэтому оверлей должен иметь размер (x2 - 0) = x2
+            # а позиция должна быть (0, y1) или (x1, y1) в зависимости от того,
+            # как был сделан скриншот
+
+            # Для окон с отрицательными координатами используем x1 = 0
+            if x1 < 0:
+                pos_x = 0
+                win_width = x2  # 1892
+            else:
+                pos_x = x1
+                win_width = x2 - x1
+
             win_height = y2 - y1
+
+            self.logger.info(f"Исходный rect: ({x1},{y1})-({x2},{y2})")
+            self.logger.info(f"Оверлей: позиция ({pos_x}, {y1}), размер {win_width}x{win_height}")
 
             img = Image.open(image_path)
 
@@ -111,19 +156,9 @@ class OverlayWindow:
             self._images.append(photo)
             self.tk_image = photo
 
-            # Определяем позицию оверлея
-            if self._is_fullscreen_target:
-                pos_x, pos_y = 0, 0
-                self.logger.info(f"Полноэкранный режим: позиция (0, 0)")
-            else:
-                pos_x, pos_y = x1, y1
-                self.logger.info(f"Обычный режим: позиция ({pos_x}, {pos_y})")
+            self.root.geometry(f"{win_width}x{win_height}+{pos_x}+{y1}")
 
-            self.root.geometry(f"{win_width}x{win_height}+{pos_x}+{pos_y}")
-
-            # Всегда поверх всех окон, даже если игра свернулась
             self.root.attributes('-topmost', True)
-            # Не сворачиваться вместе с игрой
             self.root.attributes('-toolwindow', True)
 
             self.canvas.delete("all")
@@ -138,27 +173,20 @@ class OverlayWindow:
             self._show_time = time.time()
             self._monitor_stable_time = time.time() + 2.0
 
-            # Показываем окно
             self.root.deiconify()
             self.root.lift()
 
-            # Получаем HWND оверлея
             overlay_hwnd = int(self.root.winfo_id())
             self.logger.info(f"[DEBUG] HWND оверлея: {overlay_hwnd}")
 
-            # Устанавливаем расширенные стили окна
             try:
                 ex_style = win32gui.GetWindowLong(overlay_hwnd, win32con.GWL_EXSTYLE)
-                # WS_EX_NOACTIVATE (0x08000000) - не активируется
-                # WS_EX_TOPMOST (0x00000008) - поверх всех окон
-                # WS_EX_TOOLWINDOW (0x00000080) - не отображается в панели задач
                 new_ex_style = ex_style | 0x08000000 | win32con.WS_EX_TOPMOST | 0x00000080
                 win32gui.SetWindowLong(overlay_hwnd, win32con.GWL_EXSTYLE, new_ex_style)
                 self.logger.info(f"[DEBUG] Установлены стили WS_EX_NOACTIVATE и WS_EX_TOPMOST")
             except Exception as e:
                 self.logger.warning(f"[DEBUG] Не удалось установить стили: {e}")
 
-            # Показываем окно без активации
             try:
                 win32gui.ShowWindow(overlay_hwnd, win32con.SW_SHOWNOACTIVATE)
                 win32gui.SetWindowPos(
@@ -175,16 +203,13 @@ class OverlayWindow:
                 except:
                     pass
 
-            # Блокируем активацию через Tkinter
             def on_focus_in(event):
                 self.logger.info("[DEBUG] Оверлей пытается получить фокус - блокируем")
                 return "break"
 
             def block_activate(event):
-                # Просто блокируем событие, не возвращаем фокус игре
                 return "break"
 
-            # Привязываем обработчики для блокировки фокуса
             self.root.bind('<FocusIn>', on_focus_in, add=True)
             self.canvas.bind('<FocusIn>', on_focus_in, add=True)
             self.root.bind('<Button-1>', block_activate, add=True)
@@ -196,11 +221,9 @@ class OverlayWindow:
 
             self.logger.info(f"_load_and_show_image: auto_hide_enabled={self.auto_hide_enabled}")
 
-            # Сбрасываем состояние монитора
             self._monitor_initialized = False
             self._last_active_hwnd = None
 
-            # Запускаем монитор, но он НЕ будет скрывать оверлей для полноэкранных приложений
             if self.auto_hide_enabled:
                 self.logger.info("Запуск монитора видимости с задержкой 1500мс")
                 self.root.after(1500, self._start_visibility_monitor_delayed)

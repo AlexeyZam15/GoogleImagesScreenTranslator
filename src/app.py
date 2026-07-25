@@ -22,6 +22,7 @@ from src.overlay import OverlayWindow
 from src.settings import Settings
 from src.strings import get_strings
 from src.browser_worker import BrowserWorker
+from src.area_selector import AreaSelector
 
 LANGUAGES = {"af": "Afrikaans", "sq": "Albanian", "am": "Amharic", "ar": "Arabic", "hy": "Armenian",
              "az": "Azerbaijani", "eu": "Basque", "be": "Belarusian", "bn": "Bengali", "bs": "Bosnian",
@@ -139,12 +140,401 @@ class ScreenshotTranslatorApp:
         self.setup_hotkeys()
         self.root.after(100, self._init_translator_step)
 
+    def capture_area(self):
+        """Захват области экрана через скриншот активного окна"""
+        self.logger.info("[DEBUG] capture_area() вызван")
+
+        if self.translating or not self.ready or self.initializing:
+            self.logger.warning("[DEBUG] capture_area пропущен: занят или не готов")
+            return
+
+        self.btn_capture.config(state=DISABLED, bg='#333')
+        self.translating = True
+
+        # Сворачиваем главное окно
+        try:
+            self.root.iconify()
+            self.logger.info("[DEBUG] Главное окно свернуто")
+        except Exception as e:
+            self.logger.warning(f"[DEBUG] Не удалось свернуть окно: {e}")
+
+        # Запускаем захват скриншота с задержкой
+        self.root.after(500, self._capture_window_for_area)
+
+    def _capture_window_for_area(self):
+        """Захватывает скриншот активного окна и показывает для выделения области"""
+        self.logger.info("[DEBUG] _capture_window_for_area() - начало")
+
+        try:
+            import win32gui
+
+            # Сохраняем HWND активного окна ДО создания оверлея
+            current_hwnd = win32gui.GetForegroundWindow()
+            if current_hwnd:
+                self.screenshot._last_hwnd = current_hwnd
+                self.screenshot._is_fullscreen = self.screenshot.is_window_fullscreen(current_hwnd)
+                self.logger.info(
+                    f"[DEBUG] Сохранен HWND активного окна: {current_hwnd}, полноэкранный: {self.screenshot._is_fullscreen}")
+
+                # Сохраняем HWND для использования в оверлее
+                self._area_target_hwnd = current_hwnd
+                self._area_is_fullscreen = self.screenshot._is_fullscreen
+            else:
+                self._area_target_hwnd = None
+                self._area_is_fullscreen = False
+
+            # Делаем скриншот
+            img = self.screenshot.capture_active_window()
+
+            if not img:
+                self.logger.error("[DEBUG] Не удалось захватить скриншот")
+                self.update_status(self.get_string('capture_error'), '#f44336')
+                self.translating = False
+                self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+                self.root.deiconify()
+                return
+
+            # Сохраняем скриншот
+            screenshot_path = self.temp_dir / f"area_screenshot_{int(time.time())}.png"
+            img.save(screenshot_path)
+            self.logger.info(f"[DEBUG] Скриншот сохранен: {screenshot_path}")
+
+            # Показываем окно для выделения области
+            self._show_area_selection_window(screenshot_path)
+
+        except Exception as e:
+            self.logger.error(f"[DEBUG] Ошибка захвата окна: {e}")
+            self.update_status(self.get_string('capture_error'), '#f44336')
+            self.translating = False
+            self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+            self.root.deiconify()
+
+    def _show_area_selection_window(self, screenshot_path):
+        """Показывает полноэкранное окно с изображением для выделения области"""
+        self.logger.info("[DEBUG] _show_area_selection_window()")
+
+        from PIL import Image, ImageTk
+        import tkinter as tk
+        from tkinter import messagebox
+
+        # Загружаем изображение
+        img = Image.open(screenshot_path)
+        img_width, img_height = img.size
+
+        # Создаем полноэкранное окно
+        selection_window = tk.Toplevel()
+        selection_window.attributes('-fullscreen', True)
+        selection_window.attributes('-topmost', True)
+        selection_window.configure(bg='black')
+        selection_window.focus_force()
+
+        # Canvas для отображения
+        canvas = tk.Canvas(selection_window, cursor="cross", bg='black', highlightthickness=0)
+        canvas.pack(fill=tk.BOTH, expand=True)
+
+        # Масштабируем изображение под экран
+        screen_width = selection_window.winfo_screenwidth()
+        screen_height = selection_window.winfo_screenheight()
+
+        scale = min(screen_width / img_width, screen_height / img_height)
+        display_w = int(img_width * scale)
+        display_h = int(img_height * scale)
+
+        resized = img.resize((display_w, display_h), Image.Resampling.LANCZOS)
+        photo = ImageTk.PhotoImage(resized)
+
+        # Центрируем изображение
+        img_x = (screen_width - display_w) // 2
+        img_y = (screen_height - display_h) // 2
+
+        canvas.create_image(img_x, img_y, anchor=tk.NW, image=photo)
+        canvas.image = photo  # Сохраняем ссылку
+
+        # Сохраняем данные для пересчета координат
+        selection_data = {
+            'img': img,
+            'screenshot_path': screenshot_path,
+            'scale_x': img_width / display_w,
+            'scale_y': img_height / display_h,
+            'img_x': img_x,
+            'img_y': img_y,
+            'start_x': None,
+            'start_y': None,
+            'rect': None
+        }
+
+        # Инструкция
+        canvas.create_text(
+            screen_width // 2,
+            50,
+            text="Выделите область для перевода (ESC для отмены)",
+            fill="white",
+            font=("Arial", 16, "bold")
+        )
+
+        def on_mouse_down(event):
+            selection_data['start_x'] = event.x
+            selection_data['start_y'] = event.y
+            if selection_data['rect']:
+                canvas.delete(selection_data['rect'])
+
+        def on_mouse_drag(event):
+            if selection_data['start_x'] is not None:
+                if selection_data['rect']:
+                    canvas.delete(selection_data['rect'])
+                selection_data['rect'] = canvas.create_rectangle(
+                    selection_data['start_x'],
+                    selection_data['start_y'],
+                    event.x,
+                    event.y,
+                    outline='red',
+                    width=2,
+                    fill='blue',
+                    stipple='gray50'
+                )
+
+        def on_mouse_up(event):
+            if selection_data['start_x'] is not None:
+                x1, y1 = min(selection_data['start_x'], event.x), min(selection_data['start_y'], event.y)
+                x2, y2 = max(selection_data['start_x'], event.x), max(selection_data['start_y'], event.y)
+
+                min_size = 10
+                if x2 - x1 > min_size and y2 - y1 > min_size:
+                    # Пересчитываем координаты на оригинальное изображение
+                    orig_x1 = int((x1 - selection_data['img_x']) * selection_data['scale_x'])
+                    orig_y1 = int((y1 - selection_data['img_y']) * selection_data['scale_y'])
+                    orig_x2 = int((x2 - selection_data['img_x']) * selection_data['scale_x'])
+                    orig_y2 = int((y2 - selection_data['img_y']) * selection_data['scale_y'])
+
+                    # Ограничиваем
+                    orig_x1 = max(0, min(orig_x1, img_width))
+                    orig_y1 = max(0, min(orig_y1, img_height))
+                    orig_x2 = max(0, min(orig_x2, img_width))
+                    orig_y2 = max(0, min(orig_y2, img_height))
+
+                    self.logger.info(f"[DEBUG] Выделена область: ({orig_x1},{orig_y1})-({orig_x2},{orig_y2})")
+
+                    # Закрываем окно выделения
+                    selection_window.destroy()
+
+                    # Обрабатываем выделенную область
+                    self._process_area_selection(orig_x1, orig_y1, orig_x2, orig_y2, screenshot_path)
+                else:
+                    messagebox.showwarning(
+                        "Ошибка",
+                        f"Выделите область размером больше {min_size}x{min_size} пикселей"
+                    )
+
+        def on_escape(event):
+            self.logger.info("[DEBUG] ESC - отмена выделения")
+            selection_window.destroy()
+            self.translating = False
+            self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+            self.root.deiconify()
+            self.update_status("● Отменено", '#ff9800')
+
+        # Привязываем события
+        canvas.bind("<ButtonPress-1>", on_mouse_down)
+        canvas.bind("<B1-Motion>", on_mouse_drag)
+        canvas.bind("<ButtonRelease-1>", on_mouse_up)
+        selection_window.bind("<Escape>", on_escape)
+        canvas.bind("<Escape>", on_escape)
+
+        # Устанавливаем флаг для перехвата ESC
+        self._capture_mode = True
+
+        # Сохраняем ссылку на окно для очистки
+        self._selection_window = selection_window
+
+        # При закрытии окна через X
+        def on_close():
+            self._capture_mode = False
+            self.translating = False
+            self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+            self.root.deiconify()
+            selection_window.destroy()
+
+        selection_window.protocol("WM_DELETE_WINDOW", on_close)
+
+    def _process_area_selection(self, x1, y1, x2, y2, screenshot_path):
+        """Обрабатывает выделенную область - вырезает и отправляет на перевод"""
+        self.logger.info(f"[DEBUG] _process_area_selection: ({x1},{y1})-({x2},{y2})")
+
+        self._capture_mode = False
+        self._selection_window = None
+
+        # Сбрасываем старый оверлей полностью
+        if self.overlay:
+            self.logger.info("[DEBUG] _process_area_selection: сбрасываем старый оверлей")
+            self.overlay.reset()
+            # Даем время на сброс
+            time.sleep(0.1)
+
+        # Сохраняем координаты выделенной области для использования при показе оверлея
+        self._area_rect = (x1, y1, x2, y2)
+
+        def process_task():
+            try:
+                self.update_status("● Вырезание области...", '#ff9800')
+
+                from PIL import Image
+
+                # Открываем скриншот и вырезаем область
+                full_img = Image.open(screenshot_path)
+                cropped = full_img.crop((x1, y1, x2, y2))
+
+                if not cropped:
+                    self.logger.error("[DEBUG] Не удалось вырезать область")
+                    self.update_status(self.get_string('capture_error'), '#f44336')
+                    self.translating = False
+                    self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+                    self.root.deiconify()
+                    return
+
+                self.logger.info(f"[DEBUG] Область вырезана: {cropped.size}")
+
+                # Показываем индикатор перевода
+                self.root.after(0, self._show_translation_overlay)
+
+                # Сохраняем вырезанную область
+                path = self.temp_dir / f"area_{int(time.time())}.png"
+                cropped.save(path)
+                self.logger.info(f"[DEBUG] Область сохранена: {path}")
+
+                # Удаляем временный скриншот
+                try:
+                    os.remove(screenshot_path)
+                except:
+                    pass
+
+                # СОХРАНЯЕМ HWND ДЛЯ ОВЕРЛЕЯ
+                target_hwnd = getattr(self, '_area_target_hwnd', None)
+                is_fullscreen = getattr(self, '_area_is_fullscreen', False)
+
+                if target_hwnd:
+                    self.logger.info(
+                        f"[DEBUG] Для оверлея будет использован HWND: {target_hwnd}, полноэкранный: {is_fullscreen}")
+                    self.screenshot._last_hwnd = target_hwnd
+                    self.screenshot._is_fullscreen = is_fullscreen
+
+                # Сохраняем координаты области для использования в _do_translate
+                self._area_rect_for_overlay = (x1, y1, x2, y2)
+
+                # Отправляем на перевод
+                self.root.after(0, lambda: self._do_translate(path, area_rect=(x1, y1, x2, y2)))
+
+            except Exception as e:
+                self.logger.error(f"Ошибка обработки области: {e}")
+                self.root.after(0, lambda: self._on_translate_error(str(e)))
+
+        threading.Thread(target=process_task, daemon=True).start()
+
+    def _start_area_capture(self):
+        """Запускает режим выделения области"""
+        self.logger.info("[DEBUG] _start_area_capture() - начало")
+
+        # Создаем селектор области
+        selector = AreaSelector(
+            self,
+            self._on_area_selected,
+            config={
+                "selection_alpha": 0.3,
+                "min_selection_size": 10
+            }
+        )
+        self._area_selector = selector
+        self._capture_mode = True
+        self.logger.info("[DEBUG] _start_area_capture: AreaSelector создан")
+
+        # Запускаем захват
+        selector.start_capture()
+
+    def _on_area_selected(self, rect):
+        """Обработчик выбора области"""
+        self.logger.info(f"[DEBUG] _on_area_selected: rect={rect}")
+
+        # Выходим из режима захвата
+        self._capture_mode = False
+        self._area_selector = None
+
+        if not rect:
+            self.logger.warning("[DEBUG] _on_area_selected: rect пустой")
+            self.translating = False
+            self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+            return
+
+        x1, y1, x2, y2 = rect
+
+        # Захватываем скриншот области
+        def capture_area_task():
+            """Захват области в отдельном потоке"""
+            try:
+                self.update_status("● Захват области...", '#ff9800')
+
+                from PIL import ImageGrab
+                img = ImageGrab.grab(bbox=(x1, y1, x2, y2))
+
+                if not img:
+                    self.logger.error("[DEBUG] _on_area_selected: не удалось захватить область")
+                    self.update_status(self.get_string('capture_error'), '#f44336')
+                    self.translating = False
+                    self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+                    return
+
+                self.logger.info(f"[DEBUG] Область захвачена: {img.size}")
+
+                # Сохраняем HWND активного окна для оверлея (используем тот же механизм)
+                try:
+                    import win32gui
+                    current_hwnd = win32gui.GetForegroundWindow()
+                    if current_hwnd:
+                        self.screenshot._last_hwnd = current_hwnd
+                        self.screenshot._is_fullscreen = False  # Область не полноэкранная
+                        self.logger.info(f"[DEBUG] Сохранен HWND для оверлея: {current_hwnd}")
+                except Exception as e:
+                    self.logger.warning(f"[DEBUG] Не удалось сохранить HWND: {e}")
+
+                self.root.after(0, self._show_translation_overlay)
+
+                path = self.temp_dir / f"area_{int(time.time())}.png"
+                img.save(path)
+                self.logger.info(f"[DEBUG] Область сохранена: {path}")
+
+                self.root.after(0, lambda: self._do_translate(path))
+
+            except Exception as e:
+                self.logger.error(f"Ошибка захвата области: {e}")
+                self.root.after(0, lambda: self._on_translate_error(str(e)))
+
+        threading.Thread(target=capture_area_task, daemon=True).start()
+
     def setup_hotkeys(self):
         """Настройка глобальных горячих клавиш"""
         try:
             keyboard.unhook_all()
 
+            # Инициализируем флаги для режима захвата области
+            self._capture_mode = False
+            self._area_selector = None
+
             def on_key(event):
+                # === ОБРАБОТКА ESC ТОЛЬКО В РЕЖИМЕ ЗАХВАТА ===
+                if event.name == 'esc' and event.event_type == 'down':
+                    if self._capture_mode and self._area_selector is not None:
+                        self.logger.info("[DEBUG] keyboard: перехват ESC в режиме захвата")
+                        try:
+                            if hasattr(self._area_selector, 'on_escape'):
+                                fake_event = type('obj', (object,), {
+                                    'keysym': 'Escape',
+                                    'keycode': 27
+                                })()
+                                self._area_selector.on_escape(fake_event)
+                                self.logger.info("[DEBUG] keyboard: ESC передан в AreaSelector")
+                        except Exception as e:
+                            self.logger.error(f"[DEBUG] keyboard: ошибка передачи ESC: {e}")
+                        return False
+                    return True
+
                 if event.name == 'f1' and event.event_type == 'down':
                     self.logger.info("[DEBUG] F1 нажата!")
                     auto_hide_enabled = self.settings.get_auto_hide_overlay()
@@ -153,7 +543,6 @@ class ScreenshotTranslatorApp:
                     target_hwnd = self.screenshot.get_last_hwnd()
                     has_translation = False
 
-                    # Проверяем наличие перевода для текущего окна
                     if target_hwnd and self.overlay:
                         if hasattr(self.overlay, '_last_image_path') and self.overlay._last_image_path:
                             if hasattr(self.overlay, '_target_hwnd') and self.overlay._target_hwnd == target_hwnd:
@@ -164,19 +553,16 @@ class ScreenshotTranslatorApp:
                         else:
                             self.logger.info("[DEBUG] Нет сохраненного изображения")
 
-                    # Если нет перевода - пропускаем F1
                     if not has_translation:
                         self.logger.info("[DEBUG] F1 пропущена (нет перевода)")
                         return True
 
-                    # Если автоскрытие включено - проверяем активное окно
                     if auto_hide_enabled:
                         try:
                             import win32gui
                             active_hwnd = win32gui.GetForegroundWindow()
                             self.logger.info(f"[DEBUG] active_hwnd={active_hwnd}, target_hwnd={target_hwnd}")
 
-                            # Получаем информацию об активном окне
                             class_name = ""
                             window_text = ""
                             try:
@@ -188,7 +574,6 @@ class ScreenshotTranslatorApp:
                             except:
                                 pass
 
-                            # Проверяем, является ли активное окно оверлеем
                             overlay_hwnd = None
                             if self.overlay and hasattr(self.overlay, 'root') and self.overlay.root.winfo_exists():
                                 try:
@@ -199,9 +584,8 @@ class ScreenshotTranslatorApp:
 
                             is_overlay_active = (class_name == "TkTopLevel" and window_text == "Перевод")
                             is_overlay_active = is_overlay_active or (
-                                        overlay_hwnd is not None and active_hwnd == overlay_hwnd)
+                                    overlay_hwnd is not None and active_hwnd == overlay_hwnd)
 
-                            # Если активное окно - оверлей или целевое окно - разрешаем F1
                             if is_overlay_active or (target_hwnd is not None and active_hwnd == target_hwnd):
                                 self.logger.info("[DEBUG] F1: активен оверлей или целевое окно - переключаем")
                                 current_time = time.time() * 1000
@@ -210,7 +594,6 @@ class ScreenshotTranslatorApp:
                                     self.root.after(0, self.toggle_overlay)
                                 return False
                             else:
-                                # Если активное окно - другое, и оверлей виден - скрываем оверлей (автоскрытие)
                                 if self.overlay and self.overlay.visible:
                                     self.logger.info("[DEBUG] F1: активное окно другое, оверлей виден - скрываем")
                                     current_time = time.time() * 1000
@@ -225,7 +608,6 @@ class ScreenshotTranslatorApp:
                             self.logger.warning(f"Ошибка проверки активного окна: {e}")
                             return True
                     else:
-                        # Автоскрытие отключено - F1 всегда переключает, если есть перевод
                         self.logger.info("[DEBUG] F1: автоскрытие отключено, переключаем")
                         current_time = time.time() * 1000
                         if current_time - self._key_last_time.get('f1', 0) >= self._debounce_ms:
@@ -241,10 +623,21 @@ class ScreenshotTranslatorApp:
                         self.root.after(0, self.process)
                         self.logger.info("[DEBUG] F2 перехвачена")
                     return False
+
+                elif event.name == 'f3' and event.event_type == 'down':
+                    self.logger.info("[DEBUG] F3 нажата!")
+                    current_time = time.time() * 1000
+                    if current_time - self._key_last_time.get('f3', 0) >= self._debounce_ms:
+                        self._key_last_time['f3'] = current_time
+                        self.root.after(0, self.capture_area)
+                        self.logger.info("[DEBUG] F3 перехвачена")
+                    return False
+
                 return True
 
             keyboard.hook(on_key, suppress=True)
-            self.logger.info("Горячие клавиши зарегистрированы (F1 - зависит от автоскрытия, F2 - всегда)")
+            self.logger.info(
+                "Горячие клавиши зарегистрированы (F1 - зависит от автоскрытия, F2 - скриншот окна, F3 - область)")
         except Exception as e:
             self.logger.error(f"Ошибка регистрации горячих клавиш: {e}")
             self._setup_tkinter_hotkeys()
@@ -256,9 +649,29 @@ class ScreenshotTranslatorApp:
             return
 
         self.logger.info("[DEBUG] toggle_overlay вызван")
+
+        # Проверяем наличие перевода
+        target_hwnd = self.screenshot.get_last_hwnd()
+        has_translation = False
+
+        if target_hwnd and self.overlay:
+            if hasattr(self.overlay, '_last_image_path') and self.overlay._last_image_path:
+                if hasattr(self.overlay, '_target_hwnd') and self.overlay._target_hwnd == target_hwnd:
+                    has_translation = True
+                    self.logger.info(f"[DEBUG] toggle_overlay: есть перевод для окна {target_hwnd}")
+                else:
+                    self.logger.info(f"[DEBUG] toggle_overlay: нет перевода для окна {target_hwnd}")
+            else:
+                self.logger.info("[DEBUG] toggle_overlay: нет сохраненного изображения")
+
+        # Если нет перевода - не меняем статус, просто выходим
+        if not has_translation:
+            self.logger.info("[DEBUG] toggle_overlay: нет перевода, пропускаем")
+            return
+
         auto_hide_enabled = self.settings.get_auto_hide_overlay()
         self.logger.info(f"[DEBUG] toggle_overlay: auto_hide_enabled={auto_hide_enabled}")
-        target_hwnd = self.screenshot.get_last_hwnd()
+
         if target_hwnd is None:
             self.logger.debug("toggle_overlay: нет сохраненного HWND целевого окна")
             self.update_status("● Нет активного перевода", '#ff9800')
@@ -272,7 +685,6 @@ class ScreenshotTranslatorApp:
         if not auto_hide_enabled:
             self.logger.info("[DEBUG] toggle_overlay: автоскрытие отключено, переключаем без проверок")
             self.overlay.toggle()
-            # Для полноэкранных приложений: восстанавливаем фокус на игру после переключения
             if is_fullscreen_target and self.overlay.visible:
                 if hasattr(self.overlay, '_restore_fullscreen_window'):
                     self.overlay._restore_fullscreen_window()
@@ -304,12 +716,9 @@ class ScreenshotTranslatorApp:
             except Exception as e:
                 self.logger.info(f"[DEBUG] toggle_overlay: ошибка получения класса окна: {e}")
 
-            # Для полноэкранных приложений: разрешаем переключение в любом случае,
-            # но после переключения восстанавливаем фокус на игру
             if is_fullscreen_target:
                 self.logger.info("[DEBUG] toggle_overlay: полноэкранное приложение, разрешаем переключение")
                 self.overlay.toggle()
-                # Восстанавливаем фокус на игру после переключения
                 if self.overlay.visible and hasattr(self.overlay, '_restore_fullscreen_window'):
                     self.overlay._restore_fullscreen_window()
                 status = self.get_string('shown') if self.overlay.is_visible() else self.get_string('hidden')
@@ -347,12 +756,16 @@ class ScreenshotTranslatorApp:
             if keysym == "F2" or keysym == "f2":
                 self.process()
                 return "break"
+            if keysym == "F3" or keysym == "f3":
+                self.capture_area()
+                return "break"
             return None
 
         self.root.bind_all("<Key-F1>", handle_hotkey)
         self.root.bind_all("<Key-F2>", handle_hotkey)
+        self.root.bind_all("<Key-F3>", handle_hotkey)
         self.root.focus_force()
-        self.logger.info("Tkinter горячие клавиши зарегистрированы")
+        self.logger.info("Tkinter горячие клавиши зарегистрированы (F1, F2, F3)")
 
     def on_close(self):
         """Обработчик закрытия приложения"""
@@ -445,6 +858,7 @@ class ScreenshotTranslatorApp:
             self.ready = True
             self.initializing = False
             self._init_done = True
+
             if self.overlay is None:
                 self.logger.info("Создание оверлея")
                 from src.overlay import OverlayWindow
@@ -454,7 +868,9 @@ class ScreenshotTranslatorApp:
                 self.logger.info(f"Оверлей создан: {self.overlay}")
             else:
                 self.logger.info(f"Оверлей уже существует: {self.overlay}")
+
             self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+            # НЕ обновляем статус на "Оверлей скрыт" - просто показываем "Готово"
             self.update_status("● " + self.get_string('ready'), '#4CAF50')
             self.logger.info("UI обновлен: статус 'Готово'")
         self._pending_command_ids = {}
@@ -1192,6 +1608,26 @@ class ScreenshotTranslatorApp:
                     self.logger.info(
                         f"window_rect = {window_rect}, target_hwnd = {target_hwnd}, is_fullscreen = {is_fullscreen}")
 
+                    # Проверяем, есть ли сохраненная область для F3
+                    area_rect = getattr(self, '_pending_area_rect', None)
+                    if area_rect:
+                        self.logger.info(f"[DEBUG] Используем область для оверлея: {area_rect}")
+                        x1, y1, x2, y2 = area_rect
+                        area_window_rect = (x1, y1, x2, y2)
+                    else:
+                        area_window_rect = window_rect
+                        self.logger.info(f"[DEBUG] Используем стандартный window_rect: {window_rect}")
+
+                    # Принудительно сбрасываем состояние оверлея перед показом нового
+                    # Это гарантирует, что старый оверлей не будет показан монитором
+                    self.overlay.reset()
+
+                    # Устанавливаем новые данные
+                    self.overlay._is_fullscreen_target = is_fullscreen
+                    self.overlay._target_hwnd = target_hwnd
+                    self.overlay._last_image_path = result
+                    self.overlay._last_window_rect = area_window_rect
+
                     # Проверяем, активно ли целевое окно
                     is_target_active = False
                     if target_hwnd:
@@ -1204,11 +1640,10 @@ class ScreenshotTranslatorApp:
                         except Exception as e:
                             self.logger.warning(f"[DEBUG] Не удалось проверить активное окно: {e}")
 
-                    if window_rect and hasattr(self.overlay, 'show_for_window'):
-                        # Сохраняем результат в оверлей, но показываем ТОЛЬКО если целевое окно активно
+                    if area_window_rect and hasattr(self.overlay, 'show_for_window'):
                         self.logger.info(
-                            f"Вызов show_for_window с rect={window_rect}, hwnd={target_hwnd}, is_fullscreen={is_fullscreen}")
-                        self.overlay.show_for_window(result, window_rect, target_hwnd, is_fullscreen,
+                            f"Вызов show_for_window с rect={area_window_rect}, hwnd={target_hwnd}, is_fullscreen={is_fullscreen}")
+                        self.overlay.show_for_window(result, area_window_rect, target_hwnd, is_fullscreen,
                                                      show_immediately=is_target_active)
                         self.logger.info("show_for_window выполнен")
                         if not is_target_active:
@@ -1239,9 +1674,16 @@ class ScreenshotTranslatorApp:
             self._hide_translation_overlay()
             self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
             self._pending_command_ids = {}
+            # Очищаем сохраненную область
+            self._pending_area_rect = None
 
-    def _do_translate(self, image_path: Path):
+    def _do_translate(self, image_path: Path, area_rect=None):
         """Выполняет перевод в фоновом режиме через BrowserWorker"""
+        self.logger.info(f"[DEBUG] _do_translate: image_path={image_path}, area_rect={area_rect}")
+
+        # Сохраняем область для использования в колбэке
+        self._pending_area_rect = area_rect
+
         out = self.temp_dir / "translated"
         cmd_id = self.browser_worker.translate_image(
             image_path,
