@@ -163,14 +163,14 @@ class ScreenshotTranslatorApp:
         self.logger.info(f"Удалено {count} оверлеев (F4)")
 
     def capture_area(self):
-        """Захват области экрана через скриншот активного окна"""
+        """Захват области экрана (F3) - делает скриншот всего экрана"""
         self.logger.info("[DEBUG] capture_area() вызван")
 
         if self.translating or not self.ready or self.initializing:
             self.logger.warning("[DEBUG] capture_area пропущен: занят или не готов")
             return
 
-        # === НЕ УДАЛЯЕМ ОВЕРЛЕИ ДЛЯ F3 - ОНИ ОСТАЮТСЯ ВИДИМЫМИ ===
+        # НЕ УДАЛЯЕМ ОВЕРЛЕИ ДЛЯ F3 - ОНИ ОСТАЮТСЯ ВИДИМЫМИ
         # Пользователь может захватывать разные области и сравнивать результаты
 
         self.btn_capture.config(state=DISABLED, bg='#333')
@@ -187,32 +187,33 @@ class ScreenshotTranslatorApp:
         self.root.after(500, self._capture_window_for_area)
 
     def _capture_window_for_area(self):
-        """Захватывает скриншот активного окна и показывает для выделения области"""
+        """Захватывает скриншот всего экрана и показывает для выделения области"""
         self.logger.info("[DEBUG] _capture_window_for_area() - начало")
 
         try:
             import win32gui
+            from PIL import ImageGrab
 
-            # Сохраняем HWND активного окна ДО создания оверлея
+            # Сохраняем HWND активного окна для оверлея
             current_hwnd = win32gui.GetForegroundWindow()
             if current_hwnd:
                 self.screenshot._last_hwnd = current_hwnd
                 self.screenshot._is_fullscreen = self.screenshot.is_window_fullscreen(current_hwnd)
                 self.logger.info(
                     f"[DEBUG] Сохранен HWND активного окна: {current_hwnd}, полноэкранный: {self.screenshot._is_fullscreen}")
-
-                # Сохраняем HWND для использования в оверлее
                 self._area_target_hwnd = current_hwnd
                 self._area_is_fullscreen = self.screenshot._is_fullscreen
             else:
                 self._area_target_hwnd = None
                 self._area_is_fullscreen = False
 
-            # Делаем скриншот
-            img = self.screenshot.capture_active_window()
+            # Делаем скриншот ВСЕГО ЭКРАНА (вместо активного окна)
+            self.logger.info("[DEBUG] Захват всего экрана для выбора области...")
+            img = ImageGrab.grab()
+            self.logger.info(f"[DEBUG] Скриншот всего экрана: {img.size}")
 
             if not img:
-                self.logger.error("[DEBUG] Не удалось захватить скриншот")
+                self.logger.error("[DEBUG] Не удалось захватить скриншот экрана")
                 self.update_status(self.get_string('capture_error'), '#f44336')
                 self.translating = False
                 self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
@@ -228,7 +229,7 @@ class ScreenshotTranslatorApp:
             self._show_area_selection_window(screenshot_path)
 
         except Exception as e:
-            self.logger.error(f"[DEBUG] Ошибка захвата окна: {e}")
+            self.logger.error(f"[DEBUG] Ошибка захвата экрана: {e}")
             self.update_status(self.get_string('capture_error'), '#f44336')
             self.translating = False
             self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
@@ -242,10 +243,6 @@ class ScreenshotTranslatorApp:
         import tkinter as tk
         from tkinter import messagebox
 
-        # Устанавливаем флаг захвата ДО создания окна
-        self._capture_mode = True
-        self.logger.info("[DEBUG] _capture_mode установлен в True")
-
         # Загружаем изображение
         img = Image.open(screenshot_path)
         img_width, img_height = img.size
@@ -254,14 +251,11 @@ class ScreenshotTranslatorApp:
         selection_window = tk.Toplevel()
         selection_window.attributes('-fullscreen', True)
         selection_window.attributes('-topmost', True)
-        selection_window.configure(bg='gray')
+        selection_window.configure(bg='black')
         selection_window.focus_force()
 
-        # Сохраняем ссылку на окно
-        self._selection_window = selection_window
-
         # Canvas для отображения
-        canvas = tk.Canvas(selection_window, cursor="cross", bg='gray', highlightthickness=0)
+        canvas = tk.Canvas(selection_window, cursor="cross", bg='black', highlightthickness=0)
         canvas.pack(fill=tk.BOTH, expand=True)
 
         # Масштабируем изображение под экран
@@ -375,6 +369,12 @@ class ScreenshotTranslatorApp:
         canvas.bind("<ButtonRelease-1>", on_mouse_up)
         selection_window.bind("<Escape>", on_escape)
         canvas.bind("<Escape>", on_escape)
+
+        # Устанавливаем флаг для перехвата ESC
+        self._capture_mode = True
+
+        # Сохраняем ссылку на окно для очистки
+        self._selection_window = selection_window
 
         # При закрытии окна через X
         def on_close():
