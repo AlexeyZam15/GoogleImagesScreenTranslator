@@ -140,6 +140,28 @@ class ScreenshotTranslatorApp:
         self.setup_hotkeys()
         self.root.after(100, self._init_translator_step)
 
+    def clear_all_overlays(self):
+        """Удаляет все оверлеи (F4)."""
+        self.logger.info("[DEBUG] clear_all_overlays вызван")
+
+        if not self.overlay_manager:
+            self.logger.warning("clear_all_overlays: менеджер оверлеев не инициализирован")
+            self.update_status("● Нет оверлеев для удаления", '#ff9800')
+            return
+
+        if not self.overlay_manager.overlays:
+            self.logger.info("clear_all_overlays: нет активных оверлеев")
+            self.update_status("● Нет оверлеев для удаления", '#ff9800')
+            return
+
+        count = len(self.overlay_manager.overlays)
+        self.logger.info(f"clear_all_overlays: удаляем {count} оверлеев")
+
+        # Закрываем все оверлеи через менеджер
+        self.overlay_manager.close_all()
+        self.update_status(f"● Удалено {count} оверлеев", '#4CAF50')
+        self.logger.info(f"Удалено {count} оверлеев (F4)")
+
     def capture_area(self):
         """Захват области экрана через скриншот активного окна"""
         self.logger.info("[DEBUG] capture_area() вызван")
@@ -147,6 +169,9 @@ class ScreenshotTranslatorApp:
         if self.translating or not self.ready or self.initializing:
             self.logger.warning("[DEBUG] capture_area пропущен: занят или не готов")
             return
+
+        # === НЕ УДАЛЯЕМ ОВЕРЛЕИ ДЛЯ F3 - ОНИ ОСТАЮТСЯ ВИДИМЫМИ ===
+        # Пользователь может захватывать разные области и сравнивать результаты
 
         self.btn_capture.config(state=DISABLED, bg='#333')
         self.translating = True
@@ -566,11 +591,21 @@ class ScreenshotTranslatorApp:
                         self.logger.info("[DEBUG] F3 перехвачена")
                     return False
 
+                # === НОВАЯ КЛАВИША F4 - УДАЛЕНИЕ ВСЕХ ОВЕРЛЕЕВ ===
+                elif event.name == 'f4' and event.event_type == 'down':
+                    self.logger.info("[DEBUG] F4 нажата!")
+                    current_time = time.time() * 1000
+                    if current_time - self._key_last_time.get('f4', 0) >= self._debounce_ms:
+                        self._key_last_time['f4'] = current_time
+                        self.root.after(0, self.clear_all_overlays)
+                        self.logger.info("[DEBUG] F4 перехвачена - удаление всех оверлеев")
+                    return False
+
                 return True
 
             keyboard.hook(on_key, suppress=True)
             self.logger.info(
-                "Горячие клавиши зарегистрированы (F1 - зависит от автоскрытия, F2 - скриншот окна, F3 - область)")
+                "Горячие клавиши зарегистрированы (F1 - зависит от автоскрытия, F2 - скриншот окна, F3 - область, F4 - удалить все оверлеи)")
         except Exception as e:
             self.logger.error(f"Ошибка регистрации горячих клавиш: {e}")
             self._setup_tkinter_hotkeys()
@@ -653,13 +688,18 @@ class ScreenshotTranslatorApp:
             if keysym == "F3" or keysym == "f3":
                 self.capture_area()
                 return "break"
+            # === НОВАЯ КЛАВИША F4 ===
+            if keysym == "F4" or keysym == "f4":
+                self.clear_all_overlays()
+                return "break"
             return None
 
         self.root.bind_all("<Key-F1>", handle_hotkey)
         self.root.bind_all("<Key-F2>", handle_hotkey)
         self.root.bind_all("<Key-F3>", handle_hotkey)
+        self.root.bind_all("<Key-F4>", handle_hotkey)  # <-- НОВОЕ
         self.root.focus_force()
-        self.logger.info("Tkinter горячие клавиши зарегистрированы (F1, F2, F3)")
+        self.logger.info("Tkinter горячие клавиши зарегистрированы (F1, F2, F3, F4)")
 
     def on_close(self):
         """Обработчик закрытия приложения"""
@@ -1117,9 +1157,9 @@ class ScreenshotTranslatorApp:
         self.root = Tk()
         self.root.title(self.get_string('app_title'))
         self.root.withdraw()
-        self.root.geometry("520x520")
-        self.root.minsize(520, 520)
-        self.root.maxsize(520, 520)
+        self.root.geometry("520x570")  # Немного увеличиваем высоту для новой кнопки
+        self.root.minsize(520, 570)
+        self.root.maxsize(520, 570)
         self.root.resizable(False, False)
         self.root.configure(bg='#1e1e1e')
         self.create_menu()
@@ -1238,6 +1278,21 @@ class ScreenshotTranslatorApp:
             state=DISABLED
         )
         self.btn_capture.pack(fill=X, pady=(0, 10), ipady=2)
+
+        # === НОВАЯ КНОПКА "Очистить все" ===
+        self.btn_clear_all = Button(
+            btn_frame,
+            text="🗑️ Очистить все (F4)",
+            command=self.clear_all_overlays,
+            font=("Arial", 11),
+            bg='#d32f2f',
+            fg='white',
+            relief=FLAT,
+            height=1,
+            pady=12
+        )
+        self.btn_clear_all.pack(fill=X, pady=(0, 10), ipady=2)
+
         self.btn_toggle = Button(
             btn_frame,
             text=self.get_string('btn_toggle'),
@@ -1250,9 +1305,10 @@ class ScreenshotTranslatorApp:
             pady=12
         )
         self.btn_toggle.pack(fill=X, ipady=2)
+
         self.hotkeys_label = Label(
             main,
-            text=self.get_string('hotkeys_info'),
+            text="F2 - скриншот окна | F3 - область | F1 - оверлей | F4 - удалить все | ESC - закрыть оверлей",
             bg='#1e1e1e',
             fg='#888',
             font=("Arial", 10),
@@ -1260,6 +1316,7 @@ class ScreenshotTranslatorApp:
             justify='left'
         )
         self.hotkeys_label.pack(pady=(15, 5), fill=X)
+
         self.root.update_idletasks()
         w = self.root.winfo_width()
         h = self.root.winfo_height()
@@ -1427,6 +1484,13 @@ class ScreenshotTranslatorApp:
         if self.translating or not self.ready or self.initializing:
             return
 
+        # === УДАЛЯЕМ ВСЕ ОВЕРЛЕИ ПЕРЕД СОЗДАНИЕМ НОВОГО (ТОЛЬКО ДЛЯ F2) ===
+        if self.overlay_manager and self.overlay_manager.overlays:
+            count = len(self.overlay_manager.overlays)
+            self.logger.info(f"[DEBUG] F2: удаляем {count} старых оверлеев перед созданием нового")
+            self.overlay_manager.close_all()
+            self.logger.info(f"[DEBUG] Старые оверлеи удалены")
+
         self.btn_capture.config(state=DISABLED, bg='#333')
         self.translating = True
 
@@ -1436,7 +1500,6 @@ class ScreenshotTranslatorApp:
             current_hwnd = win32gui.GetForegroundWindow()
             if current_hwnd:
                 self.screenshot._last_hwnd = current_hwnd
-                # Сохраняем флаг полноэкранности в МОМЕНТ нажатия F2
                 self.screenshot._is_fullscreen = self.screenshot.is_window_fullscreen(current_hwnd)
                 self.logger.info(
                     f"[DEBUG] Сохранен HWND активного окна для скриншота: {current_hwnd}, полноэкранный: {self.screenshot._is_fullscreen}")
