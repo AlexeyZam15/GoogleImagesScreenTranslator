@@ -49,7 +49,9 @@ class AreaSelector:
         self.root = tk.Toplevel()
         self.root.attributes('-fullscreen', True)
         self.root.attributes('-alpha', self.selection_alpha)
-        self.root.attributes('-topmost', True)
+        # ВАЖНО: НЕ используем -topmost для окна выделения области,
+        # чтобы оверлей перевода мог быть поверх него
+        # self.root.attributes('-topmost', True)  # УБРАНО!
         self.root.focus_force()
         self.root.configure(bg='gray')
 

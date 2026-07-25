@@ -5,6 +5,9 @@
 import tkinter as tk
 from tkinter import ttk
 import time
+import win32gui
+import win32con
+import win32api
 
 
 class TranslationOverlay:
@@ -20,10 +23,32 @@ class TranslationOverlay:
         self._status_text = "Перевод..."
         self._close_after = None
 
+    def _ensure_topmost(self):
+        """Гарантирует, что оверлей находится поверх всех окон"""
+        try:
+            if not self.root or not self.root.winfo_exists():
+                return
+
+            self.root.lift()
+            self.root.attributes('-topmost', True)
+
+            try:
+                hwnd = int(self.root.winfo_id())
+                win32gui.SetWindowPos(
+                    hwnd,
+                    win32con.HWND_TOPMOST,
+                    0, 0, 0, 0,
+                    win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE | win32con.SWP_SHOWWINDOW
+                )
+            except:
+                pass
+
+        except Exception as e:
+            print(f"[DEBUG] _ensure_topmost ошибка: {e}")
+
     def show(self, text="Перевод..."):
         """Показывает оверлей с индикатором"""
         try:
-            # Если уже виден, не создаем новый
             if self.visible:
                 print(f"[DEBUG] Оверлей уже виден")
                 return
@@ -32,7 +57,6 @@ class TranslationOverlay:
             self._status_text = text
             self.visible = True
 
-            # Создаем окно в главном потоке
             self._create_window()
             print(f"[DEBUG] TranslationOverlay.show() - окно создано")
 
@@ -48,9 +72,7 @@ class TranslationOverlay:
             print(f"[DEBUG] _create_window() - начат")
             print(f"[DEBUG] self.parent = {self.parent}")
 
-            # Ищем родительское окно
             if not self.parent:
-                # Пытаемся найти главное окно
                 root = tk._default_root
                 if root:
                     self.parent = root
@@ -59,12 +81,8 @@ class TranslationOverlay:
                     print(f"[DEBUG] Нет корневого Tk, создаем новый Tk")
                     self.parent = tk.Tk()
 
-            # Проверяем, существует ли родитель
             if self.parent:
                 print(f"[DEBUG] Родитель существует: {self.parent}")
-                print(
-                    f"[DEBUG] Родитель видим: {self.parent.winfo_ismapped() if hasattr(self.parent, 'winfo_ismapped') else 'unknown'}")
-                # Создаем Toplevel от родителя
                 self.root = tk.Toplevel(self.parent)
                 print(f"[DEBUG] Toplevel создан от родителя")
             else:
@@ -76,13 +94,10 @@ class TranslationOverlay:
             self.root.overrideredirect(True)
             self.root.attributes('-topmost', True)
             self.root.attributes('-alpha', 0.95)
-            # Делаем окно недоступным для взаимодействия (клики не проходят, фокус не забирается)
             self.root.attributes('-disabled', True)
-            # Делаем окно инструментальным (без кнопок в панели задач)
             self.root.attributes('-toolwindow', True)
             self.root.configure(bg='#1e1e1e')
 
-            # Обработчик закрытия окна
             self.root.protocol("WM_DELETE_WINDOW", self.hide)
 
             width = 350
@@ -93,18 +108,15 @@ class TranslationOverlay:
             y = (screen_height - height) // 2
             self.root.geometry(f"{width}x{height}+{x}+{y}")
 
-            # Принудительно показываем окно
             self.root.deiconify()
             self.root.lift()
-            # Не вызываем focus_force, чтобы не забирать фокус
+            self._ensure_topmost()
 
             print(f"[DEBUG] Окно настроено: {width}x{height}+{x}+{y}")
 
             main = tk.Frame(self.root, bg='#1e1e1e', bd=2, relief=tk.RAISED)
             main.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
-            # Отключаем фокус для фрейма
             main.config(takefocus=False)
-            # Блокируем клики, чтобы они не передавались в окно
             main.bind('<Button-1>', lambda e: "break")
             main.bind('<ButtonRelease-1>', lambda e: "break")
 
@@ -116,14 +128,12 @@ class TranslationOverlay:
                 font=('Segoe UI', 14, 'bold')
             )
             self.status_label.pack(pady=(15, 10))
-            # Отключаем фокус для label
             self.status_label.config(takefocus=False)
             self.status_label.bind('<Button-1>', lambda e: "break")
             self.status_label.bind('<ButtonRelease-1>', lambda e: "break")
 
             progress_frame = tk.Frame(main, bg='#1e1e1e')
             progress_frame.pack(fill=tk.X, padx=20, pady=(5, 15))
-            # Отключаем фокус для фрейма прогресса
             progress_frame.config(takefocus=False)
             progress_frame.bind('<Button-1>', lambda e: "break")
             progress_frame.bind('<ButtonRelease-1>', lambda e: "break")
@@ -135,7 +145,6 @@ class TranslationOverlay:
                 style='green.Horizontal.TProgressbar'
             )
             self.progress.pack()
-            # Отключаем фокус для прогрессбара
             self.progress.config(takefocus=False)
             self.progress.bind('<Button-1>', lambda e: "break")
             self.progress.bind('<ButtonRelease-1>', lambda e: "break")
@@ -151,18 +160,13 @@ class TranslationOverlay:
                 darkcolor='#4CAF50'
             )
 
-            # Запускаем анимацию
             self.progress.start(10)
-
-            # Запускаем обновление статуса
             self._update_status_animation()
 
             self.root.bind('<Escape>', self._on_escape)
-            # Блокируем клики по корневому окну
             self.root.bind('<Button-1>', lambda e: "break")
             self.root.bind('<ButtonRelease-1>', lambda e: "break")
 
-            # Принудительно обновляем
             self.root.update_idletasks()
             self.root.update()
 
@@ -182,7 +186,6 @@ class TranslationOverlay:
             return
 
         try:
-            # Меняем количество точек для имитации работы
             dots_count = (int(time.time() * 1.5) % 4)
             dots = '.' * dots_count
             spaces = ' ' * (3 - dots_count)
@@ -191,7 +194,6 @@ class TranslationOverlay:
             if self.status_label and self.root.winfo_exists():
                 self.status_label.config(text=status_text)
 
-            # Планируем следующее обновление
             if self.visible and not self._stop_animation and self.root:
                 if self.root.winfo_exists():
                     self.root.after(300, self._update_status_animation)
@@ -224,7 +226,6 @@ class TranslationOverlay:
             return
 
         try:
-            # Проверяем, существует ли окно
             if not self.root.winfo_exists():
                 print("[DEBUG] Окно уже закрыто, пропускаем")
                 self.visible = False
@@ -241,12 +242,10 @@ class TranslationOverlay:
             if self.status_label:
                 self.status_label.config(text="✅ Готово!")
 
-            # Обновляем UI перед закрытием
             self.root.update_idletasks()
-
+            self._ensure_topmost()
             print(f"[DEBUG] Прогресс установлен на 100%")
 
-            # Закрываем окно через 1 секунду
             if self.root and self.root.winfo_exists():
                 self.root.after(1000, self._close_window)
 
@@ -262,7 +261,6 @@ class TranslationOverlay:
 
             if self.root and self.root.winfo_exists():
                 print("[DEBUG] Закрытие окна прогресса...")
-                # Просто уничтожаем окно (без quit, так как это Toplevel)
                 self.root.destroy()
                 print("[DEBUG] Окно прогресса закрыто")
 
