@@ -6,9 +6,9 @@
 
 import logging
 import tempfile
-import time  # <--- ДОБАВИТЬ ЭТУ СТРОКУ
+import time
 from pathlib import Path
-from typing import Optional  # <--- ДОБАВИТЬ ЭТУ СТРОКУ
+from typing import Optional
 from PIL import Image, ImageTk
 import tkinter as tk
 import keyboard
@@ -24,12 +24,12 @@ class OverlayWindow:
         self.logger = logging.getLogger(__name__)
         self.logger.info("Инициализация OverlayWindow")
         self.visible = False
-        # ИСПРАВЛЕНО: используем безопасную временную папку
         from src.utils import ensure_app_temp_dir
         self.temp_dir = ensure_app_temp_dir()
         self.tk_image = None
         self._target_rect = None
-        self._esc_hook_active = False
+        self._esc_hook_active = False  # Больше не используется напрямую
+        self._use_manager_esc = False  # Флаг использования менеджера для ESC
         self._images = []
         self._last_image_path = None
         self._last_window_rect = None
@@ -44,11 +44,12 @@ class OverlayWindow:
         self._fullscreen_restore_needed = False
         self._show_time = 0
         self.auto_hide_enabled = auto_hide_enabled
+        self._image_loaded = False
 
         self._overlay_active = False
         self._last_active_hwnd = None
         self._monitor_initialized = False
-        self._monitor_stable_time = 0  # Время стабилизации монитора
+        self._monitor_stable_time = 0
 
         self.root = tk.Toplevel(parent) if parent else tk.Toplevel()
         self.root.title("Перевод")
@@ -69,9 +70,37 @@ class OverlayWindow:
         self.root.bind('<B1-Motion>', self._on_drag)
         self.root.bind('<ButtonRelease-1>', self._stop_drag)
 
-        self.root.bind('<Escape>', self._on_escape)
+        # НЕ привязываем ESC на уровне оверлея - используем менеджер
+        # self.root.bind('<Escape>', self._on_escape)
 
         self.logger.info("OverlayWindow инициализирован")
+
+    def reset(self):
+        """Полностью сбрасывает состояние оверлея"""
+        self.logger.info("[DEBUG] reset() - сброс состояния оверлея")
+
+        # Скрываем оверлей
+        if self.visible:
+            self.hide()
+
+        # Сбрасываем все сохраненные данные
+        self._last_image_path = None
+        self._last_window_rect = None
+        self._target_hwnd = None
+        self._is_fullscreen_target = False
+        self._is_visible_by_user = False
+        self.visible = False
+        self._show_time = 0
+
+        # Останавливаем монитор
+        self._stop_visibility_monitor()
+        self._disable_esc_hook()
+
+        # Очищаем изображения
+        self._images.clear()
+        self.tk_image = None
+
+        self.logger.info("[DEBUG] reset() - состояние оверлея сброшено")
 
     def get_overlay_hwnd(self) -> Optional[int]:
         """Возвращает HWND окна оверлея"""
@@ -86,14 +115,38 @@ class OverlayWindow:
         self.logger.info(f"_load_and_show_image: {image_path}")
 
         try:
-            import time
-            import win32gui
-            import win32con
-            import win32api
-
             x1, y1, x2, y2 = window_rect
-            win_width = x2 - x1
+
+            # Для окон с отрицательными координатами используем x1 = 0
+            if x1 < 0:
+                pos_x = 0
+                win_width = x2
+            else:
+                pos_x = x1
+                win_width = x2 - x1
+
             win_height = y2 - y1
+
+            self.logger.info(f"Исходный rect: ({x1},{y1})-({x2},{y2})")
+            self.logger.info(f"Оверлей: позиция ({pos_x}, {y1}), размер {win_width}x{win_height}")
+
+            # ПРОВЕРЯЕМ, ЕСТЬ ЛИ СОХРАНЕННАЯ ПОЗИЦИЯ
+            saved_x = None
+            saved_y = None
+            if hasattr(self, '_overlay_manager') and self._overlay_manager:
+                overlay_id = str(image_path)
+                positions = self._overlay_manager._load_overlay_positions()
+                if overlay_id in positions:
+                    saved_x = positions[overlay_id].get('x')
+                    saved_y = positions[overlay_id].get('y')
+                    if saved_x is not None and saved_y is not None:
+                        self.logger.info(
+                            f"[DEBUG] Найдена сохраненная позиция для оверлея {overlay_id}: ({saved_x}, {saved_y})")
+
+            # Если есть сохраненная позиция, используем её
+            if saved_x is not None and saved_y is not None:
+                pos_x = saved_x
+                y1 = saved_y
 
             img = Image.open(image_path)
 
@@ -111,19 +164,9 @@ class OverlayWindow:
             self._images.append(photo)
             self.tk_image = photo
 
-            # Определяем позицию оверлея
-            if self._is_fullscreen_target:
-                pos_x, pos_y = 0, 0
-                self.logger.info(f"Полноэкранный режим: позиция (0, 0)")
-            else:
-                pos_x, pos_y = x1, y1
-                self.logger.info(f"Обычный режим: позиция ({pos_x}, {pos_y})")
+            self.root.geometry(f"{win_width}x{win_height}+{pos_x}+{y1}")
 
-            self.root.geometry(f"{win_width}x{win_height}+{pos_x}+{pos_y}")
-
-            # Всегда поверх всех окон, даже если игра свернулась
             self.root.attributes('-topmost', True)
-            # Не сворачиваться вместе с игрой
             self.root.attributes('-toolwindow', True)
 
             self.canvas.delete("all")
@@ -138,27 +181,20 @@ class OverlayWindow:
             self._show_time = time.time()
             self._monitor_stable_time = time.time() + 2.0
 
-            # Показываем окно
             self.root.deiconify()
             self.root.lift()
 
-            # Получаем HWND оверлея
             overlay_hwnd = int(self.root.winfo_id())
             self.logger.info(f"[DEBUG] HWND оверлея: {overlay_hwnd}")
 
-            # Устанавливаем расширенные стили окна
             try:
                 ex_style = win32gui.GetWindowLong(overlay_hwnd, win32con.GWL_EXSTYLE)
-                # WS_EX_NOACTIVATE (0x08000000) - не активируется
-                # WS_EX_TOPMOST (0x00000008) - поверх всех окон
-                # WS_EX_TOOLWINDOW (0x00000080) - не отображается в панели задач
                 new_ex_style = ex_style | 0x08000000 | win32con.WS_EX_TOPMOST | 0x00000080
                 win32gui.SetWindowLong(overlay_hwnd, win32con.GWL_EXSTYLE, new_ex_style)
                 self.logger.info(f"[DEBUG] Установлены стили WS_EX_NOACTIVATE и WS_EX_TOPMOST")
             except Exception as e:
                 self.logger.warning(f"[DEBUG] Не удалось установить стили: {e}")
 
-            # Показываем окно без активации
             try:
                 win32gui.ShowWindow(overlay_hwnd, win32con.SW_SHOWNOACTIVATE)
                 win32gui.SetWindowPos(
@@ -175,16 +211,13 @@ class OverlayWindow:
                 except:
                     pass
 
-            # Блокируем активацию через Tkinter
             def on_focus_in(event):
                 self.logger.info("[DEBUG] Оверлей пытается получить фокус - блокируем")
                 return "break"
 
             def block_activate(event):
-                # Просто блокируем событие, не возвращаем фокус игре
                 return "break"
 
-            # Привязываем обработчики для блокировки фокуса
             self.root.bind('<FocusIn>', on_focus_in, add=True)
             self.canvas.bind('<FocusIn>', on_focus_in, add=True)
             self.root.bind('<Button-1>', block_activate, add=True)
@@ -196,23 +229,24 @@ class OverlayWindow:
 
             self.logger.info(f"_load_and_show_image: auto_hide_enabled={self.auto_hide_enabled}")
 
-            # Сбрасываем состояние монитора
             self._monitor_initialized = False
             self._last_active_hwnd = None
 
-            # Запускаем монитор, но он НЕ будет скрывать оверлей для полноэкранных приложений
             if self.auto_hide_enabled:
                 self.logger.info("Запуск монитора видимости с задержкой 1500мс")
                 self.root.after(1500, self._start_visibility_monitor_delayed)
             else:
                 self.logger.info("Автоскрытие отключено, монитор не запущен")
 
+            # Устанавливаем флаг УСПЕШНОЙ загрузки ПОСЛЕ того как окно полностью показано
+            self._image_loaded = True
             self.logger.info(f"Изображение загружено и показано: {win_width}x{win_height}")
 
         except Exception as e:
             self.logger.error(f"Ошибка загрузки изображения: {e}")
             import traceback
             traceback.print_exc()
+            self._image_loaded = False
 
     def _start_visibility_monitor_delayed(self):
         """Запускает монитор видимости с задержкой"""
@@ -303,15 +337,16 @@ class OverlayWindow:
         if not self.auto_hide_enabled or not self._is_visible_by_user:
             return
 
+        # ЕСЛИ ИДЕТ ПЕРЕТАСКИВАНИЕ ЛЮБОГО ОВЕРЛЕЯ - НЕ СКРЫВАЕМ НИ ОДИН ОВЕРЛЕЙ
+        if hasattr(self, '_overlay_manager') and self._overlay_manager:
+            if self._overlay_manager.is_dragging():
+                return
+
         # Защита от быстрых изменений после показа
-        import time
         if time.time() < self._monitor_stable_time:
             return
 
         try:
-            import win32gui
-            import win32process
-
             active_hwnd = win32gui.GetForegroundWindow()
 
             # Игнорируем переходные состояния
@@ -326,20 +361,6 @@ class OverlayWindow:
             except:
                 pass
 
-            # Проверяем, не является ли активное окно нашим оверлеем
-            overlay_hwnd = None
-            if hasattr(self, 'root') and self.root.winfo_exists():
-                try:
-                    overlay_hwnd = int(self.root.winfo_id())
-                except:
-                    pass
-
-            # ЕСЛИ АКТИВНОЕ ОКНО - ОВЕРЛЕЙ, НИЧЕГО НЕ ДЕЛАЕМ
-            if overlay_hwnd is not None and active_hwnd == overlay_hwnd:
-                self._last_active_hwnd = active_hwnd
-                self.logger.info(f"[DEBUG] Активное окно - оверлей, пропускаем проверку")
-                return
-
             # Если активное окно не изменилось - ничего не делаем
             if active_hwnd == self._last_active_hwnd:
                 return
@@ -347,7 +368,61 @@ class OverlayWindow:
             self._last_active_hwnd = active_hwnd
             self.logger.info(f"[DEBUG] Активное окно изменилось на HWND={active_hwnd}")
 
-            # Проверяем, является ли новое окно нашим (целевым, оверлеем или главным окном)
+            # ========== НАДЕЖНАЯ ПРОВЕРКА НА ОКНО ВЫДЕЛЕНИЯ ОБЛАСТИ ==========
+            is_selection_window = False
+
+            # 1. Проверяем через глобальный флаг в приложении
+            if hasattr(self, '_overlay_manager') and self._overlay_manager:
+                parent = self._overlay_manager.parent
+                if hasattr(parent, '_capture_mode') and parent._capture_mode:
+                    is_selection_window = True
+                    self.logger.info("[DEBUG] Обнаружено окно выделения области по флагу _capture_mode")
+
+            # 2. Проверяем через окно выделения области напрямую
+            if not is_selection_window:
+                if hasattr(self, '_overlay_manager') and self._overlay_manager:
+                    parent = self._overlay_manager.parent
+                    if hasattr(parent, '_area_selector') and parent._area_selector:
+                        try:
+                            selector_root = parent._area_selector.root
+                            if selector_root and selector_root.winfo_exists():
+                                selector_hwnd = int(selector_root.winfo_id())
+                                if selector_hwnd == active_hwnd:
+                                    is_selection_window = True
+                                    self.logger.info("[DEBUG] Обнаружено окно выделения области по HWND")
+                        except Exception as e:
+                            self.logger.debug(f"[DEBUG] Ошибка проверки HWND селектора: {e}")
+
+            # 3. Проверяем, является ли окно полноэкранным Toplevel с текстом "Выделите область"
+            if not is_selection_window:
+                try:
+                    window_text = win32gui.GetWindowText(active_hwnd)
+                    if window_text and "Выделите область" in window_text:
+                        is_selection_window = True
+                        self.logger.info("[DEBUG] Обнаружено окно выделения области по тексту")
+                except:
+                    pass
+
+            # 4. Проверяем по классу окна - Toplevel в полноэкранном режиме
+            if not is_selection_window:
+                try:
+                    class_name = win32gui.GetClassName(active_hwnd)
+                    if class_name == "TkTopLevel":
+                        rect = win32gui.GetWindowRect(active_hwnd)
+                        screen_width = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
+                        screen_height = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
+                        if rect[2] - rect[0] >= screen_width - 10 and rect[3] - rect[1] >= screen_height - 10:
+                            is_selection_window = True
+                            self.logger.info("[DEBUG] Обнаружено полноэкранное Toplevel - вероятно окно выделения")
+                except:
+                    pass
+
+            if is_selection_window:
+                self.logger.info("[DEBUG] Активное окно является окном выделения области - НЕ СКРЫВАЕМ оверлей")
+                return
+            # ========== КОНЕЦ ПРОВЕРКИ ==========
+
+            # Проверяем, является ли активное окно нашим (целевым или главным окном)
             app_hwnd = None
             try:
                 if hasattr(self.root, 'master'):
@@ -357,11 +432,24 @@ class OverlayWindow:
             except:
                 pass
 
-            is_our_window = (
-                    active_hwnd == self._target_hwnd or
-                    (overlay_hwnd is not None and active_hwnd == overlay_hwnd) or
-                    (app_hwnd is not None and active_hwnd == app_hwnd)
-            )
+            # Проверяем, является ли активное окно целевым для ЛЮБОГО оверлея
+            is_our_window = False
+
+            # Проверяем через overlay_manager - является ли активное окно целевым для любого оверлея
+            if hasattr(self, '_overlay_manager') and self._overlay_manager:
+                for overlay in self._overlay_manager.overlays:
+                    if overlay is not None:
+                        target_hwnd = overlay.get_target_hwnd()
+                        if target_hwnd is not None and active_hwnd == target_hwnd:
+                            is_our_window = True
+                            break
+
+            # Если не нашли через overlay_manager, проверяем напрямую
+            if not is_our_window:
+                is_our_window = (
+                        active_hwnd == self._target_hwnd or
+                        (app_hwnd is not None and active_hwnd == app_hwnd)
+                )
 
             self.logger.info(f"[DEBUG] is_our_window={is_our_window}, visible={self.visible}")
 
@@ -369,8 +457,10 @@ class OverlayWindow:
                 self.logger.info("[DEBUG] Переключились на другое окно - скрываем оверлей")
                 self._hide_internal()
             elif is_our_window and not self.visible and self._is_visible_by_user:
-                self.logger.info("[DEBUG] Переключились на наше окно - показываем оверлей")
-                self._show_internal()
+                # Используем синхронный показ через менеджер, чтобы избежать мигания
+                self.logger.info("[DEBUG] Переключились на наше окно - запрос синхронного показа")
+                if hasattr(self, '_overlay_manager') and self._overlay_manager:
+                    self._overlay_manager.show_all_sync()
 
         except Exception as e:
             self.logger.warning(f"Ошибка в _check_and_update_visibility: {e}")
@@ -472,20 +562,52 @@ class OverlayWindow:
 
     def _show_internal(self):
         self.logger.info(
-            f"[DEBUG][_show_internal] НАЧАЛО: visible={self.visible}, _last_image_path={self._last_image_path is not None}")
+            f"[DEBUG][_show_internal] НАЧАЛО: visible={self.visible}, _image_loaded={self._image_loaded}, _last_image_path={self._last_image_path is not None}")
+
         if not self._last_image_path or not self._last_window_rect:
             self.logger.warning("[DEBUG][_show_internal] нет сохраненного изображения или rect")
             return
-        self.logger.info(f"[DEBUG][_show_internal] показываем оверлей, image={self._last_image_path}")
+
+        # ЕСЛИ ОВЕРЛЕЙ УЖЕ ВИДЕН - НИЧЕГО НЕ ДЕЛАЕМ
+        if self.visible:
+            self.logger.info("[DEBUG][_show_internal] оверлей уже виден, пропускаем")
+            return
+
+        # ЕСЛИ ИЗОБРАЖЕНИЕ УЖЕ ЗАГРУЖЕНО - ПРОСТО ПОКАЗЫВАЕМ ОКНО, НЕ ПЕРЕЗАГРУЖАЕМ
+        if self._image_loaded and self.tk_image is not None:
+            self.logger.info("[DEBUG][_show_internal] изображение уже загружено, просто показываем окно")
+            try:
+                self.root.deiconify()
+                self.root.lift()
+                self.visible = True
+                # Обновляем позицию если нужно
+                if self._saved_position:
+                    x, y = self._saved_position
+                    current_x = self.root.winfo_x()
+                    current_y = self.root.winfo_y()
+                    if abs(current_x - x) > 5 or abs(current_y - y) > 5:
+                        self.root.geometry(f"+{x}+{y}")
+                # Включаем хук ESC
+                self._enable_esc_hook()
+                return
+            except Exception as e:
+                self.logger.warning(f"[DEBUG][_show_internal] ошибка при показе: {e}")
+                # Если не удалось показать - перезагружаем
+
+        # Если изображение не загружено - загружаем
+        self.logger.info(f"[DEBUG][_show_internal] загружаем изображение: {self._last_image_path}")
         self._load_and_show_image(self._last_image_path, self._last_window_rect)
+        self._image_loaded = True
 
     def hide(self):
+        """Скрывает оверлей."""
         self.logger.info(
             f"[DEBUG][hide] НАЧАЛО: visible={self.visible}, _is_visible_by_user={self._is_visible_by_user}")
         self._is_visible_by_user = False
         self._stop_visibility_monitor()
         self.visible = False
         self._disable_esc_hook()
+        # НЕ СБРАСЫВАЕМ _image_loaded, чтобы при повторном показе не перезагружать
 
         try:
             self.root.withdraw()
@@ -501,10 +623,12 @@ class OverlayWindow:
         if self.visible:
             self.logger.info("[DEBUG][toggle] оверлей виден -> скрываем")
             self.hide()
+            # При скрытии НЕ сбрасываем _is_visible_by_user
         else:
             self.logger.info("[DEBUG][toggle] оверлей скрыт -> показываем")
+            # Устанавливаем флаг, что пользователь хочет видеть оверлей
+            self._is_visible_by_user = True
             if self._last_image_path and self._last_window_rect:
-                self._is_visible_by_user = True
                 self.logger.info(
                     f"[DEBUG][toggle] показываем оверлей с сохраненным изображением: {self._last_image_path}")
                 self._load_and_show_image(self._last_image_path, self._last_window_rect)
@@ -597,6 +721,11 @@ class OverlayWindow:
 
     def _start_drag(self, event):
         """Начинает перетаскивание окна"""
+        # Если оверлей не должен быть виден - не разрешаем перетаскивание
+        if not self._is_visible_by_user or not self.visible:
+            self.logger.info("[DEBUG] _start_drag - оверлей скрыт, перетаскивание запрещено")
+            return "break"
+
         if self._drag_stop_timer:
             try:
                 self.root.after_cancel(self._drag_stop_timer)
@@ -607,7 +736,11 @@ class OverlayWindow:
         self._is_dragging = True
         self._drag_data["x"] = event.x
         self._drag_data["y"] = event.y
-        self.logger.debug("Начало перетаскивания")
+        self.logger.info("[DEBUG] Начало перетаскивания, флаг _is_dragging=True")
+
+        # Устанавливаем глобальный флаг через менеджер СРАЗУ
+        if hasattr(self, '_overlay_manager') and self._overlay_manager:
+            self._overlay_manager.set_dragging(True)
 
     def _on_drag(self, event):
         """Перемещает окно во время перетаскивания"""
@@ -624,24 +757,55 @@ class OverlayWindow:
         self._is_dragging = False
         self._drag_data["x"] = 0
         self._drag_data["y"] = 0
+        self.logger.info("[DEBUG] Конец перетаскивания, флаг _is_dragging=False")
 
-        # Не проверяем активное окно - это вызывает проблемы
-        # Просто возвращаем фокус целевому окну, если оно есть
-        if self._target_hwnd:
+        # Сохраняем позицию оверлея
+        try:
+            if self.root and self.root.winfo_exists():
+                x = self.root.winfo_x()
+                y = self.root.winfo_y()
+                if self._last_image_path:
+                    overlay_id = str(self._last_image_path)
+                    if hasattr(self, '_overlay_manager') and self._overlay_manager:
+                        self._overlay_manager._save_overlay_position(overlay_id, x, y)
+                        self.logger.info(f"[DEBUG] Сохранена позиция оверлея: {overlay_id} -> ({x}, {y})")
+        except Exception as e:
+            self.logger.warning(f"[DEBUG] Не удалось сохранить позицию оверлея: {e}")
+
+        # ВОЗВРАЩАЕМ ФОКУС НА ЦЕЛЕВОЕ ОКНО ТОЛЬКО ЕСЛИ ОВЕРЛЕЙ ВИДЕН
+        if self._target_hwnd and self._is_visible_by_user and self.visible:
             try:
                 import win32gui
-                # Проверяем, не является ли активное окно нашим оверлеем
-                active_hwnd = win32gui.GetForegroundWindow()
-                overlay_hwnd = None
-                if self.root and self.root.winfo_exists():
-                    overlay_hwnd = int(self.root.winfo_id())
-
-                # Если активное окно - оверлей, возвращаем фокус целевому окну
-                if overlay_hwnd is not None and active_hwnd == overlay_hwnd:
-                    self.logger.info(f"[DEBUG] Активное окно - оверлей, возвращаем фокус целевому: {self._target_hwnd}")
-                    win32gui.SetForegroundWindow(self._target_hwnd)
+                win32gui.SetForegroundWindow(self._target_hwnd)
+                self.logger.info(f"[DEBUG] Возвращаем фокус на целевое окно: {self._target_hwnd}")
             except Exception as e:
                 self.logger.info(f"[DEBUG] Ошибка при возврате фокуса: {e}")
+
+        # Сбрасываем глобальный флаг ТОЛЬКО после проверки, что активное окно - целевое
+        def reset_dragging_flag():
+            if hasattr(self, '_overlay_manager') and self._overlay_manager:
+                try:
+                    import win32gui
+                    active_hwnd = win32gui.GetForegroundWindow()
+                    # Проверяем, вернулся ли фокус на целевое окно
+                    if active_hwnd == self._target_hwnd:
+                        self._overlay_manager.set_dragging(False)
+                        self.logger.info("[DEBUG] Глобальный флаг перетаскивания сброшен (фокус на целевом окне)")
+                    else:
+                        # Если фокус не на целевом окне - пробуем еще раз через 200мс
+                        self.logger.info(
+                            f"[DEBUG] Фокус на {active_hwnd}, а не на целевом {self._target_hwnd}, пробуем снова")
+                        if self.root and self.root.winfo_exists():
+                            self.root.after(200, reset_dragging_flag)
+                except Exception as e:
+                    self.logger.warning(f"[DEBUG] Ошибка при проверке фокуса: {e}")
+                    # В случае ошибки все равно сбрасываем флаг
+                    self._overlay_manager.set_dragging(False)
+
+        # Запускаем проверку с задержкой 300мс
+        if hasattr(self, '_overlay_manager') and self._overlay_manager:
+            if self.root and self.root.winfo_exists():
+                self.root.after(300, reset_dragging_flag)
 
         if self.root and self.root.winfo_exists():
             if self._drag_stop_timer:
@@ -709,6 +873,7 @@ class OverlayWindow:
         if not enabled:
             self._stop_visibility_monitor()
             self.logger.info("Автоскрытие отключено, монитор остановлен")
+            # Убедимся, что оверлей показан, если он должен быть виден
             if not self.visible and self._is_visible_by_user and self._last_image_path and self._last_window_rect:
                 self.logger.info("Автоскрытие отключено, показываем оверлей")
                 self._load_and_show_image(self._last_image_path, self._last_window_rect)
@@ -725,16 +890,31 @@ class OverlayWindow:
                 pass
 
     def show(self):
-        self.logger.info("show() вызван")
-        if self._last_image_path and self._last_window_rect:
-            self._is_visible_by_user = True
-            self.logger.info(f"Повторный показ: {self._last_image_path}")
-            self._load_and_show_image(self._last_image_path, self._last_window_rect)
-        else:
-            self.logger.warning("Нет сохраненного изображения для показа")
+        """Показывает оверлей."""
+        self.logger.info("[DEBUG] show() вызван")
+        if not self._last_image_path or not self._last_window_rect:
+            self.logger.warning("[DEBUG] show() - нет сохраненного изображения или rect")
+            return
+
+        if self.visible:
+            self.logger.info("[DEBUG] show() - оверлей уже виден")
+            return
+
+        self._is_visible_by_user = True
+        self.logger.info(f"[DEBUG] show() - показываем оверлей с сохраненным изображением: {self._last_image_path}")
+        self._load_and_show_image(self._last_image_path, self._last_window_rect)
 
     def _on_escape(self, event):
-        self.hide()
+        self.logger.info("[DEBUG][_on_escape] ESC нажат")
+        # Скрываем оверлей, но НЕ сбрасываем _is_visible_by_user
+        self._stop_visibility_monitor()
+        self.visible = False
+        self._disable_esc_hook()
+        try:
+            self.root.withdraw()
+            self.logger.info("[DEBUG][_on_escape] оверлей скрыт")
+        except Exception as e:
+            self.logger.error(f"[DEBUG][_on_escape] ОШИБКА: {e}")
         self.restore_target_window_focus()
         return "break"
 
@@ -746,13 +926,20 @@ class OverlayWindow:
         return True
 
     def _enable_esc_hook(self):
-        if not self._esc_hook_active:
-            try:
-                keyboard.on_press_key('esc', self._global_esc_handler)
-                self._esc_hook_active = True
-                self.logger.info("Глобальный хук ESC включен")
-            except Exception as e:
-                self.logger.warning(f"Не удалось включить глобальный хук ESC: {e}")
+        """Включает хук ESC через менеджер."""
+        if hasattr(self, '_overlay_manager') and self._overlay_manager:
+            # Менеджер сам управляет ESC
+            self._use_manager_esc = True
+            self.logger.info("ESC управляется через OverlayManager")
+        else:
+            # Fallback - включаем свой хук
+            if not self._esc_hook_active:
+                try:
+                    keyboard.on_press_key('esc', self._global_esc_handler)
+                    self._esc_hook_active = True
+                    self.logger.info("Глобальный хук ESC включен (fallback)")
+                except Exception as e:
+                    self.logger.warning(f"Не удалось включить глобальный хук ESC: {e}")
 
     def _disable_esc_hook(self):
         if self._esc_hook_active:

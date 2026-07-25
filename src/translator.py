@@ -236,6 +236,7 @@ class GoogleTranslateDebug:
         import shutil
         import tempfile
         from src.utils import get_safe_temp_dir
+        import time
 
         self.logger.info("Запуск Playwright...")
         self._pw = sync_playwright().start()
@@ -265,10 +266,12 @@ class GoogleTranslateDebug:
 
         self.logger.info(f"Используется браузер: {browser_path}")
 
-        # ИСПРАВЛЕНО: используем безопасную временную папку ВСЕГДА
+        # ИСПРАВЛЕНО: используем уникальную папку профиля с временной меткой
         safe_temp_dir = get_safe_temp_dir()
-        profile_dir = safe_temp_dir / "google_translate_profile"
+        timestamp = int(time.time() * 1000)
+        profile_dir = safe_temp_dir / f"google_translate_profile_{timestamp}"
 
+        # Убеждаемся что папка пустая
         if profile_dir.exists():
             try:
                 shutil.rmtree(profile_dir)
@@ -329,8 +332,19 @@ class GoogleTranslateDebug:
                 except Exception as e2:
                     self.logger.error(f"Повторная ошибка при открытии: {e2}")
                     raise
+
+            # Сохраняем путь к папке профиля для последующей очистки
+            self._profile_dir = profile_dir
+
         except Exception as e:
             self.logger.error(f"Ошибка запуска браузера: {e}")
+            # Пытаемся очистить папку профиля при ошибке
+            try:
+                if profile_dir.exists():
+                    shutil.rmtree(profile_dir, ignore_errors=True)
+                    self.logger.info("🧹 Папка профиля удалена после ошибки")
+            except:
+                pass
             raise
 
     def _reset_pages_fast(self):
@@ -475,7 +489,12 @@ class GoogleTranslateDebug:
             return None
 
     def close_browser(self):
-        """Закрывает браузер и все вкладки"""
+        """Закрывает браузер и все вкладки, удаляет папку профиля"""
+        import shutil
+
+        # Сохраняем путь к папке профиля до закрытия контекста
+        profile_dir = getattr(self, '_profile_dir', None)
+
         try:
             if self._context:
                 try:
@@ -497,6 +516,7 @@ class GoogleTranslateDebug:
                     self.logger.error(f"Ошибка при закрытии контекста: {e}")
                 self._context = None
                 self._page = None
+
             if self._pw:
                 try:
                     self._pw.stop()
@@ -504,6 +524,15 @@ class GoogleTranslateDebug:
                 except Exception as e:
                     self.logger.error(f"Ошибка при остановке Playwright: {e}")
                 self._pw = None
+
+            # Удаляем папку профиля после закрытия
+            if profile_dir and profile_dir.exists():
+                try:
+                    shutil.rmtree(profile_dir, ignore_errors=True)
+                    self.logger.info(f"🧹 Папка профиля удалена: {profile_dir}")
+                except Exception as e:
+                    self.logger.warning(f"Не удалось удалить папку профиля: {e}")
+
         except Exception as e:
             self.logger.error(f"Ошибка при закрытии браузера: {e}")
 

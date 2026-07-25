@@ -13,6 +13,7 @@ def get_russian_main_strings():
         'starting': "● Запуск...",
         'starting_browser': "● Запуск браузера...",
         'capturing': "● Захват...",
+        'capturing_area': "● Захват области...",
         'capture_error': "● Ошибка захвата",
         'translating': "● Перевод...",
         'translate_error': "● Ошибка перевода",
@@ -28,7 +29,8 @@ def get_russian_button_strings():
     return {
         'btn_capture': "Сделать скриншот (F2)",
         'btn_toggle': "Показать/скрыть (F1)",
-        'hotkeys_info': "F2 - скриншот | F1 - оверлей | ESC - закрыть оверлей",
+        'btn_clear_all': "🗑️ Очистить все (F4)",  # <-- НОВОЕ
+        'hotkeys_info': "F2 - скриншот окна | F3 - область | F1 - оверлей | F4 - удалить все | ESC - закрыть оверлей",
     }
 
 
@@ -91,7 +93,7 @@ def get_russian_shortcuts_strings():
     """Возвращает русские строки для горячих клавиш"""
     return {
         'shortcuts_title': "Горячие клавиши",
-        'shortcuts_text': "📋 Горячие клавиши:\n\nF2 - Сделать скриншот\nF1 - Показать/скрыть оверлей\nESC - Закрыть оверлей",
+        'shortcuts_text': "📋 Горячие клавиши:\n\nF2 - Сделать скриншот окна\nF3 - Выделить область для перевода\nF1 - Показать/скрыть оверлей\nESC - Закрыть оверлей",
     }
 
 
@@ -116,6 +118,7 @@ def get_english_main_strings():
         'starting': "● Starting...",
         'starting_browser': "● Starting browser...",
         'capturing': "● Capturing...",
+        'capturing_area': "● Capturing area...",
         'capture_error': "● Capture error",
         'translating': "● Translating...",
         'translate_error': "● Translation error",
@@ -131,7 +134,7 @@ def get_english_button_strings():
     return {
         'btn_capture': "Take screenshot (F2)",
         'btn_toggle': "Show/Hide (F1)",
-        'hotkeys_info': "F2 - screenshot | F1 - overlay | ESC - close overlay",
+        'hotkeys_info': "F2 - window screenshot | F3 - area | F1 - overlay | ESC - close overlay",
     }
 
 
@@ -194,7 +197,7 @@ def get_english_shortcuts_strings():
     """Возвращает английские строки для горячих клавиш"""
     return {
         'shortcuts_title': "Keyboard Shortcuts",
-        'shortcuts_text': "📋 Keyboard shortcuts:\n\nF2 - Take screenshot\nF1 - Show/Hide overlay\nESC - Close overlay",
+        'shortcuts_text': "📋 Keyboard shortcuts:\n\nF2 - Take window screenshot\nF3 - Select area to translate\nF1 - Show/Hide overlay\nESC - Close overlay",
     }
 
 
@@ -228,6 +231,7 @@ def get_strings(language_code='ru'):
 
 
 # Для обратной совместимости сохраняем STRINGS словарь
+
 STRINGS = {
     'ru': get_russian_all_strings(),
     'en': get_english_all_strings(),
