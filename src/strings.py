@@ -111,6 +111,7 @@ def get_russian_settings_window_strings():
         'settings_save': "💾 Сохранить",
         'settings_cancel': "❌ Отмена",
         'settings_ui': "🎨 Интерфейс",
+        'auto_windowed_fullscreen': "Фулскрин → оконный фулскрин при F3",
     }
 
 
@@ -188,6 +189,7 @@ def get_english_settings_window_strings():
         'settings_save': "💾 Save",
         'settings_cancel': "❌ Cancel",
         'settings_ui': "🎨 Interface",
+        'auto_windowed_fullscreen': "Fullscreen → windowed fullscreen on F3",
     }
 
 

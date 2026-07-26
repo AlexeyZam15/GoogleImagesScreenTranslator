@@ -457,7 +457,6 @@ class OverlayWindow:
 
             if is_selection_window:
                 self.logger.info("[DEBUG] Активное окно является окном выделения области - НЕ СКРЫВАЕМ оверлей")
-                # ВАЖНО: принудительно поднимаем оверлей, если он виден
                 if self.visible and self._is_visible_by_user:
                     self._ensure_topmost()
                 return
@@ -493,7 +492,9 @@ class OverlayWindow:
                 self.logger.info("[DEBUG] Переключились на другое окно - скрываем оверлей")
                 self._hide_internal()
             elif is_our_window and not self.visible and self._is_visible_by_user:
-                self.logger.info("[DEBUG] Переключились на наше окно - запрос синхронного показа")
+                self.logger.info("[DEBUG] Переключились на наше окно - показываем оверлей")
+                # ВАЖНО: НЕ ПЫТАЕМСЯ ВОССТАНАВЛИВАТЬ ПОЛНОЭКРАННЫЙ РЕЖИМ!
+                # Просто показываем оверлей поверх существующего окна
                 if hasattr(self, '_overlay_manager') and self._overlay_manager:
                     self._overlay_manager.show_all_sync()
 

@@ -207,6 +207,21 @@ class SettingsWindow:
         )
         auto_hide_cb.pack(anchor=tk.W, pady=6)
 
+        # Автоматический оконный полноэкранный режим при F3
+        self.auto_windowed_fullscreen_var = tk.BooleanVar(value=self.settings.get_auto_windowed_fullscreen())
+        auto_fullscreen_cb = tk.Checkbutton(
+            ui_frame,
+            text=self.get_string('auto_windowed_fullscreen'),
+            variable=self.auto_windowed_fullscreen_var,
+            bg='#1e1e1e',
+            fg='white',
+            selectcolor='#1e1e1e',
+            font=('Segoe UI', 11),
+            padx=5,
+            pady=5
+        )
+        auto_fullscreen_cb.pack(anchor=tk.W, pady=6)
+
         # --- КНОПКИ ---
         btn_frame = tk.Frame(main_container, bg='#1e1e1e')
         btn_frame.pack(fill=tk.X, pady=(10, 0))
@@ -278,9 +293,11 @@ class SettingsWindow:
         self.settings.set_browser_path(browser_path)
         self.settings.set_show_translation_indicator(self.show_indicator_var.get())
         self.settings.set_auto_hide_overlay(self.auto_hide_var.get())
+        self.settings.set_auto_windowed_fullscreen(self.auto_windowed_fullscreen_var.get())
         self.settings.save()
 
         print(f"[DEBUG] Сохранена настройка автоскрытия: {self.auto_hide_var.get()}")
+        print(f"[DEBUG] Сохранена настройка оконного полноэкранного режима: {self.auto_windowed_fullscreen_var.get()}")
 
         # Используем self.app вместо self.parent
         if hasattr(self, 'app') and hasattr(self.app, 'overlay') and self.app.overlay:

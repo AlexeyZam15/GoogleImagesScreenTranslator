@@ -392,7 +392,28 @@ class ScreenshotTranslatorApp:
                 self._area_target_hwnd = None
                 self._area_is_fullscreen = False
 
-            # Делаем скриншот ВСЕГО ЭКРАНА (вместо активного окна)
+            # === ПРЕОБРАЗУЕМ ОКНО В WINDOWED FULLSCREEN (ТОЛЬКО ЕСЛИ НАСТОЯЩИЙ ПОЛНОЭКРАННЫЙ РЕЖИМ) ===
+            if self._area_is_fullscreen and self.settings.get_auto_windowed_fullscreen():
+                self.logger.info("[DEBUG] Обнаружен НАСТОЯЩИЙ полноэкранный режим, преобразуем в windowed fullscreen")
+                try:
+                    from src.window_utils import send_alt_enter_to_window
+                    result = send_alt_enter_to_window(current_hwnd)
+                    if result:
+                        self.logger.info("[DEBUG] Преобразование окна в windowed fullscreen УСПЕШНО")
+                        self.screenshot._is_fullscreen = False
+                        self._area_is_fullscreen = False
+                        time.sleep(0.3)
+                    else:
+                        self.logger.warning("[DEBUG] Преобразование окна не удалось")
+                except Exception as e:
+                    self.logger.error(f"[DEBUG] Ошибка при преобразовании в оконный полноэкранный режим: {e}")
+            else:
+                if self._area_is_fullscreen:
+                    self.logger.info("[DEBUG] Автоматический оконный полноэкранный режим отключен")
+                else:
+                    self.logger.info("[DEBUG] Окно уже в оконном режиме (windowed fullscreen или обычное)")
+
+            # === ДЕЛАЕМ СКРИНШОТ ВСЕГО ЭКРАНА ===
             self.logger.info("[DEBUG] Захват всего экрана для выбора области...")
             img = ImageGrab.grab()
             self.logger.info(f"[DEBUG] Скриншот всего экрана: {img.size}")
@@ -579,10 +600,10 @@ class ScreenshotTranslatorApp:
         self._capture_mode = False
         self._selection_window = None
 
-        # НЕ СКРЫВАЕМ старые оверлеи - они остаются видимыми
-        # Просто создаем новый оверлей поверх старых
         self.logger.info(
             f"[DEBUG] _process_area_selection: текущее количество оверлеев: {len(self.overlay_manager.overlays) if self.overlay_manager else 0}")
+
+        # === УДАЛЯЕМ преобразование окна из этого метода - оно уже выполнено в _capture_window_for_area ===
 
         # Сохраняем координаты выделенной области для использования при показе оверлея
         self._area_rect = (x1, y1, x2, y2)
@@ -593,7 +614,6 @@ class ScreenshotTranslatorApp:
 
                 from PIL import Image
 
-                # Открываем скриншот и вырезаем область
                 full_img = Image.open(screenshot_path)
                 cropped = full_img.crop((x1, y1, x2, y2))
 
@@ -607,21 +627,17 @@ class ScreenshotTranslatorApp:
 
                 self.logger.info(f"[DEBUG] Область вырезана: {cropped.size}")
 
-                # Показываем индикатор перевода
                 self.root.after(0, self._show_translation_overlay)
 
-                # Сохраняем вырезанную область
                 path = self.temp_dir / f"area_{int(time.time())}.png"
                 cropped.save(path)
                 self.logger.info(f"[DEBUG] Область сохранена: {path}")
 
-                # Удаляем временный скриншот
                 try:
                     os.remove(screenshot_path)
                 except:
                     pass
 
-                # СОХРАНЯЕМ HWND ДЛЯ ОВЕРЛЕЯ
                 target_hwnd = getattr(self, '_area_target_hwnd', None)
                 is_fullscreen = getattr(self, '_area_is_fullscreen', False)
 
@@ -631,10 +647,8 @@ class ScreenshotTranslatorApp:
                     self.screenshot._last_hwnd = target_hwnd
                     self.screenshot._is_fullscreen = is_fullscreen
 
-                # Сохраняем координаты области для использования в _do_translate
                 self._area_rect_for_overlay = (x1, y1, x2, y2)
 
-                # Отправляем на перевод
                 self.root.after(0, lambda: self._do_translate(path, area_rect=(x1, y1, x2, y2)))
 
             except Exception as e:

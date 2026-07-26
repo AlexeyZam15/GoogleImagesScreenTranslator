@@ -22,7 +22,8 @@ class Settings:
         "show_browser": True,
         "show_translation_indicator": True,
         "browser_path": "",
-        "auto_hide_overlay": True  # Новая настройка
+        "auto_hide_overlay": True,
+        "auto_windowed_fullscreen": True  # ИЗМЕНЕНО: True вместо False
     }
 
     def __init__(self):
@@ -32,6 +33,26 @@ class Settings:
         self._config_dir = Path.home() / "Documents" / "GoogleScreenTranslate" / "config"
         self._config_file = self._config_dir / "settings.json"
         self.load()
+
+    def get_auto_windowed_fullscreen(self) -> bool:
+        """Возвращает настройку автоматического преобразования в оконный полноэкранный режим"""
+        return self.settings.get("auto_windowed_fullscreen", False)
+
+    def set_auto_windowed_fullscreen(self, enabled: bool):
+        """Устанавливает настройку автоматического преобразования в оконный полноэкранный режим"""
+        self.settings["auto_windowed_fullscreen"] = enabled
+        self.save()
+
+    def load_values(self):
+        """Загружает текущие настройки в поля"""
+        current_path = self.settings.get_browser_path()
+        self.browser_path_var.set(current_path)
+        if hasattr(self, 'show_indicator_var'):
+            self.show_indicator_var.set(self.settings.get_show_translation_indicator())
+        if hasattr(self, 'auto_hide_var'):
+            self.auto_hide_var.set(self.settings.get_auto_hide_overlay())
+        if hasattr(self, 'auto_windowed_fullscreen_var'):
+            self.auto_windowed_fullscreen_var.set(self.settings.get_auto_windowed_fullscreen())
 
     def get_browser_path(self) -> str:
         """Возвращает путь к браузеру из настроек"""
