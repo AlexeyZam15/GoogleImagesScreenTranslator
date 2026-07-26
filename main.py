@@ -16,6 +16,16 @@ from src.settings import Settings
 
 # Проверяем аргументы командной строки
 DEBUG_MODE = '--debug' in sys.argv or '-d' in sys.argv
+ADMIN_MODE = '--admin' in sys.argv
+
+
+def is_admin():
+    """Проверяет, запущена ли программа с правами администратора"""
+    try:
+        import ctypes
+        return ctypes.windll.shell32.IsUserAnAdmin() != 0
+    except:
+        return False
 
 
 def ensure_app_directories():
@@ -33,7 +43,46 @@ def ensure_app_directories():
         return False
 
 
+def run_as_admin():
+    """Перезапускает программу с правами администратора"""
+    try:
+        import ctypes
+        import sys
+        import os
+
+        # Получаем путь к текущему скрипту
+        script_path = os.path.abspath(sys.argv[0])
+        # Формируем аргументы командной строки (убираем --admin чтобы не было рекурсии)
+        args = ' '.join([arg for arg in sys.argv[1:] if arg != '--admin'])
+
+        # Запускаем с правами администратора
+        ctypes.windll.shell32.ShellExecuteW(
+            None,
+            "runas",
+            sys.executable,
+            f'"{script_path}" {args}',
+            None,
+            1
+        )
+        return True
+    except Exception as e:
+        print(f"Ошибка при запросе прав администратора: {e}")
+        return False
+
+
 if __name__ == "__main__":
+    # Проверяем режим администратора
+    if ADMIN_MODE and not is_admin():
+        print("👑 Запрос прав администратора...")
+        if run_as_admin():
+            print("✅ Программа перезапущена с правами администратора")
+            sys.exit(0)
+        else:
+            print("❌ Не удалось получить права администратора")
+            print("⚠️ Программа будет запущена с ограниченными правами")
+    elif ADMIN_MODE and is_admin():
+        print("👑 РЕЖИМ АДМИНИСТРАТОРА: программа запущена с правами администратора")
+
     # Создаем необходимые папки
     ensure_app_directories()
 
