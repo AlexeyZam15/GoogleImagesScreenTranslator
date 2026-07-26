@@ -108,10 +108,9 @@ class ScreenshotTranslatorApp:
         setup_logging()
         self.logger = logging.getLogger(__name__)
         self.settings = Settings()
-        # ИСПРАВЛЕНО: используем безопасную временную папку
         from src.utils import ensure_app_temp_dir
         self.temp_dir = ensure_app_temp_dir()
-        self.overlay_manager = None  # Изменено: вместо self.overlay
+        self.overlay_manager = None
         self.screenshot = ScreenshotCapturer()
         self.ready = False
         self.translating = False
@@ -132,6 +131,7 @@ class ScreenshotTranslatorApp:
         self.browser_worker = BrowserWorker(self.settings)
         self.browser_worker.start()
         self._pending_command_ids = {}
+        self._translation_in_progress = False
         self.create_gui()
         self.update_ui_language()
         self.app_title = self.get_string('app_title')
@@ -139,6 +139,38 @@ class ScreenshotTranslatorApp:
         self._setup_app_icon()
         self.setup_hotkeys()
         self.root.after(100, self._init_translator_step)
+
+    def _cancel_translation(self):
+        """Отменяет текущий перевод"""
+        self.logger.info("[DEBUG] _cancel_translation() - отмена перевода")
+
+        if not self._translation_in_progress:
+            self.logger.info("[DEBUG] _cancel_translation: перевод не идет, пропускаем")
+            return
+
+        self.logger.info("[DEBUG] _cancel_translation: отменяем перевод")
+
+        # Отменяем перевод через BrowserWorker (физическая отмена)
+        if self.browser_worker:
+            self.browser_worker.cancel_translation()
+            self.logger.info("[DEBUG] _cancel_translation: отправлена команда отмены")
+
+        # Сбрасываем флаг
+        self._translation_in_progress = False
+
+        # Скрываем индикатор перевода
+        self._hide_translation_overlay()
+
+        # Сбрасываем флаг перевода
+        self.translating = False
+
+        # Обновляем статус
+        self.update_status("● Перевод отменен", '#ff9800')
+
+        # Восстанавливаем кнопку
+        self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+
+        self.logger.info("[DEBUG] _cancel_translation: перевод отменен")
 
     def clear_all_overlays(self):
         """Удаляет все оверлеи (F4)."""
@@ -1533,7 +1565,20 @@ class ScreenshotTranslatorApp:
     def _on_translate_finished(self, result, error):
         """Обработчик завершения перевода"""
         self.logger.info(f"_on_translate_finished вызван: result={result}, error={error}")
+
+        # Сбрасываем флаг перевода
+        self._translation_in_progress = False
+
         try:
+            # Если была отмена - результат None, не показываем оверлей
+            if error and "отменен" in str(error):
+                self.logger.info("[DEBUG] _on_translate_finished: перевод был отменен")
+                self.translating = False
+                self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+                self._pending_command_ids = {}
+                self._pending_area_rect = None
+                return
+
             if error:
                 self.logger.error(f"Ошибка перевода: {error}")
                 self._on_translate_error(error)
@@ -1562,7 +1607,6 @@ class ScreenshotTranslatorApp:
                     self.logger.info(
                         f"window_rect = {window_rect}, target_hwnd = {target_hwnd}, is_fullscreen = {is_fullscreen}")
 
-                    # Проверяем, есть ли сохраненная область для F3
                     area_rect = getattr(self, '_pending_area_rect', None)
                     if area_rect:
                         self.logger.info(f"[DEBUG] Используем область для оверлея: {area_rect}")
@@ -1572,7 +1616,6 @@ class ScreenshotTranslatorApp:
                         area_window_rect = window_rect
                         self.logger.info(f"[DEBUG] Используем стандартный window_rect: {window_rect}")
 
-                    # Проверяем, активно ли целевое окно
                     is_target_active = False
                     if target_hwnd:
                         try:
@@ -1584,7 +1627,6 @@ class ScreenshotTranslatorApp:
                         except Exception as e:
                             self.logger.warning(f"[DEBUG] Не удалось проверить активное окно: {e}")
 
-                    # --- СОЗДАЕМ НОВЫЙ ОВЕРЛЕЙ ЧЕРЕЗ МЕНЕДЖЕР ---
                     self.overlay_manager.create_overlay(
                         image_path=result,
                         window_rect=area_window_rect,
@@ -1620,12 +1662,19 @@ class ScreenshotTranslatorApp:
             self._hide_translation_overlay()
             self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
             self._pending_command_ids = {}
-            # Очищаем сохраненную область
             self._pending_area_rect = None
 
     def _do_translate(self, image_path: Path, area_rect=None):
         """Выполняет перевод в фоновом режиме через BrowserWorker"""
         self.logger.info(f"[DEBUG] _do_translate: image_path={image_path}, area_rect={area_rect}")
+
+        # Устанавливаем флаг, что перевод идет
+        self._translation_in_progress = True
+
+        # Включаем глобальный хук ESC для возможности отмены перевода
+        if self.overlay_manager:
+            self.overlay_manager._enable_esc_hook()
+            self.logger.info("[DEBUG] _do_translate: глобальный хук ESC включен")
 
         # Сохраняем область для использования в колбэке
         self._pending_area_rect = area_rect
@@ -1642,9 +1691,10 @@ class ScreenshotTranslatorApp:
     def _on_translate_error(self, error_msg):
         """Обработчик ошибки перевода"""
         self.logger.error(f"Ошибка перевода: {error_msg}")
+        self._translation_in_progress = False
         self.update_status(self.get_string('error'), '#f44336')
         self.translating = False
-        self._hide_translation_overlay()
+        self._hide_translation_overlay()  # Это скроет индикатор и отключит хук
         self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
 
     def _show_translation_overlay(self):
@@ -1656,6 +1706,12 @@ class ScreenshotTranslatorApp:
                 from src.translation_overlay import TranslationOverlay
                 self.translation_overlay = TranslationOverlay(parent=self.root)
             self.translation_overlay.show(self.get_string('translating'))
+
+            # Включаем глобальный хук ESC для отмены перевода во время индикатора
+            if self.overlay_manager:
+                self.overlay_manager._enable_esc_hook()
+                self.logger.info("[DEBUG] _show_translation_overlay: глобальный хук ESC включен")
+
         except Exception as e:
             self.logger.warning(f"Не удалось показать оверлей: {e}")
 
@@ -1664,6 +1720,13 @@ class ScreenshotTranslatorApp:
         try:
             if self.translation_overlay:
                 self.translation_overlay.hide()
+                self.translation_overlay = None
+
+            # Отключаем хук ESC, если нет активных оверлеев перевода
+            if self.overlay_manager and not self.overlay_manager.overlays:
+                self.overlay_manager._disable_esc_hook()
+                self.logger.info("[DEBUG] _hide_translation_overlay: глобальный хук ESC отключен")
+
         except:
             pass
 

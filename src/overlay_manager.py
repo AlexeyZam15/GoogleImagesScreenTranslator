@@ -24,10 +24,20 @@ class OverlayManager:
         self.logger.info("OverlayManager инициализирован")
 
     def _global_esc_handler(self, event):
-        """Глобальный обработчик ESC - скрывает все оверлеи."""
-        self.logger.info("[DEBUG] ESC нажат - скрываем все оверлеи")
-        # Скрываем все оверлеи
+        """Глобальный обработчик ESC - отменяет перевод или скрывает оверлеи."""
+        self.logger.info("[DEBUG] ESC нажат - проверка состояния перевода")
+
+        # Проверяем, идет ли перевод
+        if hasattr(self.parent, '_translation_in_progress') and self.parent._translation_in_progress:
+            self.logger.info("[DEBUG] ESC: обнаружен активный перевод - отменяем")
+            if hasattr(self.parent, '_cancel_translation'):
+                self.parent._cancel_translation()
+            return False
+
+        # Если перевода нет - скрываем все оверлеи
+        self.logger.info("[DEBUG] ESC: перевода нет - скрываем все оверлеи")
         self.hide_all_overlays()
+
         # Возвращаем фокус на целевое окно (последнего оверлея)
         if self.overlays:
             last_overlay = self.overlays[-1]
@@ -38,6 +48,7 @@ class OverlayManager:
                     self.logger.info(f"[DEBUG] Фокус возвращен на целевое окно: {last_overlay._target_hwnd}")
                 except Exception as e:
                     self.logger.warning(f"[DEBUG] Не удалось вернуть фокус: {e}")
+
         return False
 
     def _enable_esc_hook(self):

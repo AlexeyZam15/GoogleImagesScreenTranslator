@@ -28,6 +28,24 @@ class BrowserWorker:
         self._thread: Optional[threading.Thread] = None
         self._ready = False
         self._initializing = False
+        self._cancel_flag = False  # НОВЫЙ ФЛАГ
+
+    def _reset_page(self):
+        """Сбрасывает страницу Google Translate"""
+        if not self.translator:
+            self.logger.warning("[DEBUG] _reset_page: translator не инициализирован")
+            return {'success': False, 'error': 'translator not initialized'}
+
+        self.logger.info("[DEBUG] _reset_page: сброс страницы Google Translate")
+        self.translator.reset_page()
+        return {'success': True}
+
+    def cancel_translation(self):
+        """Отменяет текущий перевод"""
+        self._cancel_flag = True
+        self.logger.info("[DEBUG] BrowserWorker.cancel_translation() - флаг отмены установлен")
+        if self.translator:
+            self.translator.cancel_translation()
 
     def start(self):
         """Запускает рабочий поток"""
@@ -111,6 +129,8 @@ class BrowserWorker:
                 return self._update_language(*args, **kwargs)
             elif cmd_type == 'update_interface_language':
                 return self._update_interface_language(*args, **kwargs)
+            elif cmd_type == 'reset_page':
+                return self._reset_page()
             elif cmd_type == 'close':
                 return self._close_browser()
             else:
@@ -156,8 +176,10 @@ class BrowserWorker:
         """Перевод изображения"""
         if not self._ready or not self.translator:
             raise RuntimeError("Браузер не готов")
+
+        self._cancel_flag = False
         self.logger.info(f"Перевод изображения: {image_path}")
-        return self.translator.translate_image(image_path, output_dir)
+        return self.translator.translate_image(image_path, output_dir, self)
 
     def _update_language(self, target_lang: str):
         """Обновление целевого языка"""
