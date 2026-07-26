@@ -280,16 +280,16 @@ class OverlayWindow:
     def _start_visibility_monitor_delayed(self):
         """Запускает монитор видимости с задержкой"""
         self.logger.info(
-            f"[DEBUG][_start_visibility_monitor_delayed] НАЧАЛО: visible={self.visible}, _is_visible_by_user={self._is_visible_by_user}")
+            f"[DEBUG][_start_visibility_monitor_delayed] НАЧАЛО: visible={self.visible}, _is_visible_by_user={self._is_visible_by_user}, _monitor_initialized={self._monitor_initialized}")
 
         if not self.visible or not self._is_visible_by_user:
             self.logger.info(
                 "[DEBUG][_start_visibility_monitor_delayed] оверлей скрыт или не должен быть виден, отменяем запуск монитора")
             return
 
-        if self._monitor_initialized:
-            self.logger.info("[DEBUG][_start_visibility_monitor_delayed] монитор уже инициализирован, пропускаем")
-            return
+        # ПРИНУДИТЕЛЬНО СБРАСЫВАЕМ СОСТОЯНИЕ ПЕРЕД ЗАПУСКОМ
+        self._monitor_initialized = False
+        self._last_active_hwnd = None
 
         self.logger.info("[DEBUG][_start_visibility_monitor_delayed] запускаем монитор")
         self._start_visibility_monitor()
@@ -300,9 +300,9 @@ class OverlayWindow:
             self.logger.info("Автоскрытие отключено, монитор не запущен")
             return
 
-        if self._monitor_initialized:
-            self.logger.info("Монитор уже запущен, пропускаем")
-            return
+        # ПРИНУДИТЕЛЬНО СБРАСЫВАЕМ СОСТОЯНИЕ
+        self._monitor_initialized = False
+        self._last_active_hwnd = None
 
         self._stop_visibility_monitor()
 
@@ -880,6 +880,17 @@ class OverlayWindow:
         if self.visible:
             self.logger.info("[DEBUG] show() - оверлей уже виден")
             return
+
+        # СБРАСЫВАЕМ СОСТОЯНИЕ МОНИТОРА ПЕРЕД ПОКАЗОМ
+        self._monitor_initialized = False
+        self._last_active_hwnd = None
+        if self._monitor_timer is not None:
+            try:
+                if self.root and self.root.winfo_exists():
+                    self.root.after_cancel(self._monitor_timer)
+            except Exception as e:
+                self.logger.warning(f"Ошибка отмены таймера при show: {e}")
+            self._monitor_timer = None
 
         self._is_visible_by_user = True
         self.logger.info(f"[DEBUG] show() - показываем оверлей с сохраненным изображением: {self._last_image_path}")
