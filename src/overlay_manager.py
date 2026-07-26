@@ -24,7 +24,7 @@ class OverlayManager:
         self.logger.info("OverlayManager инициализирован")
 
     def _global_esc_handler(self, event):
-        """Глобальный обработчик ESC - отменяет перевод или скрывает оверлеи."""
+        """Глобальный обработчик ESC - отменяет перевод или удаляет оверлей под мышью."""
         self.logger.info("[DEBUG] ESC нажат - проверка состояния перевода")
 
         # Проверяем, идет ли перевод
@@ -34,22 +34,116 @@ class OverlayManager:
                 self.parent._cancel_translation()
             return False
 
-        # Если перевода нет - скрываем все оверлеи
-        self.logger.info("[DEBUG] ESC: перевода нет - скрываем все оверлеи")
-        self.hide_all_overlays()
+        # Если перевода нет - пытаемся удалить оверлей под мышью
+        self.logger.info("[DEBUG] ESC: перевода нет - ищем оверлей под мышью")
 
-        # Возвращаем фокус на целевое окно (последнего оверлея)
-        if self.overlays:
-            last_overlay = self.overlays[-1]
-            if last_overlay._target_hwnd:
+        overlay_to_remove = self._find_overlay_under_cursor()
+
+        if overlay_to_remove is not None:
+            self.logger.info("[DEBUG] ESC: найден оверлей под мышью - удаляем его")
+
+            # Сохраняем HWND целевого окна для возврата фокуса
+            target_hwnd = overlay_to_remove._target_hwnd
+
+            # Удаляем оверлей
+            self.remove_overlay(overlay_to_remove)
+
+            # Возвращаем фокус на целевое окно
+            if target_hwnd:
                 try:
                     import win32gui
-                    win32gui.SetForegroundWindow(last_overlay._target_hwnd)
-                    self.logger.info(f"[DEBUG] Фокус возвращен на целевое окно: {last_overlay._target_hwnd}")
+                    win32gui.SetForegroundWindow(target_hwnd)
+                    self.logger.info(f"[DEBUG] Фокус возвращен на целевое окно: {target_hwnd}")
                 except Exception as e:
                     self.logger.warning(f"[DEBUG] Не удалось вернуть фокус: {e}")
 
-        return False
+            # Обновляем статус в родительском приложении
+            if hasattr(self.parent, 'update_status'):
+                remaining = len(self.overlays)
+                if remaining > 0:
+                    self.parent.update_status(f"● Удален оверлей, осталось: {remaining}", '#ff9800')
+                else:
+                    self.parent.update_status(f"● Все оверлеи удалены", '#4CAF50')
+
+            return False
+        else:
+            self.logger.info("[DEBUG] ESC: оверлей под мышью не найден - скрываем все оверлеи")
+            self.hide_all_overlays()
+
+            # Возвращаем фокус на целевое окно (последнего оверлея)
+            if self.overlays:
+                last_overlay = self.overlays[-1]
+                if last_overlay._target_hwnd:
+                    try:
+                        import win32gui
+                        win32gui.SetForegroundWindow(last_overlay._target_hwnd)
+                        self.logger.info(f"[DEBUG] Фокус возвращен на целевое окно: {last_overlay._target_hwnd}")
+                    except Exception as e:
+                        self.logger.warning(f"[DEBUG] Не удалось вернуть фокус: {e}")
+
+            return False
+
+    def _find_overlay_under_cursor(self) -> Optional[OverlayWindow]:
+        """Находит оверлей, под которым находится курсор мыши."""
+        try:
+            import win32gui
+            import win32api
+
+            # Получаем позицию курсора
+            cursor_pos = win32api.GetCursorPos()
+            cursor_x, cursor_y = cursor_pos
+
+            self.logger.info(f"[DEBUG] _find_overlay_under_cursor: курсор в ({cursor_x}, {cursor_y})")
+
+            # Проверяем все оверлеи в обратном порядке (последний созданный - самый верхний)
+            for overlay in reversed(self.overlays):
+                try:
+                    if overlay is None:
+                        continue
+
+                    # Проверяем, существует ли окно
+                    if not overlay.root or not overlay.root.winfo_exists():
+                        continue
+
+                    # Проверяем, виден ли оверлей
+                    if not overlay.visible:
+                        continue
+
+                    # Получаем координаты окна оверлея
+                    overlay_hwnd = int(overlay.root.winfo_id())
+                    rect = win32gui.GetWindowRect(overlay_hwnd)
+                    x1, y1, x2, y2 = rect
+
+                    self.logger.info(f"[DEBUG] _find_overlay_under_cursor: оверлей rect=({x1},{y1})-({x2},{y2})")
+
+                    # Проверяем, находится ли курсор внутри окна
+                    if x1 <= cursor_x <= x2 and y1 <= cursor_y <= y2:
+                        self.logger.info(f"[DEBUG] _find_overlay_under_cursor: найден оверлей под курсором")
+                        return overlay
+
+                except Exception as e:
+                    self.logger.warning(f"[DEBUG] _find_overlay_under_cursor: ошибка проверки оверлея: {e}")
+                    continue
+
+            self.logger.info("[DEBUG] _find_overlay_under_cursor: оверлей под курсором не найден")
+            return None
+
+        except Exception as e:
+            self.logger.warning(f"[DEBUG] _find_overlay_under_cursor: общая ошибка: {e}")
+            return None
+
+    def remove_overlay(self, overlay: OverlayWindow):
+        """Удаляет конкретный оверлей из списка и закрывает его."""
+        self.logger.info(f"Удаление оверлея из списка (всего: {len(self.overlays)})")
+        if overlay in self.overlays:
+            self.overlays.remove(overlay)
+            self.logger.info(f"Оверлей удален из списка. Осталось: {len(self.overlays)}")
+            try:
+                overlay.close()
+            except Exception as e:
+                self.logger.error(f"Ошибка при закрытии оверлея: {e}")
+        else:
+            self.logger.warning("Оверлей не найден в списке")
 
     def _enable_esc_hook(self):
         """Включает глобальный хук ESC."""
@@ -118,12 +212,12 @@ class OverlayManager:
         """Закрывает все оверлеи."""
         self.logger.info(f"Закрытие всех оверлеев. Количество: {len(self.overlays)}")
         self._disable_esc_hook()
-        for overlay in self.overlays:
+        # Используем копию списка, так как remove_overlay изменяет оригинал
+        for overlay in self.overlays[:]:
             try:
-                overlay.close()
+                self.remove_overlay(overlay)
             except Exception as e:
                 self.logger.error(f"Ошибка при закрытии оверлея: {e}")
-        self.overlays.clear()
         self.logger.info("Все оверлеи закрыты.")
 
     def show_all_sync(self):

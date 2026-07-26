@@ -21,6 +21,27 @@ def get_russian_main_strings():
         'overlay': "Оверлей",
         'shown': "показан",
         'hidden': "скрыт",
+        'overlay_remove_hint': "Наведите на оверлей и нажмите ESC для удаления",  # НОВОЕ
+    }
+
+
+def get_english_main_strings():
+    """Возвращает основные английские строки приложения"""
+    return {
+        'app_title': "Screen Translator",
+        'ready': "● Ready",
+        'starting': "● Starting...",
+        'starting_browser': "● Starting browser...",
+        'capturing': "● Capturing...",
+        'capturing_area': "● Capturing area...",
+        'capture_error': "● Capture error",
+        'translating': "● Translating...",
+        'translate_error': "● Translation error",
+        'error': "● Error",
+        'overlay': "Overlay",
+        'shown': "shown",
+        'hidden': "hidden",
+        'overlay_remove_hint': "Hover over overlay and press ESC to remove",  # НОВОЕ
     }
 
 
@@ -29,8 +50,20 @@ def get_russian_button_strings():
     return {
         'btn_capture': "Сделать скриншот (F2)",
         'btn_toggle': "Показать/скрыть (F1)",
-        'btn_clear_all': "🗑️ Очистить все (F4)",  # <-- НОВОЕ
-        'hotkeys_info': "F2 - скриншот окна | F3 - область | F1 - оверлей | F4 - удалить все | ESC - закрыть оверлей",
+        'btn_clear_all': "🗑️ Очистить все (F4)",
+        'hotkeys_info': "F2 - скриншот окна | F3 - область | F1 - оверлей | F4 - удалить все | ESC - удалить оверлей под мышью",
+        # ИЗМЕНЕНО
+    }
+
+
+def get_english_button_strings():
+    """Возвращает английские строки для кнопок"""
+    return {
+        'btn_capture': "Take screenshot (F2)",
+        'btn_toggle': "Show/Hide (F1)",
+        'btn_clear_all': "🗑️ Clear all (F4)",
+        'hotkeys_info': "F2 - window screenshot | F3 - area | F1 - overlay | F4 - clear all | ESC - remove overlay under cursor",
+        # ИЗМЕНЕНО
     }
 
 
@@ -109,33 +142,6 @@ def get_russian_all_strings():
     strings.update(get_russian_shortcuts_strings())
     return strings
 
-
-def get_english_main_strings():
-    """Возвращает основные английские строки приложения"""
-    return {
-        'app_title': "Screen Translator",
-        'ready': "● Ready",
-        'starting': "● Starting...",
-        'starting_browser': "● Starting browser...",
-        'capturing': "● Capturing...",
-        'capturing_area': "● Capturing area...",
-        'capture_error': "● Capture error",
-        'translating': "● Translating...",
-        'translate_error': "● Translation error",
-        'error': "● Error",
-        'overlay': "Overlay",
-        'shown': "shown",
-        'hidden': "hidden",
-    }
-
-
-def get_english_button_strings():
-    """Возвращает английские строки для кнопок"""
-    return {
-        'btn_capture': "Take screenshot (F2)",
-        'btn_toggle': "Show/Hide (F1)",
-        'hotkeys_info': "F2 - window screenshot | F3 - area | F1 - overlay | ESC - close overlay",
-    }
 
 
 def get_english_settings_strings():

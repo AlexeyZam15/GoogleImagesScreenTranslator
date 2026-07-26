@@ -26,8 +26,8 @@ class OverlayWindow:
         self.temp_dir = ensure_app_temp_dir()
         self.tk_image = None
         self._target_rect = None
-        self._esc_hook_active = False  # Больше не используется напрямую
-        self._use_manager_esc = False  # Флаг использования менеджера для ESC
+        self._esc_hook_active = False
+        self._use_manager_esc = False
         self._images = []
         self._last_image_path = None
         self._last_window_rect = None
@@ -68,7 +68,27 @@ class OverlayWindow:
         self.root.bind('<B1-Motion>', self._on_drag)
         self.root.bind('<ButtonRelease-1>', self._stop_drag)
 
+        # === НОВОЕ: Обработчик правой кнопки мыши для удаления оверлея ===
+        self.canvas.bind('<Button-3>', self._on_right_click)
+        self.root.bind('<Button-3>', self._on_right_click)
+
         self.logger.info("OverlayWindow инициализирован")
+
+    def _on_right_click(self, event):
+        """Обработчик правой кнопки мыши - удаляет оверлей."""
+        self.logger.info("[DEBUG] _on_right_click вызван")
+        self._remove_overlay()
+
+    def _remove_overlay(self):
+        """Удаляет этот оверлей через OverlayManager."""
+        self.logger.info("[DEBUG] _remove_overlay вызван")
+        if hasattr(self, '_overlay_manager') and self._overlay_manager:
+            self.logger.info(
+                f"[DEBUG] Удаление оверлея через OverlayManager (всего оверлеев: {len(self._overlay_manager.overlays)})")
+            self._overlay_manager.remove_overlay(self)
+        else:
+            self.logger.warning("[DEBUG] _remove_overlay: менеджер не найден, закрываем самостоятельно")
+            self.close()
 
     def reset(self):
         """Полностью сбрасывает состояние оверлея"""
