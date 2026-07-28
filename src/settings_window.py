@@ -2,16 +2,13 @@
 Модуль для окна настроек приложения
 """
 
-"""
-Модуль для окна настроек приложения
-"""
-
 import tkinter as tk
 from tkinter import ttk
 from tkinter import filedialog, messagebox
 from pathlib import Path
 import os
-import logging  # <-- ДОБАВЛЯЕМ ИМПОРТ
+import logging
+import time  # <-- ДОБАВЛЯЕМ ИМПОРТ
 
 
 class SettingsWindow:
@@ -83,6 +80,17 @@ class SettingsWindow:
             except:
                 pass
 
+        # === ИНИЦИАЛИЗИРУЕМ ВСЕ ПЕРЕМЕННЫЕ ДЛЯ ЗАХВАТА КЛАВИШ ===
+        self.hotkey_vars = {}
+        self.hotkey_buttons = {}
+        self.hotkey_capturing = {}
+        self._pressed_keys = set()
+        self._first_key = None
+        self._main_key = None
+        self._first_key_time = 0
+        self._capture_action = None
+        self._capture_timer = None
+
         # Скрываем окно до полной настройки
         self.window.withdraw()
 
@@ -95,6 +103,338 @@ class SettingsWindow:
         self.window.lift()
         self.window.focus_force()
 
+    def reset_hotkey_capture_state(self):
+        """Принудительно сбрасывает состояние захвата клавиш."""
+        import logging
+        logger = logging.getLogger(__name__)
+
+        logger.info("[HOTKEYS_SETTINGS] Принудительный сброс состояния захвата")
+
+        for a in list(self.hotkey_capturing.keys()):
+            if self.hotkey_capturing.get(a, False):
+                self.hotkey_capturing[a] = False
+                try:
+                    self.hotkey_buttons[a].config(bg='#2d2d2d', text=self.hotkey_vars[a].get().upper() or "—")
+                except:
+                    pass
+
+        try:
+            self.window.unbind_all('<Key>')
+            self.window.unbind_all('<KeyRelease>')
+        except:
+            pass
+
+        self._first_key = None
+        self._main_key = None
+        self._first_key_time = 0
+        self._capture_action = None
+
+        if hasattr(self, 'app') and hasattr(self.app, 'set_actions_blocked'):
+            self.app.set_actions_blocked(False)
+
+    def _on_hotkey_key_up(self, event):
+        """Обработчик отпускания клавиши."""
+        logger = logging.getLogger(__name__)
+        action = self._capture_action
+
+        if not self.hotkey_capturing.get(action, False):
+            return
+
+        key = event.keysym.lower()
+        logger.info(f"[HOTKEYS_SETTINGS] Отпущена клавиша: {key}")
+
+        if key == self._first_key and self._main_key is None:
+            elapsed = time.time() - self._first_key_time
+            if elapsed < 0.3:
+                logger.info(f"[HOTKEYS_SETTINGS] Короткое нажатие ({elapsed:.2f}с) - назначаем одиночную клавишу")
+                self._finish_single_key(action)
+            else:
+                logger.info(f"[HOTKEYS_SETTINGS] Долгое нажатие ({elapsed:.2f}с) - ждём вторую клавишу")
+
+        if key == 'escape':
+            logger.info(f"[HOTKEYS_SETTINGS] Нажат ESC — отменяем захват")
+            self._cancel_hotkey_capture()
+
+    def _finish_single_key(self, action):
+        """Завершает захват одиночной клавиши (если пользователь нажал и отпустил)."""
+        logger = logging.getLogger(__name__)
+
+        if self._first_key is None:
+            return
+
+        key = self._first_key
+        logger.info(f"[HOTKEYS_SETTINGS] Назначаем одиночную клавишу: {key}")
+
+        normalized = key
+        if 'control' in key or 'ctrl' in key:
+            normalized = 'ctrl'
+        elif 'shift' in key:
+            normalized = 'shift'
+        elif 'alt' in key:
+            normalized = 'alt'
+        elif 'win' in key or 'meta' in key:
+            normalized = 'win'
+
+        # === ПРОВЕРЯЕМ КОНФЛИКТЫ ===
+        conflicting_action = None
+        for a in self.hotkey_vars:
+            if a != action and self.hotkey_vars[a].get() == normalized:
+                conflicting_action = a
+                break
+
+        if conflicting_action is not None:
+            old_key = self.hotkey_vars[action].get()
+            logger.info(f"[HOTKEYS_SETTINGS] Клавиша '{normalized}' уже занята действием '{conflicting_action}'")
+            logger.info(f"[HOTKEYS_SETTINGS] Меняем местами: {action}={old_key} <-> {conflicting_action}={normalized}")
+
+            self.hotkey_vars[action].set(normalized)
+            self.hotkey_buttons[action].config(text=normalized.upper(), bg='#4CAF50')
+
+            if old_key:
+                self.hotkey_vars[conflicting_action].set(old_key)
+                self.hotkey_buttons[conflicting_action].config(text=old_key.upper(), bg='#4CAF50')
+            else:
+                self.hotkey_vars[conflicting_action].set("")
+                self.hotkey_buttons[conflicting_action].config(text="—", bg='#2d2d2d')
+
+            logger.info(f"[HOTKEYS_SETTINGS] ✅ Клавиши поменяны местами")
+        else:
+            self.hotkey_vars[action].set(normalized)
+            self.hotkey_buttons[action].config(text=normalized.upper(), bg='#4CAF50')
+            logger.info(f"[HOTKEYS_SETTINGS] ✅ Назначена одиночная клавиша '{normalized}' для действия '{action}'")
+
+        self._finish_hotkey_capture(action)
+
+    def _start_hotkey_capture(self, action):
+        """Начинает захват клавиши для переназначения."""
+        import logging
+        logger = logging.getLogger(__name__)
+
+        try:
+            logger.info("[HOTKEYS_SETTINGS] ===== НАЧАЛО ЗАХВАТА КЛАВИШИ =====")
+            logger.info(f"[HOTKEYS_SETTINGS] Действие: {action}")
+
+            # === ПРИНУДИТЕЛЬНО СБРАСЫВАЕМ ВСЕ ЗАХВАТЫ ===
+            for a in list(self.hotkey_capturing.keys()):
+                if self.hotkey_capturing.get(a, False):
+                    logger.info(f"[HOTKEYS_SETTINGS] Принудительно отменяем захват для: {a}")
+                    self.hotkey_capturing[a] = False
+                    try:
+                        self.hotkey_buttons[a].config(bg='#2d2d2d', text=self.hotkey_vars[a].get().upper() or "—")
+                    except:
+                        pass
+
+            # Отвязываем старые обработчики
+            try:
+                self.window.unbind_all('<Key>')
+                self.window.unbind_all('<KeyRelease>')
+            except:
+                pass
+
+            # Устанавливаем флаг захвата
+            self.hotkey_capturing[action] = True
+
+            # === МЕНЯЕМ ЦВЕТ КНОПКИ ===
+            btn = self.hotkey_buttons.get(action)
+            if btn:
+                btn.config(bg='#FF6B00', text=self.get_string('settings_hotkeys_press_key'))
+                btn.update_idletasks()  # Принудительно обновляем
+                logger.info(f"[HOTKEYS_SETTINGS] Кнопка для {action} переключена в режим захвата (оранжевая)")
+            else:
+                logger.error(f"[HOTKEYS_SETTINGS] Кнопка для {action} не найдена!")
+                self.hotkey_capturing[action] = False
+                return
+
+            # Блокируем действия горячих клавиш
+            if hasattr(self, 'app') and hasattr(self.app, 'set_actions_blocked'):
+                logger.info("[HOTKEYS_SETTINGS] Блокируем действия горячих клавиш")
+                self.app.set_actions_blocked(True)
+
+            # Устанавливаем фокус
+            self.window.focus_force()
+            self.window.lift()
+            self.window.attributes('-topmost', True)
+            self.window.update_idletasks()
+            logger.info("[HOTKEYS_SETTINGS] Фокус установлен на окно настроек")
+
+            # Сбрасываем состояние захвата
+            self._first_key = None
+            self._main_key = None
+            self._first_key_time = 0
+            self._capture_action = action
+
+            # Привязываем обработчики
+            self.window.bind_all('<Key>', self._on_hotkey_key_down)
+            self.window.bind_all('<KeyRelease>', self._on_hotkey_key_up)
+            logger.info(f"[HOTKEYS_SETTINGS] Обработчики клавиш привязаны для действия: {action}")
+            logger.info("[HOTKEYS_SETTINGS] ===== ЗАХВАТ КЛАВИШИ НАЧАТ ======")
+
+        except Exception as e:
+            logger.error(f"[HOTKEYS_SETTINGS] ОШИБКА при захвате: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            # Сбрасываем состояние при ошибке
+            self.hotkey_capturing[action] = False
+            try:
+                btn = self.hotkey_buttons.get(action)
+                if btn:
+                    btn.config(bg='#2d2d2d', text=self.hotkey_vars[action].get().upper() or "—")
+            except:
+                pass
+
+    def _on_hotkey_key_down(self, event):
+        """Обработчик нажатия клавиши для захвата комбинации."""
+        logger = logging.getLogger(__name__)
+        action = self._capture_action
+
+        if not self.hotkey_capturing.get(action, False):
+            return
+
+        key = event.keysym.lower()
+        logger.info(f"[HOTKEYS_SETTINGS] Нажата клавиша: {key}")
+
+        if key == self._first_key:
+            return
+
+        if self._first_key is None:
+            self._first_key = key
+            self._first_key_time = time.time()
+            logger.info(f"[HOTKEYS_SETTINGS] Первая клавиша: {key}")
+            return
+
+        if self._main_key is None and self._first_key != key:
+            self._main_key = key
+            logger.info(f"[HOTKEYS_SETTINGS] Вторая клавиша: {key}")
+            self._apply_combo(action)
+
+    def _apply_combo(self, action):
+        """Применяет комбинацию клавиш."""
+        logger = logging.getLogger(__name__)
+
+        combo_parts = [self._first_key, self._main_key]
+
+        normalized_parts = []
+        for part in combo_parts:
+            if 'control' in part or 'ctrl' in part:
+                normalized_parts.append('ctrl')
+            elif 'shift' in part:
+                normalized_parts.append('shift')
+            elif 'alt' in part:
+                normalized_parts.append('alt')
+            elif 'win' in part or 'meta' in part:
+                normalized_parts.append('win')
+            else:
+                normalized_parts.append(part)
+
+        normalized_parts = list(dict.fromkeys(normalized_parts))
+        combo = '+'.join(normalized_parts)
+
+        logger.info(f"[HOTKEYS_SETTINGS] Сформирована комбинация: {combo}")
+
+        # === ПРОВЕРЯЕМ КОНФЛИКТЫ ===
+        conflicting_action = None
+        for a in self.hotkey_vars:
+            if a != action and self.hotkey_vars[a].get() == combo:
+                conflicting_action = a
+                break
+
+        if conflicting_action is not None:
+            # Клавиша уже занята - меняем местами
+            old_combo = self.hotkey_vars[action].get()
+            logger.info(f"[HOTKEYS_SETTINGS] Комбинация '{combo}' уже занята действием '{conflicting_action}'")
+            logger.info(f"[HOTKEYS_SETTINGS] Меняем местами: {action}={old_combo} <-> {conflicting_action}={combo}")
+
+            # Назначаем новую комбинацию текущему действию
+            self.hotkey_vars[action].set(combo)
+            self.hotkey_buttons[action].config(text=combo.upper(), bg='#4CAF50')
+
+            # Назначаем старую комбинацию конфликтующему действию
+            if old_combo:
+                self.hotkey_vars[conflicting_action].set(old_combo)
+                self.hotkey_buttons[conflicting_action].config(text=old_combo.upper(), bg='#4CAF50')
+            else:
+                self.hotkey_vars[conflicting_action].set("")
+                self.hotkey_buttons[conflicting_action].config(text="—", bg='#2d2d2d')
+
+            logger.info(f"[HOTKEYS_SETTINGS] ✅ Клавиши поменяны местами")
+        else:
+            # Клавиша свободна - просто назначаем
+            self.hotkey_vars[action].set(combo)
+            self.hotkey_buttons[action].config(text=combo.upper(), bg='#4CAF50')
+            logger.info(f"[HOTKEYS_SETTINGS] ✅ Назначена комбинация '{combo}' для действия '{action}'")
+
+        self._finish_hotkey_capture(action)
+
+    def _finish_hotkey_capture(self, action):
+        """Завершает захват горячей клавиши."""
+        logger = logging.getLogger(__name__)
+
+        if not self.hotkey_capturing.get(action, False):
+            return
+
+        # Проверяем, была ли назначена клавиша
+        combo = self.hotkey_vars[action].get()
+        if not combo or combo == "—" or combo == "":
+            # Если ничего не назначено — сбрасываем на предыдущее значение
+            old_key = self.settings.get_hotkey(action)
+            self.hotkey_vars[action].set(old_key)
+            self.hotkey_buttons[action].config(text=old_key.upper() if old_key else "—", bg='#2d2d2d')
+            logger.info(f"[HOTKEYS_SETTINGS] Захват отменен, восстановлена клавиша: {old_key}")
+        else:
+            # Сохраняем в настройки
+            self.settings.set_hotkey(action, combo)
+            logger.info(f"[HOTKEYS_SETTINGS] Сохранена комбинация '{combo}' для действия '{action}'")
+
+        self.hotkey_capturing[action] = False
+        self.window.unbind_all('<Key>')
+
+        if hasattr(self, 'app') and hasattr(self.app, 'set_actions_blocked'):
+            logger.info("[HOTKEYS_SETTINGS] Разблокируем действия горячих клавиш")
+            self.app.set_actions_blocked(False)
+
+        # Восстанавливаем цвет кнопки
+        self.window.after(300, lambda a=action: self.hotkey_buttons[a].config(bg='#2d2d2d'))
+
+        # Сбрасываем состояние
+        self._pressed_keys = set()
+        self._first_key = None
+        self._main_key = None
+        self._capture_action = None
+
+        logger.info(f"[HOTKEYS_SETTINGS] ✅ Захват завершен для действия: {action}")
+
+    def _cancel_hotkey_capture(self):
+        """Отменяет текущий захват горячей клавиши."""
+        logger = logging.getLogger(__name__)
+        logger.info("[HOTKEYS_SETTINGS] ===== ОТМЕНА ЗАХВАТА КЛАВИШИ =====")
+
+        for action in self.hotkey_capturing:
+            if self.hotkey_capturing[action]:
+                logger.info(f"[HOTKEYS_SETTINGS] Отменяем захват для действия: {action}")
+                self.hotkey_capturing[action] = False
+
+                # Восстанавливаем предыдущее значение
+                old_key = self.settings.get_hotkey(action)
+                self.hotkey_vars[action].set(old_key)
+                self.hotkey_buttons[action].config(text=old_key.upper() if old_key else "—", bg='#2d2d2d')
+
+                self.window.unbind_all('<Key>')
+
+                if hasattr(self, 'app') and hasattr(self.app, 'set_actions_blocked'):
+                    logger.info("[HOTKEYS_SETTINGS] Разблокируем действия горячих клавиш")
+                    self.app.set_actions_blocked(False)
+
+                # Сбрасываем состояние
+                self._pressed_keys = set()
+                self._first_key = None
+                self._main_key = None
+                self._capture_action = None
+
+                logger.info(f"[HOTKEYS_SETTINGS] ✅ Захват отменен для действия: {action}")
+                break
+
+        logger.info("[HOTKEYS_SETTINGS] ===== ОТМЕНА ЗАХВАТА ЗАВЕРШЕНА =====")
+
     def save_settings(self):
         """Сохраняет настройки."""
         logger = logging.getLogger(__name__)
@@ -102,7 +442,6 @@ class SettingsWindow:
         # Проверяем, не идет ли захват клавиши
         for action in self.hotkey_capturing:
             if self.hotkey_capturing[action]:
-                # Отменяем захват
                 self.hotkey_capturing[action] = False
                 self.hotkey_buttons[action].config(
                     bg='#2d2d2d',
@@ -147,25 +486,18 @@ class SettingsWindow:
         browser_path_changed = (old_browser_path != new_browser_path)
         if browser_path_changed:
             logger.info(f"[SETTINGS] Путь к браузеру изменен: {old_browser_path} -> {new_browser_path}")
-
             if hasattr(self.app, 'ready') and self.app.ready:
                 logger.info("[SETTINGS] Браузер активен, выполняем перезапуск...")
                 if hasattr(self.app, 'update_status'):
                     self.app.update_status("● " + self.app.get_string('starting_browser'), '#ff9800')
-                    logger.info("[SETTINGS] Статус обновлен: Запуск браузера...")
                 if hasattr(self.app, '_restart_translator'):
                     self.app._restart_translator()
-                    logger.info("[SETTINGS] Перезапуск браузера инициирован")
-                else:
-                    logger.warning("[SETTINGS] Метод _restart_translator не найден")
-                    if hasattr(self.app, 'update_status'):
-                        self.app.update_status("● Ошибка: браузер не перезапущен", '#f44336')
             else:
                 logger.info("[SETTINGS] Браузер не активен, перезапуск не требуется")
                 if hasattr(self.app, 'update_status'):
                     self.app.update_status("● Настройки сохранены", '#4CAF50')
 
-        # Обновляем состояние режима редактирования (без статуса)
+        # Обновляем состояние режима редактирования
         if hasattr(self, 'app') and hasattr(self.app, '_edit_mode_enabled'):
             self.app._edit_mode_enabled = edit_mode
             if hasattr(self.app, 'btn_edit_mode'):
@@ -174,33 +506,20 @@ class SettingsWindow:
                     text=f"✏️ Редактирование: {status_text} (F5)",
                     bg='#4CAF50' if edit_mode else '#ff9800'
                 )
-            # Убираем обновление статуса о режиме редактирования
-            # if hasattr(self.app, 'update_status'):
-            #     status_text = "ВКЛЮЧЕН" if edit_mode else "ВЫКЛЮЧЕН"
-            #     status_color = '#4CAF50' if edit_mode else '#ff9800'
-            #     self.app.update_status(f"● Режим редактирования: {status_text}", status_color)
             self.app.logger.info(f"Режим редактирования из настроек: {edit_mode}")
 
-        # Перерегистрируем горячие клавиши (всегда)
+        # Перерегистрируем горячие клавиши
         if hasattr(self, 'app') and hasattr(self.app, 'setup_hotkeys'):
             self.app.setup_hotkeys()
 
-        # Показываем сообщение
-        if not browser_path_changed:
-            messagebox.showinfo(
-                self.get_string('settings_title'),
-                self.get_string('settings_saved')
-            )
-        else:
-            messagebox.showinfo(
-                self.get_string('settings_title'),
-                self.get_string(
-                    'settings_saved') + "\n\n🔄 Браузер перезапускается...\nСтатус будет обновлен автоматически."
-            )
+        # Обновляем текст на кнопках
+        if hasattr(self, 'app') and hasattr(self.app, 'update_hotkey_buttons'):
+            self.app.update_hotkey_buttons()
 
         if self.on_settings_changed:
             self.on_settings_changed()
 
+        # Закрываем окно настроек
         self.window.destroy()
 
     def find_chromium_browsers(self):
@@ -898,48 +1217,99 @@ class SettingsWindow:
 
     def reset_settings(self):
         """Сбрасывает настройки к значениям по умолчанию"""
-        if messagebox.askyesno(self.get_string('settings_title'), self.get_string('settings_reset_confirm')):
-            from src.settings import Settings
+        import logging
+        logger = logging.getLogger(__name__)
 
-            # Сбрасываем все настройки к значениям по умолчанию
-            for key, value in Settings.DEFAULT_SETTINGS.items():
-                self.settings.set(key, value)
+        # Спрашиваем подтверждение
+        if not messagebox.askyesno(self.get_string('settings_title'), self.get_string('settings_reset_confirm')):
+            return
 
-            # Сбрасываем горячие клавиши к значениям по умолчанию
-            default_hotkeys = {
-                "screenshot": "f2",
-                "area": "f3",
-                "toggle_overlay": "f1",
-                "clear_all": "f4",
-                "edit_mode": "f5"
-            }
-            for action, default_key in default_hotkeys.items():
-                self.settings.set_hotkey(action, default_key)
+        from src.settings import Settings
 
-            self.settings.save()
+        # === СОХРАНЯЕМ ТЕКУЩИЕ ЗНАЧЕНИЯ, КОТОРЫЕ НЕ ДОЛЖНЫ СБРАСЫВАТЬСЯ ===
+        current_lang = self.settings.get_language()
+        current_show_browser = self.settings.get_show_browser()
+        logger.info(f"[SETTINGS] Текущий язык: {current_lang}, show_browser: {current_show_browser}")
 
-            # Загружаем значения в интерфейс
-            self.load_values()
+        # Сбрасываем все настройки к значениям по умолчанию
+        for key, value in Settings.DEFAULT_SETTINGS.items():
+            self.settings.set(key, value)
 
-            # Обновляем переменные для новых настроек
-            if hasattr(self, 'show_indicator_var'):
-                self.show_indicator_var.set(self.settings.get_show_translation_indicator())
-            if hasattr(self, 'auto_hide_var'):
-                self.auto_hide_var.set(self.settings.get_auto_hide_overlay())
-            if hasattr(self, 'edit_mode_var'):
-                self.edit_mode_var.set(self.settings.get_edit_mode_enabled())
-            if hasattr(self, 'hotkey_vars'):
-                for action, var in self.hotkey_vars.items():
-                    default_key = default_hotkeys.get(action, "")
-                    var.set(default_key)
-                    if action in self.hotkey_buttons:
-                        self.hotkey_buttons[action].config(text=default_key.upper() if default_key else "—")
+        # === ВОССТАНАВЛИВАЕМ СОХРАНЁННЫЕ ЗНАЧЕНИЯ ===
+        self.settings.set_language(current_lang)
+        self.settings.set_show_browser(current_show_browser)  # <-- ВОССТАНАВЛИВАЕМ show_browser
+        logger.info(f"[SETTINGS] Восстановлены: язык={current_lang}, show_browser={current_show_browser}")
 
-            # Перерегистрируем горячие клавиши в приложении
-            if hasattr(self, 'app') and hasattr(self.app, 'setup_hotkeys'):
-                self.app.setup_hotkeys()
+        # Сбрасываем горячие клавиши к значениям по умолчанию
+        default_hotkeys = {
+            "screenshot": "f2",
+            "area": "f3",
+            "toggle_overlay": "f1",
+            "clear_all": "f4",
+            "edit_mode": "f5"
+        }
+        for action, default_key in default_hotkeys.items():
+            self.settings.set_hotkey(action, default_key)
 
-            messagebox.showinfo(self.get_string('settings_title'), self.get_string('settings_reset_done'))
+        self.settings.save()
+
+        # Загружаем значения в интерфейс
+        self.load_values()
+
+        # Обновляем переменные для новых настроек
+        if hasattr(self, 'show_indicator_var'):
+            self.show_indicator_var.set(self.settings.get_show_translation_indicator())
+        if hasattr(self, 'auto_hide_var'):
+            self.auto_hide_var.set(self.settings.get_auto_hide_overlay())
+        if hasattr(self, 'edit_mode_var'):
+            self.edit_mode_var.set(self.settings.get_edit_mode_enabled())
+        if hasattr(self, 'hotkey_vars'):
+            for action, var in self.hotkey_vars.items():
+                default_key = default_hotkeys.get(action, "")
+                var.set(default_key)
+                if action in self.hotkey_buttons:
+                    self.hotkey_buttons[action].config(text=default_key.upper() if default_key else "—")
+
+        # Обновляем состояние режима редактирования в главном окне
+        if hasattr(self, 'app') and hasattr(self.app, '_edit_mode_enabled'):
+            edit_mode = self.settings.get_edit_mode_enabled()
+            self.app._edit_mode_enabled = edit_mode
+            if hasattr(self.app, 'btn_edit_mode'):
+                status_text = "ВКЛЮЧЕН" if edit_mode else "ВЫКЛЮЧЕН"
+                self.app.btn_edit_mode.config(
+                    text=f"✏️ Редактирование: {status_text} (F5)",
+                    bg='#4CAF50' if edit_mode else '#ff9800'
+                )
+
+        # Перерегистрируем горячие клавиши в приложении
+        if hasattr(self, 'app') and hasattr(self.app, 'setup_hotkeys'):
+            self.app.setup_hotkeys()
+
+        # Обновляем кнопки
+        if hasattr(self, 'app') and hasattr(self.app, 'update_hotkey_buttons'):
+            self.app.update_hotkey_buttons()
+
+        # Обновляем язык интерфейса в главном окне
+        if hasattr(self, 'app') and hasattr(self.app, 'update_ui_language'):
+            self.app.update_ui_language()
+
+        # Обновляем статус в главном окне
+        if hasattr(self, 'app'):
+            if hasattr(self.app, 'ready') and self.app.ready:
+                logger.info("[SETTINGS] Сброс настроек, перезапуск браузера...")
+                if hasattr(self.app, 'update_status'):
+                    self.app.update_status("● " + self.app.get_string('starting_browser'), '#ff9800')
+                if hasattr(self.app, '_restart_translator'):
+                    self.app._restart_translator()
+            else:
+                if hasattr(self.app, 'update_status'):
+                    self.app.update_status("● " + self.app.get_string('ready'), '#4CAF50')
+
+        if self.on_settings_changed:
+            self.on_settings_changed()
+
+        # Закрываем окно настроек
+        self.window.destroy()
 
     def _on_hotkey_pressed(self, action, event):
         """Обработчик нажатия клавиши для переназначения."""
@@ -1030,68 +1400,6 @@ class SettingsWindow:
         # Восстанавливаем цвет кнопки через 300 мс
         self.window.after(300, lambda a=action: self.hotkey_buttons[a].config(bg='#2d2d2d'))
         logger.info(f"[HOTKEYS_SETTINGS] ✅ Захват завершен для действия: {action}")
-
-    def _cancel_hotkey_capture(self):
-        """Отменяет текущий захват горячей клавиши."""
-        logger = logging.getLogger(__name__)
-        logger.info("[HOTKEYS_SETTINGS] ===== ОТМЕНА ЗАХВАТА КЛАВИШИ =====")
-
-        for action in self.hotkey_capturing:
-            if self.hotkey_capturing[action]:
-                logger.info(f"[HOTKEYS_SETTINGS] Отменяем захват для действия: {action}")
-                self.hotkey_capturing[action] = False
-                self.hotkey_buttons[action].config(
-                    bg='#2d2d2d',
-                    text=self.hotkey_vars[action].get().upper() or "—"
-                )
-                self.window.unbind_all('<Key>')
-                # Разблокируем ДЕЙСТВИЯ горячих клавиш
-                if hasattr(self, 'app') and hasattr(self.app, 'set_actions_blocked'):
-                    logger.info("[HOTKEYS_SETTINGS] Разблокируем действия горячих клавиш")
-                    self.app.set_actions_blocked(False)
-                logger.info(f"[HOTKEYS_SETTINGS] ✅ Захват отменен для действия: {action}")
-                break
-        logger.info("[HOTKEYS_SETTINGS] ===== ОТМЕНА ЗАХВАТА ЗАВЕРШЕНА =====")
-
-    def _start_hotkey_capture(self, action):
-        """Начинает захват клавиши для переназначения."""
-        logger = logging.getLogger(__name__)
-        logger.info("[HOTKEYS_SETTINGS] ===== НАЧАЛО ЗАХВАТА КЛАВИШИ =====")
-        logger.info(f"[HOTKEYS_SETTINGS] Действие: {action}")
-
-        # Проверяем, не идет ли уже захват для этого действия
-        if self.hotkey_capturing.get(action, False):
-            logger.warning(f"[HOTKEYS_SETTINGS] Захват уже идет для действия {action}")
-            return
-
-        # Отменяем все активные захваты
-        for a in self.hotkey_capturing:
-            if self.hotkey_capturing[a]:
-                logger.info(f"[HOTKEYS_SETTINGS] Отменяем предыдущий захват для: {a}")
-                self.hotkey_capturing[a] = False
-                self.hotkey_buttons[a].config(bg='#2d2d2d', text=self.hotkey_vars[a].get().upper() or "—")
-
-        self.hotkey_capturing[action] = True
-        btn = self.hotkey_buttons[action]
-        btn.config(bg='#FF6B00', text=self.get_string('settings_hotkeys_press_key'))
-        logger.info(f"[HOTKEYS_SETTINGS] Кнопка для {action} переключена в режим захвата (оранжевая)")
-
-        # БЛОКИРУЕМ ДЕЙСТВИЯ горячих клавиш (но не сам перехват)
-        if hasattr(self, 'app') and hasattr(self.app, 'set_actions_blocked'):
-            logger.info("[HOTKEYS_SETTINGS] Блокируем действия горячих клавиш")
-            self.app.set_actions_blocked(True)
-
-        # Устанавливаем фокус на окно
-        self.window.focus_force()
-        logger.info("[HOTKEYS_SETTINGS] Фокус установлен на окно настроек")
-
-        # Отвязываем старые обработчики
-        self.window.unbind_all('<Key>')
-
-        # Привязываем обработчик клавиш
-        self.window.bind_all('<Key>', lambda e, a=action: self._on_hotkey_pressed(a, e))
-        logger.info(f"[HOTKEYS_SETTINGS] Обработчик клавиш привязан для действия: {action}")
-        logger.info("[HOTKEYS_SETTINGS] ===== ЗАХВАТ КЛАВИШИ НАЧАТ ======")
 
     def _add_tooltip(self, widget, text):
         """Добавляет всплывающую подсказку при наведении на виджет."""

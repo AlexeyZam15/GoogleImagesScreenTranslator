@@ -245,8 +245,20 @@ class Settings:
         return self.settings.get(f"hotkey_{action}", self.DEFAULT_HOTKEYS.get(action, ""))
 
     def set_hotkey(self, action: str, key: str):
-        """Устанавливает горячую клавишу для действия."""
-        self.settings[f"hotkey_{action}"] = key.lower()
+        """Устанавливает горячую клавишу для действия. Нормализует строку."""
+        # Нормализуем: приводим к нижнему регистру, убираем лишние пробелы
+        normalized = key.lower().strip()
+        # Убираем дублирующиеся модификаторы
+        parts = normalized.split('+')
+        unique_parts = []
+        seen = set()
+        for p in parts:
+            p = p.strip()
+            if p and p not in seen:
+                unique_parts.append(p)
+                seen.add(p)
+        normalized = '+'.join(unique_parts)
+        self.settings[f"hotkey_{action}"] = normalized
         self.save()
 
     def get_all_hotkeys(self) -> dict:

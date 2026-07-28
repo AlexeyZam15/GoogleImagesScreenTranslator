@@ -48,6 +48,10 @@ class OverlayWindow:
         self._monitor_initialized = False
         self._monitor_stable_time = 0
 
+        # ФЛАГ: является ли этот оверлей результатом F2 (скриншот окна)
+        # По умолчанию False (F3 - область)
+        self._is_window_screenshot = False
+
         self.root = tk.Toplevel(parent) if parent else tk.Toplevel()
         self.root.title("Перевод")
         self.root.overrideredirect(True)
@@ -70,7 +74,6 @@ class OverlayWindow:
         self.canvas.bind('<Button-3>', self._on_right_click)
         self.root.bind('<Button-3>', self._on_right_click)
 
-        # === НОВОЕ: события наведения мыши для скрытия оверлея ===
         self.canvas.bind('<Enter>', self._on_mouse_enter)
         self.canvas.bind('<Leave>', self._on_mouse_leave)
         self.root.bind('<Enter>', self._on_mouse_enter)
@@ -79,8 +82,13 @@ class OverlayWindow:
         self.logger.info("OverlayWindow инициализирован")
 
     def _on_mouse_enter(self, event):
-        """Обработчик входа мыши в область оверлея - скрывает оверлей в режиме просмотра."""
-        # Проверяем режим редактирования
+        """Обработчик входа мыши в область оверлея."""
+        # ДЛЯ F2 (СКРИНШОТ ОКНА) НИКОГДА НЕ СКРЫВАЕМ ПРИ НАВЕДЕНИИ
+        if self._is_window_screenshot:
+            self.logger.debug("[DEBUG] _on_mouse_enter: F2-оверлей, не скрываем")
+            return
+
+        # Для F3 (область) проверяем режим редактирования
         is_edit_mode = False
         if hasattr(self, '_overlay_manager') and self._overlay_manager:
             try:
@@ -88,25 +96,27 @@ class OverlayWindow:
             except:
                 pass
 
-        # В режиме редактирования НЕ скрываем оверлей
         if is_edit_mode:
             self.logger.debug("[DEBUG] _on_mouse_enter: режим редактирования включен - оверлей не скрываем")
             return
 
-        # В режиме просмотра скрываем оверлей при наведении мыши
+        if not self.visible:
+            return
+
         if self.visible and self._is_visible_by_user:
             self.logger.info("[DEBUG] _on_mouse_enter: скрываем оверлей (режим просмотра)")
-            self._hide_internal()
-            # Устанавливаем флаг, что оверлей скрыт из-за наведения мыши
             self._hidden_by_mouse = True
+            self._hide_internal()
 
     def _on_mouse_leave(self, event):
-        """Обработчик выхода мыши из области оверлея - показывает оверлей если целевое окно активно."""
-        # Проверяем, был ли оверлей скрыт из-за наведения мыши
+        """Обработчик выхода мыши из области оверлея."""
+        # ДЛЯ F2 (СКРИНШОТ ОКНА) НИЧЕГО НЕ ДЕЛАЕМ
+        if self._is_window_screenshot:
+            return
+
         if not hasattr(self, '_hidden_by_mouse') or not self._hidden_by_mouse:
             return
 
-        # Проверяем режим редактирования
         is_edit_mode = False
         if hasattr(self, '_overlay_manager') and self._overlay_manager:
             try:
@@ -114,20 +124,37 @@ class OverlayWindow:
             except:
                 pass
 
-        # В режиме редактирования не нужно показывать (он и так не скрыт)
         if is_edit_mode:
             self._hidden_by_mouse = False
             return
 
-        # Проверяем, активно ли целевое окно
+        # Проверяем координаты мыши
+        try:
+            import win32gui
+            import win32api
+
+            cursor_pos = win32api.GetCursorPos()
+            cursor_x, cursor_y = cursor_pos
+
+            if self.root and self.root.winfo_exists():
+                x1 = self.root.winfo_x()
+                y1 = self.root.winfo_y()
+                x2 = x1 + self.root.winfo_width()
+                y2 = y1 + self.root.winfo_height()
+
+                if x1 <= cursor_x <= x2 and y1 <= cursor_y <= y2:
+                    self.logger.info("[DEBUG] _on_mouse_leave: мышь внутри области оверлея - НЕ ПОКАЗЫВАЕМ")
+                    self._hidden_by_mouse = False
+                    return
+        except Exception as e:
+            self.logger.warning(f"[DEBUG] _on_mouse_leave: ошибка проверки координат: {e}")
+
         try:
             import win32gui
             active_hwnd = win32gui.GetForegroundWindow()
 
-            # Проверяем, является ли активное окно целевым
             is_target_active = (active_hwnd == self._target_hwnd)
 
-            # Также проверяем, не является ли активное окно главным окном приложения
             app_hwnd = None
             try:
                 if hasattr(self.root, 'master'):
@@ -139,9 +166,8 @@ class OverlayWindow:
 
             is_app_window = (active_hwnd == app_hwnd)
 
-            # Показываем оверлей только если целевое окно активно или это окно приложения
             if is_target_active or is_app_window:
-                self.logger.info("[DEBUG] _on_mouse_leave: показываем оверлей (целевое окно активно)")
+                self.logger.info("[DEBUG] _on_mouse_leave: показываем оверлей (целевое окно активно, мышь вне области)")
                 self._hidden_by_mouse = False
                 if hasattr(self, '_overlay_manager') and self._overlay_manager:
                     self._overlay_manager.show_all_sync()
@@ -149,23 +175,25 @@ class OverlayWindow:
                 self.logger.debug("[DEBUG] _on_mouse_leave: целевое окно не активно - не показываем оверлей")
         except Exception as e:
             self.logger.warning(f"[DEBUG] _on_mouse_leave: ошибка проверки активного окна: {e}")
-            # В случае ошибки все равно пытаемся показать
             self._hidden_by_mouse = False
-            if hasattr(self, '_overlay_manager') and self._overlay_manager:
-                self._overlay_manager.show_all_sync()
 
     def _start_drag(self, event):
-        """Начинает перетаскивание окна (только в режиме редактирования)."""
+        """Начинает перетаскивание окна."""
         self.logger.info(f"[DEBUG] _start_drag вызван! event=({event.x}, {event.y})")
 
-        # Проверяем режим редактирования через менеджер
-        if hasattr(self, '_overlay_manager') and self._overlay_manager:
-            try:
-                if not self._overlay_manager.parent.is_edit_mode_enabled():
-                    self.logger.info("[DEBUG] _start_drag: режим редактирования ВЫКЛЮЧЕН - перетаскивание запрещено")
-                    return "break"
-            except Exception as e:
-                self.logger.warning(f"[DEBUG] _start_drag: ошибка проверки режима: {e}")
+        # ДЛЯ F2 (СКРИНШОТ ОКНА) ВСЕГДА РАЗРЕШАЕМ ПЕРЕТАСКИВАНИЕ
+        if self._is_window_screenshot:
+            self.logger.info("[DEBUG] _start_drag: F2-оверлей, перетаскивание разрешено")
+        else:
+            # Для F3 (область) проверяем режим редактирования
+            if hasattr(self, '_overlay_manager') and self._overlay_manager:
+                try:
+                    if not self._overlay_manager.parent.is_edit_mode_enabled():
+                        self.logger.info(
+                            "[DEBUG] _start_drag: режим редактирования ВЫКЛЮЧЕН - перетаскивание запрещено")
+                        return "break"
+                except Exception as e:
+                    self.logger.warning(f"[DEBUG] _start_drag: ошибка проверки режима: {e}")
 
         if not self._is_visible_by_user or not self.visible:
             self.logger.info("[DEBUG] _start_drag - оверлей скрыт, перетаскивание запрещено")
@@ -254,12 +282,21 @@ class OverlayWindow:
             self._drag_stop_timer = self.root.after(500, self._on_drag_stop_timeout)
 
     def _on_right_click(self, event):
-        """Обработчик правой кнопки мыши - удаляет оверлей (только в режиме редактирования)."""
+        """Обработчик правой кнопки мыши - удаляет оверлей."""
         self.logger.info("[DEBUG] _on_right_click вызван")
+
+        # ДЛЯ F2 (СКРИНШОТ ОКНА) ВСЕГДА РАЗРЕШАЕМ УДАЛЕНИЕ
+        if self._is_window_screenshot:
+            self.logger.info("[DEBUG] _on_right_click: F2-оверлей, удаление разрешено")
+            self._remove_overlay()
+            return
+
+        # Для F3 (область) проверяем режим редактирования
         if hasattr(self, '_overlay_manager') and self._overlay_manager:
             if not self._overlay_manager.parent.is_edit_mode_enabled():
                 self.logger.info("[DEBUG] _on_right_click: режим редактирования ВЫКЛЮЧЕН - удаление запрещено")
                 return
+
         self._remove_overlay()
 
     def _check_and_update_visibility(self):

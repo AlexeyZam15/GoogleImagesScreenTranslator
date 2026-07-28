@@ -22,6 +22,8 @@ def get_russian_main_strings():
         'shown': "показан",
         'hidden': "скрыт",
         'overlay_remove_hint': "Наведите на оверлей и нажмите ESC для удаления",
+        'edit_mode_on': "ВКЛЮЧЕН",  # <-- ДОБАВЛЯЕМ
+        'edit_mode_off': "ВЫКЛЮЧЕН",  # <-- ДОБАВЛЯЕМ
     }
 
 
@@ -42,27 +44,36 @@ def get_english_main_strings():
         'shown': "shown",
         'hidden': "hidden",
         'overlay_remove_hint': "Hover over overlay and press ESC to remove",
+        'edit_mode_on': "ON",  # <-- ДОБАВЛЯЕМ
+        'edit_mode_off': "OFF",  # <-- ДОБАВЛЯЕМ
     }
 
 
 def get_russian_button_strings():
     """Возвращает русские строки для кнопок"""
     return {
-        'btn_capture': "Сделать скриншот (F2)",
-        'btn_toggle': "Показать/скрыть (F1)",
-        'btn_clear_all': "🗑️ Очистить все (F4)",
+        'btn_capture': "Сделать скриншот",
+        'btn_area': "Выбрать область",
+        'btn_toggle': "Показать/скрыть",
+        'btn_clear_all': "Очистить все",
         'hotkeys_info': "F2 - скриншот окна | F3 - область | F1 - оверлей | F4 - удалить все | ESC - удалить оверлей под мышью",
+        'edit_mode': "Редактирование",
+        'clear_all': "Очистить все",
     }
 
 
 def get_english_button_strings():
     """Возвращает английские строки для кнопок"""
     return {
-        'btn_capture': "Take screenshot (F2)",
-        'btn_toggle': "Show/Hide (F1)",
-        'btn_clear_all': "🗑️ Clear all (F4)",
+        'btn_capture': "Take screenshot",
+        'btn_area': "Select area",
+        'btn_toggle': "Show/Hide",
+        'btn_clear_all': "Clear all",
         'hotkeys_info': "F2 - window screenshot | F3 - area | F1 - overlay | F4 - clear all | ESC - remove overlay under cursor",
+        'edit_mode': "Edit mode",
+        'clear_all': "Clear all",
     }
+
 
 
 def get_russian_settings_strings():
@@ -90,9 +101,26 @@ def get_russian_menu_strings():
         'menu_settings_item': "Настройки (Ctrl+S)",
         'menu_reset_settings': "Сбросить настройки",
         'menu_help': "Помощь",
+        'menu_help_instruction': "📖 Инструкция и ссылки",
         'menu_shortcuts': "Горячие клавиши",
         'menu_about': "О программе",
         'menu_open_folder': "📁 Открыть папку приложения",
+    }
+
+
+def get_english_menu_strings():
+    """Возвращает английские строки для меню"""
+    return {
+        'menu_file': "File",
+        'menu_exit': "Exit (Ctrl+Q)",
+        'menu_settings': "Settings",
+        'menu_settings_item': "Settings (Ctrl+S)",
+        'menu_reset_settings': "Reset Settings",
+        'menu_help': "Help",
+        'menu_help_instruction': "📖 Help & Links",
+        'menu_shortcuts': "Shortcuts",
+        'menu_about': "About",
+        'menu_open_folder': "📁 Open App Folder",
     }
 
 
@@ -179,6 +207,7 @@ def get_english_settings_window_strings():
         'browser_find_warning_message': "Select a browser from the list",
     }
 
+
 def get_russian_about_strings():
     """Возвращает русские строки для окна 'О программе'"""
     return {
@@ -205,7 +234,42 @@ def get_russian_all_strings():
     strings.update(get_russian_settings_window_strings())
     strings.update(get_russian_about_strings())
     strings.update(get_russian_shortcuts_strings())
+    strings.update(get_russian_help_strings())  # <-- ДОБАВЛЯЕМ
     return strings
+
+
+def get_english_all_strings():
+    """Объединяет все английские строки в один словарь"""
+    strings = {}
+    strings.update(get_english_main_strings())
+    strings.update(get_english_button_strings())
+    strings.update(get_english_settings_strings())
+    strings.update(get_english_menu_strings())
+    strings.update(get_english_settings_window_strings())
+    strings.update(get_english_about_strings())
+    strings.update(get_english_shortcuts_strings())
+    strings.update(get_english_help_strings())  # <-- ДОБАВЛЯЕМ
+    return strings
+
+
+def get_russian_help_strings():
+    """Возвращает русские строки для окна помощи"""
+    return {
+        'help_title': "Помощь и ссылки",
+        'help_subtitle': "Перевод скриншотов через Google Translate",
+        'help_info': "Полная инструкция и последняя версия доступны на GitHub:",
+        'help_close': "Закрыть",
+    }
+
+
+def get_english_help_strings():
+    """Возвращает английские строки для окна помощи"""
+    return {
+        'help_title': "Help & Links",
+        'help_subtitle': "Screenshot translation via Google Translate",
+        'help_info': "Full instructions and latest version available on GitHub:",
+        'help_close': "Close",
+    }
 
 
 def get_english_settings_strings():
@@ -224,21 +288,6 @@ def get_english_settings_strings():
     }
 
 
-def get_english_menu_strings():
-    """Возвращает английские строки для меню"""
-    return {
-        'menu_file': "File",
-        'menu_exit': "Exit (Ctrl+Q)",
-        'menu_settings': "Settings",
-        'menu_settings_item': "Settings (Ctrl+S)",
-        'menu_reset_settings': "Reset Settings",
-        'menu_help': "Help",
-        'menu_shortcuts': "Shortcuts",
-        'menu_about': "About",
-        'menu_open_folder': "📁 Open App Folder",
-    }
-
-
 def get_english_about_strings():
     """Возвращает английские строки для окна 'О программе'"""
     return {
@@ -254,18 +303,6 @@ def get_english_shortcuts_strings():
         'shortcuts_text': "📋 Keyboard shortcuts:\n\nF2 - Take window screenshot\nF3 - Select area to translate\nF1 - Show/Hide overlay\nESC - Close overlay",
     }
 
-
-def get_english_all_strings():
-    """Объединяет все английские строки в один словарь"""
-    strings = {}
-    strings.update(get_english_main_strings())
-    strings.update(get_english_button_strings())
-    strings.update(get_english_settings_strings())
-    strings.update(get_english_menu_strings())
-    strings.update(get_english_settings_window_strings())
-    strings.update(get_english_about_strings())
-    strings.update(get_english_shortcuts_strings())
-    return strings
 
 
 def get_strings(language_code='ru'):

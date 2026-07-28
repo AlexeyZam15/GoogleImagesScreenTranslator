@@ -25,11 +25,20 @@ class OverlayManager:
 
     def create_overlay(self, image_path: Path, window_rect: tuple,
                        target_hwnd: int = None, is_fullscreen: bool = None,
-                       show_immediately: bool = True) -> Optional[OverlayWindow]:
+                       show_immediately: bool = True, is_window_screenshot: bool = False) -> Optional[OverlayWindow]:
         """
         Создает новый оверлей на основе переданных данных.
+
+        Args:
+            image_path: Путь к изображению для отображения
+            window_rect: Координаты окна (x1, y1, x2, y2)
+            target_hwnd: HWND целевого окна
+            is_fullscreen: Флаг полноэкранного режима
+            show_immediately: Показывать сразу или сохранить для отложенного показа
+            is_window_screenshot: True для F2 (скриншот окна), False для F3 (область)
         """
-        self.logger.info(f"Создание нового оверлея: image_path={image_path}")
+        self.logger.info(
+            f"Создание нового оверлея: image_path={image_path}, is_window_screenshot={is_window_screenshot}")
 
         auto_hide_enabled = False
         if hasattr(self.parent, 'settings') and self.parent.settings:
@@ -199,6 +208,11 @@ class OverlayManager:
                     new_overlay._hidden_by_mouse = False
                     new_overlay.logger.info("[DEBUG] Added _hidden_by_mouse attribute (fallback)")
 
+                # _is_window_screenshot
+                if not hasattr(new_overlay, '_is_window_screenshot'):
+                    new_overlay._is_window_screenshot = False
+                    new_overlay.logger.info("[DEBUG] Added _is_window_screenshot attribute (fallback)")
+
                 # === ПРОВЕРЯЕМ, ЕСТЬ ЛИ УЖЕ ROOT ===
                 if not hasattr(new_overlay, 'root') or new_overlay.root is None:
                     import tkinter as tk
@@ -264,6 +278,10 @@ class OverlayManager:
             self.logger.error("[DEBUG] new_overlay is None after creation attempts")
             return None
 
+        # Устанавливаем флаг, является ли это F2-оверлеем (скриншот окна)
+        new_overlay._is_window_screenshot = is_window_screenshot
+        self.logger.info(f"[DEBUG] Установлен _is_window_screenshot = {is_window_screenshot}")
+
         # Отключаем собственный хук ESC у оверлея - используем менеджер
         new_overlay._use_manager_esc = True
 
@@ -323,7 +341,7 @@ class OverlayManager:
                 self.logger.warning(f"[DEBUG] Не удалось установить прозрачность для оверлея: {e}")
 
     def _global_esc_handler(self, event):
-        """Глобальный обработчик ESC - отменяет перевод или удаляет оверлей под мышью (только в режиме редактирования)."""
+        """Глобальный обработчик ESC - отменяет перевод или скрывает/удаляет оверлей под мышью."""
         self.logger.info("[DEBUG] ESC нажат - проверка состояния перевода")
 
         # Проверяем, идет ли перевод
@@ -333,10 +351,12 @@ class OverlayManager:
                 self.parent._cancel_translation()
             return False
 
-        # Если перевода нет - проверяем режим редактирования
-        if not self.parent.is_edit_mode_enabled():
-            self.logger.info("[DEBUG] ESC: режим редактирования ВЫКЛЮЧЕН - удаление оверлеев запрещено")
-            # Возвращаем фокус на целевое окно, если есть оверлеи
+        # Если перевода нет - пытаемся найти оверлей под мышью
+        overlay_to_remove = self._find_overlay_under_cursor()
+
+        if overlay_to_remove is None:
+            self.logger.info("[DEBUG] ESC: оверлей под мышью не найден - скрываем все оверлеи")
+            self.hide_all_overlays()
             if self.overlays:
                 last_overlay = self.overlays[-1]
                 if last_overlay._target_hwnd:
@@ -348,18 +368,16 @@ class OverlayManager:
                         self.logger.warning(f"[DEBUG] Не удалось вернуть фокус: {e}")
             return False
 
-        # Режим редактирования ВКЛЮЧЕН - пытаемся удалить оверлей под мышью
-        self.logger.info("[DEBUG] ESC: режим редактирования ВКЛЮЧЕН - ищем оверлей под мышью")
+        target_hwnd = overlay_to_remove._target_hwnd
 
-        overlay_to_remove = self._find_overlay_under_cursor()
-
-        if overlay_to_remove is not None:
-            self.logger.info("[DEBUG] ESC: найден оверлей под мышью - удаляем его")
-
-            target_hwnd = overlay_to_remove._target_hwnd
-
-            self.remove_overlay(overlay_to_remove)
-
+        # === ГЛАВНОЕ ИЗМЕНЕНИЕ: ДЛЯ F2-ОВЕРЛЕЯ ВСЕГДА СКРЫВАЕМ ===
+        if hasattr(overlay_to_remove, '_is_window_screenshot') and overlay_to_remove._is_window_screenshot:
+            self.logger.info("[DEBUG] ESC: F2-оверлей (скриншот окна) - СКРЫВАЕМ, а не удаляем")
+            # Скрываем оверлей
+            overlay_to_remove.hide()
+            # Убираем флаг, что оверлей должен быть виден
+            overlay_to_remove._is_visible_by_user = False
+            self.logger.info("[DEBUG] ESC: F2-оверлей скрыт")
             if target_hwnd:
                 try:
                     import win32gui
@@ -367,31 +385,37 @@ class OverlayManager:
                     self.logger.info(f"[DEBUG] Фокус возвращен на целевое окно: {target_hwnd}")
                 except Exception as e:
                     self.logger.warning(f"[DEBUG] Не удалось вернуть фокус: {e}")
-
-            # Убираем статусы об удалении оверлеев
-            # if hasattr(self.parent, 'update_status'):
-            #     remaining = len(self.overlays)
-            #     if remaining > 0:
-            #         self.parent.update_status(f"● Удален оверлей, осталось: {remaining}", '#ff9800')
-            #     else:
-            #         self.parent.update_status(f"● Все оверлеи удалены", '#4CAF50')
-
             return False
-        else:
-            self.logger.info("[DEBUG] ESC: оверлей под мышью не найден - скрываем все оверлеи")
-            self.hide_all_overlays()
 
-            if self.overlays:
-                last_overlay = self.overlays[-1]
-                if last_overlay._target_hwnd:
-                    try:
-                        import win32gui
-                        win32gui.SetForegroundWindow(last_overlay._target_hwnd)
-                        self.logger.info(f"[DEBUG] Фокус возвращен на целевое окно: {last_overlay._target_hwnd}")
-                    except Exception as e:
-                        self.logger.warning(f"[DEBUG] Не удалось вернуть фокус: {e}")
-
+        # Для F3-оверлея (область) проверяем режим редактирования
+        if not self.parent.is_edit_mode_enabled():
+            self.logger.info("[DEBUG] ESC: режим редактирования ВЫКЛЮЧЕН - удаление оверлеев запрещено")
+            # Всё равно скрываем оверлей (но не удаляем)
+            overlay_to_remove.hide()
+            overlay_to_remove._is_visible_by_user = False
+            self.logger.info("[DEBUG] ESC: F3-оверлей скрыт (режим редактирования выключен)")
+            if target_hwnd:
+                try:
+                    import win32gui
+                    win32gui.SetForegroundWindow(target_hwnd)
+                    self.logger.info(f"[DEBUG] Фокус возвращен на целевое окно: {target_hwnd}")
+                except Exception as e:
+                    self.logger.warning(f"[DEBUG] Не удалось вернуть фокус: {e}")
             return False
+
+        # Режим редактирования ВКЛЮЧЕН - удаляем оверлей
+        self.logger.info("[DEBUG] ESC: режим редактирования ВКЛЮЧЕН - УДАЛЯЕМ оверлей")
+        self.remove_overlay(overlay_to_remove)
+
+        if target_hwnd:
+            try:
+                import win32gui
+                win32gui.SetForegroundWindow(target_hwnd)
+                self.logger.info(f"[DEBUG] Фокус возвращен на целевое окно: {target_hwnd}")
+            except Exception as e:
+                self.logger.warning(f"[DEBUG] Не удалось вернуть фокус: {e}")
+
+        return False
 
     def remove_overlay(self, overlay: OverlayWindow):
         """Удаляет конкретный оверлей из списка и закрывает его (только в режиме редактирования)."""
@@ -506,15 +530,27 @@ class OverlayManager:
 
     def show_all_sync(self):
         """Показывает все оверлеи синхронно, без мигания."""
-        # Защита от множественных вызовов
         if self._show_all_sync_pending:
-            self.logger.info("[DEBUG] show_all_sync уже запланирован, пропускаем")
+            self.logger.debug("[DEBUG] show_all_sync уже запланирован, пропускаем")
+            return
+
+        if not self.overlays:
+            return
+
+        # Проверяем, все ли оверлеи уже видны
+        all_visible = True
+        for overlay in self.overlays:
+            if overlay is not None and not overlay.visible:
+                all_visible = False
+                break
+
+        if all_visible:
+            self.logger.debug("[DEBUG] Все оверлеи уже видны, пропускаем")
             return
 
         self._show_all_sync_pending = True
-        self.logger.info(f"[DEBUG] Запланирован синхронный показ всех {len(self.overlays)} оверлеев")
+        self.logger.debug(f"[DEBUG] Запланирован синхронный показ всех {len(self.overlays)} оверлеев")
 
-        # Откладываем показ на 50мс, чтобы собрать все события
         if self._show_all_sync_timer:
             try:
                 if hasattr(self.parent, 'root') and self.parent.root.winfo_exists():
@@ -531,7 +567,6 @@ class OverlayManager:
         if hasattr(self.parent, 'root') and self.parent.root.winfo_exists():
             self._show_all_sync_timer = self.parent.root.after(50, do_show_all)
         else:
-            # Если нет root - выполняем сразу
             self._show_all_sync_pending = False
             self._show_all_sync_impl()
 
