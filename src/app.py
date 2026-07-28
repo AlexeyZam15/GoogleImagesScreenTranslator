@@ -172,6 +172,7 @@ class ScreenshotTranslatorApp:
                 text=f"✏️ {self.get_string('edit_mode')}: {status_text} ({edit_key})",
                 bg='#4CAF50' if self._edit_mode_enabled else '#ff9800'
             )
+            self.update_hotkey_buttons()
         return self._edit_mode_enabled
 
     def update_hotkey_buttons(self):

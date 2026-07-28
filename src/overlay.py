@@ -85,14 +85,6 @@ class OverlayWindow:
         """Обновляет состояние режима редактирования для оверлея."""
         self._edit_mode_enabled = edit_mode_enabled
         self.logger.info(f"[DEBUG] Обновлен _edit_mode_enabled = {edit_mode_enabled}")
-        # Обновляем прозрачность в зависимости от режима
-        alpha = 1.0 if edit_mode_enabled else 0.7
-        try:
-            if self.root and self.root.winfo_exists():
-                self.root.attributes('-alpha', alpha)
-                self.logger.info(f"[DEBUG] Установлена прозрачность {alpha}")
-        except Exception as e:
-            self.logger.warning(f"[DEBUG] Не удалось установить прозрачность: {e}")
 
     def _on_mouse_enter(self, event):
         """Обработчик входа мыши в область оверлея."""

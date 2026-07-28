@@ -355,18 +355,6 @@ class OverlayManager:
         self.logger.info(f"Все {len(self.overlays)} оверлеев {'показаны' if new_state else 'скрыты'}")
         return new_state
 
-    def set_edit_mode_alpha(self, edit_mode_enabled: bool):
-        """Устанавливает прозрачность всех оверлеев в зависимости от режима редактирования."""
-        alpha = 1.0 if edit_mode_enabled else 0.7
-        self.logger.info(f"[DEBUG] Установка прозрачности всех оверлеев: {alpha} (режим: {edit_mode_enabled})")
-        for overlay in self.overlays:
-            try:
-                if overlay and overlay.root and overlay.root.winfo_exists():
-                    overlay.root.attributes('-alpha', alpha)
-                    overlay.logger.info(f"[DEBUG] Установлена прозрачность {alpha} для оверлея")
-            except Exception as e:
-                self.logger.warning(f"[DEBUG] Не удалось установить прозрачность для оверлея: {e}")
-
     def _global_esc_handler(self, event):
         """Глобальный обработчик ESC - отменяет перевод или скрывает/удаляет оверлей под мышью."""
         self.logger.info("[DEBUG] ESC нажат - проверка состояния перевода")
