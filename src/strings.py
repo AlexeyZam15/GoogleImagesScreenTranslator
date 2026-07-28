@@ -21,7 +21,7 @@ def get_russian_main_strings():
         'overlay': "Оверлей",
         'shown': "показан",
         'hidden': "скрыт",
-        'overlay_remove_hint': "Наведите на оверлей и нажмите ESC для удаления",  # НОВОЕ
+        'overlay_remove_hint': "Наведите на оверлей и нажмите ESC для удаления",
     }
 
 
@@ -41,7 +41,7 @@ def get_english_main_strings():
         'overlay': "Overlay",
         'shown': "shown",
         'hidden': "hidden",
-        'overlay_remove_hint': "Hover over overlay and press ESC to remove",  # НОВОЕ
+        'overlay_remove_hint': "Hover over overlay and press ESC to remove",
     }
 
 
@@ -52,7 +52,6 @@ def get_russian_button_strings():
         'btn_toggle': "Показать/скрыть (F1)",
         'btn_clear_all': "🗑️ Очистить все (F4)",
         'hotkeys_info': "F2 - скриншот окна | F3 - область | F1 - оверлей | F4 - удалить все | ESC - удалить оверлей под мышью",
-        # ИЗМЕНЕНО
     }
 
 
@@ -63,7 +62,6 @@ def get_english_button_strings():
         'btn_toggle': "Show/Hide (F1)",
         'btn_clear_all': "🗑️ Clear all (F4)",
         'hotkeys_info': "F2 - window screenshot | F3 - area | F1 - overlay | F4 - clear all | ESC - remove overlay under cursor",
-        # ИЗМЕНЕНО
     }
 
 
@@ -112,8 +110,31 @@ def get_russian_settings_window_strings():
         'settings_cancel': "❌ Отмена",
         'settings_ui': "🎨 Интерфейс",
         'auto_windowed_fullscreen': "Фулскрин → оконный фулскрин при F3",
-        'edit_mode': "✏️ Режим редактирования",  # КРАТКО
-        'edit_mode_tooltip': "Разрешить перемещение и удаление оверлеев",  # ПОДСКАЗКА
+        'edit_mode': "✏️ Режим редактирования",
+        'edit_mode_tooltip': "Разрешить перемещение и удаление оверлеев",
+        'settings_hotkeys': "⌨️ Горячие клавиши",
+        'settings_hotkeys_action_screenshot': "Скриншот окна",
+        'settings_hotkeys_action_area': "Выделение области",
+        'settings_hotkeys_action_toggle_overlay': "Показать/скрыть оверлей",
+        'settings_hotkeys_action_clear_all': "Удалить все оверлеи",
+        'settings_hotkeys_action_edit_mode': "Режим редактирования",
+        'settings_hotkeys_press_key': "Нажмите клавишу...",
+        'settings_hotkeys_click_to_change': "Нажмите для изменения",
+        # НОВЫЕ СТРОКИ ДЛЯ ПОИСКА БРАУЗЕРОВ
+        'browser_find_title': "Выберите браузер",
+        'browser_find_header': "Выберите браузер для использования:",
+        'browser_find_recommend': "💡 Рекомендуется использовать Яндекс Браузер для лучшей совместимости",
+        'browser_find_hint': "Кликните по браузеру для выбора, затем нажмите 'Выбрать'",
+        'browser_find_select': "✅ Выбрать",
+        'browser_find_cancel': "❌ Отмена",
+        'browser_find_path_label': "Выберите браузер из списка",
+        'browser_find_selected': "✅ Выбран: {}",
+        'browser_find_path_prefix': "📁 {}",
+        'browser_find_not_found': "Браузеры не найдены.",
+        'browser_find_install_hint': "Убедитесь, что установлен один из браузеров:\n• Google Chrome\n• Yandex Browser (Яндекс Браузер)",
+        'browser_find_not_found_recommend': "💡 Рекомендуется использовать Яндекс Браузер для лучшей совместимости.",
+        'browser_find_warning_title': "Внимание",
+        'browser_find_warning_message': "Выберите браузер из списка",
     }
 
 
@@ -131,11 +152,32 @@ def get_english_settings_window_strings():
         'settings_cancel': "❌ Cancel",
         'settings_ui': "🎨 Interface",
         'auto_windowed_fullscreen': "Fullscreen → windowed fullscreen on F3",
-        'edit_mode': "✏️ Edit mode",  # КРАТКО
-        'edit_mode_tooltip': "Allow moving and removing overlays",  # ПОДСКАЗКА
+        'edit_mode': "✏️ Edit mode",
+        'edit_mode_tooltip': "Allow moving and removing overlays",
+        'settings_hotkeys': "⌨️ Hotkeys",
+        'settings_hotkeys_action_screenshot': "Screenshot",
+        'settings_hotkeys_action_area': "Area selection",
+        'settings_hotkeys_action_toggle_overlay': "Show/Hide overlay",
+        'settings_hotkeys_action_clear_all': "Clear all overlays",
+        'settings_hotkeys_action_edit_mode': "Edit mode",
+        'settings_hotkeys_press_key': "Press a key...",
+        'settings_hotkeys_click_to_change': "Click to change",
+        # НОВЫЕ СТРОКИ ДЛЯ ПОИСКА БРАУЗЕРОВ
+        'browser_find_title': "Select Browser",
+        'browser_find_header': "Select browser to use:",
+        'browser_find_recommend': "💡 Yandex Browser is recommended for best compatibility",
+        'browser_find_hint': "Click on a browser to select it, then click 'Select'",
+        'browser_find_select': "✅ Select",
+        'browser_find_cancel': "❌ Cancel",
+        'browser_find_path_label': "Select a browser from the list",
+        'browser_find_selected': "✅ Selected: {}",
+        'browser_find_path_prefix': "📁 {}",
+        'browser_find_not_found': "Browsers not found.",
+        'browser_find_install_hint': "Make sure one of the following browsers is installed:\n• Google Chrome\n• Yandex Browser",
+        'browser_find_not_found_recommend': "💡 Yandex Browser is recommended for best compatibility.",
+        'browser_find_warning_title': "Warning",
+        'browser_find_warning_message': "Select a browser from the list",
     }
-
-
 
 def get_russian_about_strings():
     """Возвращает русские строки для окна 'О программе'"""
@@ -164,7 +206,6 @@ def get_russian_all_strings():
     strings.update(get_russian_about_strings())
     strings.update(get_russian_shortcuts_strings())
     return strings
-
 
 
 def get_english_settings_strings():

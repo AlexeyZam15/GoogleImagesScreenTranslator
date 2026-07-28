@@ -24,8 +24,25 @@ class Settings:
         "browser_path": "",
         "auto_hide_overlay": True,
         "auto_windowed_fullscreen": True,
-        "edit_mode_enabled": False  # НОВОЕ: режим редактирования по умолчанию ВЫКЛЮЧЕН
+        "edit_mode_enabled": False
     }
+
+    # Значения горячих клавиш по умолчанию
+    DEFAULT_HOTKEYS = {
+        "screenshot": "f2",
+        "area": "f3",
+        "toggle_overlay": "f1",
+        "clear_all": "f4",
+        "edit_mode": "f5"
+    }
+
+    def __init__(self):
+        self.settings = self.DEFAULT_SETTINGS.copy()
+        self.profiles = {}
+        self.current_profile = "default"
+        self._config_dir = Path.home() / "Documents" / "GoogleScreenTranslate" / "config"
+        self._config_file = self._config_dir / "settings.json"
+        self.load()
 
     def get_edit_mode_enabled(self) -> bool:
         """Возвращает настройку режима редактирования."""
@@ -35,14 +52,6 @@ class Settings:
         """Устанавливает настройку режима редактирования."""
         self.settings["edit_mode_enabled"] = enabled
         self.save()
-
-    def __init__(self):
-        self.settings = self.DEFAULT_SETTINGS.copy()
-        self.profiles = {}
-        self.current_profile = "default"
-        self._config_dir = Path.home() / "Documents" / "GoogleScreenTranslate" / "config"
-        self._config_file = self._config_dir / "settings.json"
-        self.load()
 
     def get_auto_windowed_fullscreen(self) -> bool:
         """Возвращает настройку автоматического преобразования в оконный полноэкранный режим"""
@@ -63,6 +72,9 @@ class Settings:
             self.auto_hide_var.set(self.settings.get_auto_hide_overlay())
         if hasattr(self, 'auto_windowed_fullscreen_var'):
             self.auto_windowed_fullscreen_var.set(self.settings.get_auto_windowed_fullscreen())
+        if hasattr(self, 'hotkey_vars'):
+            for action, var in self.hotkey_vars.items():
+                var.set(self.settings.get_hotkey(action))
 
     def get_browser_path(self) -> str:
         """Возвращает путь к браузеру из настроек"""
@@ -222,3 +234,33 @@ class Settings:
             self.save()
             return True
         return False
+
+    # ========== МЕТОДЫ ДЛЯ ГОРЯЧИХ КЛАВИШ ==========
+
+    def get_hotkey(self, action: str) -> str:
+        """
+        Возвращает назначенную горячую клавишу для действия.
+        Если клавиша не назначена, возвращает значение по умолчанию.
+        """
+        return self.settings.get(f"hotkey_{action}", self.DEFAULT_HOTKEYS.get(action, ""))
+
+    def set_hotkey(self, action: str, key: str):
+        """Устанавливает горячую клавишу для действия."""
+        self.settings[f"hotkey_{action}"] = key.lower()
+        self.save()
+
+    def get_all_hotkeys(self) -> dict:
+        """Возвращает словарь всех горячих клавиш."""
+        return {
+            "screenshot": self.get_hotkey("screenshot"),
+            "area": self.get_hotkey("area"),
+            "toggle_overlay": self.get_hotkey("toggle_overlay"),
+            "clear_all": self.get_hotkey("clear_all"),
+            "edit_mode": self.get_hotkey("edit_mode")
+        }
+
+    def reset_hotkeys_to_default(self):
+        """Сбрасывает все горячие клавиши к значениям по умолчанию."""
+        for action, default_key in self.DEFAULT_HOTKEYS.items():
+            self.settings[f"hotkey_{action}"] = default_key
+        self.save()

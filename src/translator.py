@@ -96,6 +96,12 @@ class GoogleTranslateDebug:
                     "--disable-setuid-sandbox",
                     "--disable-web-security",
                     "--disable-features=IsolateOrigins,site-per-process",
+                    "--disable-background-timer-throttling",
+                    "--disable-backgrounding-occluded-windows",
+                    "--disable-renderer-backgrounding",
+                    "--no-first-run",
+                    "--disable-default-apps",
+                    "--disable-popup-blocking",
                 ],
                 ignore_default_args=["--enable-automation"],
                 timeout=30000,
@@ -106,21 +112,40 @@ class GoogleTranslateDebug:
             self.logger.info("Ожидание инициализации браузера (2с)...")
             time.sleep(2)
 
+            # Проверяем, есть ли уже страницы
             pages = self._context.pages
             if pages:
-                self.logger.info(f"Закрытие {len(pages)} существующих вкладок...")
-                for page in pages:
+                self.logger.info(f"Найдено {len(pages)} существующих страниц")
+                # Используем первую существующую страницу
+                self._page = pages[0]
+                self.logger.info("Используем существующую страницу")
+            else:
+                # Создаем новую страницу с обработкой ошибки
+                try:
+                    self._page = self._context.new_page()
+                    self.logger.info("Создана новая страница")
+                except Exception as e:
+                    self.logger.error(f"Не удалось создать новую страницу: {e}")
+                    # Пробуем создать страницу с другими параметрами
                     try:
-                        page.close()
+                        self._page = self._context.new_page(no_viewport=True)
+                        self.logger.info("Создана новая страница (no_viewport)")
+                    except Exception as e2:
+                        self.logger.error(f"Не удалось создать страницу даже с no_viewport: {e2}")
+                        raise
+
+            # Закрываем лишние страницы, оставляем только одну
+            pages = self._context.pages
+            if len(pages) > 1:
+                self.logger.info(f"Закрытие {len(pages) - 1} лишних страниц...")
+                for i in range(len(pages) - 1, 0, -1):
+                    try:
+                        if pages[i] != self._page:
+                            pages[i].close()
                     except Exception as e:
-                        self.logger.warning(f"Не удалось закрыть вкладку: {e}")
-                self.logger.info("Все вкладки закрыты")
+                        self.logger.warning(f"Не удалось закрыть страницу: {e}")
 
-            self._page = self._context.new_page()
-            self.logger.info("Создана новая вкладка")
             self.logger.info("Открытие Google Translate...")
-
-            # ОДНА попытка с таймаутом 12 секунд
             try:
                 self.logger.info(f"Загрузка страницы (таймаут 12с): {self.base_url}")
                 self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=12000)

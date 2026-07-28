@@ -368,12 +368,13 @@ class OverlayManager:
                 except Exception as e:
                     self.logger.warning(f"[DEBUG] Не удалось вернуть фокус: {e}")
 
-            if hasattr(self.parent, 'update_status'):
-                remaining = len(self.overlays)
-                if remaining > 0:
-                    self.parent.update_status(f"● Удален оверлей, осталось: {remaining}", '#ff9800')
-                else:
-                    self.parent.update_status(f"● Все оверлеи удалены", '#4CAF50')
+            # Убираем статусы об удалении оверлеев
+            # if hasattr(self.parent, 'update_status'):
+            #     remaining = len(self.overlays)
+            #     if remaining > 0:
+            #         self.parent.update_status(f"● Удален оверлей, осталось: {remaining}", '#ff9800')
+            #     else:
+            #         self.parent.update_status(f"● Все оверлеи удалены", '#4CAF50')
 
             return False
         else:
@@ -397,8 +398,9 @@ class OverlayManager:
         # Проверяем режим редактирования
         if not self.parent.is_edit_mode_enabled():
             self.logger.info("[DEBUG] remove_overlay: режим редактирования ВЫКЛЮЧЕН - удаление запрещено")
-            if hasattr(self.parent, 'update_status'):
-                self.parent.update_status("● Режим редактирования выключен (F5 для включения)", '#ff9800')
+            # Убираем статус
+            # if hasattr(self.parent, 'update_status'):
+            #     self.parent.update_status("● Режим редактирования выключен (F5 для включения)", '#ff9800')
             return
 
         self.logger.info(f"Удаление оверлея из списка (всего: {len(self.overlays)})")

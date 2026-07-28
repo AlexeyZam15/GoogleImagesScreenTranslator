@@ -144,6 +144,208 @@ class ScreenshotTranslatorApp:
         self.setup_hotkeys()
         self.root.after(100, self._init_translator_step)
 
+    def setup_hotkeys(self):
+        """Настройка глобальных горячих клавиш с использованием настроек."""
+        self.logger.info("=" * 60)
+        self.logger.info("[HOTKEYS] НАСТРОЙКА ГОРЯЧИХ КЛАВИШ")
+        self.logger.info("=" * 60)
+
+        try:
+            # Отключаем старые хуки
+            keyboard.unhook_all()
+            self.logger.info("[HOTKEYS] Старые хуки отключены")
+
+            self._capture_mode = False
+            self._area_selector = None
+            self._actions_blocked = False  # Флаг блокировки ДЕЙСТВИЙ горячих клавиш
+            self._hotkey_hook_active = True  # Флаг активности хука
+            self.logger.info(f"[HOTKEYS] _actions_blocked = {self._actions_blocked}")
+
+            # Получаем назначенные клавиши из настроек
+            hotkeys = self.settings.get_all_hotkeys()
+            self.logger.info(f"[HOTKEYS] Загружены настройки хоткеев: {hotkeys}")
+
+            self._hotkey_actions = {
+                'f1': hotkeys.get('toggle_overlay', 'f1'),
+                'f2': hotkeys.get('screenshot', 'f2'),
+                'f3': hotkeys.get('area', 'f3'),
+                'f4': hotkeys.get('clear_all', 'f4'),
+                'f5': hotkeys.get('edit_mode', 'f5')
+            }
+            self.logger.info(f"[HOTKEYS] Назначенные действия: {self._hotkey_actions}")
+
+            def on_key(event):
+                # Если хук отключен - пропускаем все события (они пойдут в окно настроек)
+                if not self._hotkey_hook_active:
+                    return True  # Возвращаем True чтобы событие шло дальше
+
+                # Логируем все нажатия в режиме отладки (только для важных клавиш)
+                if event.event_type == 'down' and event.name in ['f1', 'f2', 'f3', 'f4', 'f5', 'esc']:
+                    self.logger.debug(
+                        f"[HOTKEYS] Нажата клавиша: {event.name}, actions_blocked={self._actions_blocked}")
+
+                # Обрабатываем ESC в режиме захвата области
+                if event.name == 'esc' and event.event_type == 'down':
+                    if self._capture_mode and self._area_selector is not None:
+                        self.logger.info("[HOTKEYS] ESC в режиме захвата области - передаем в AreaSelector")
+                        try:
+                            if hasattr(self._area_selector, 'on_escape'):
+                                fake_event = type('obj', (object,), {
+                                    'keysym': 'Escape',
+                                    'keycode': 27
+                                })()
+                                self._area_selector.on_escape(fake_event)
+                                self.logger.info("[HOTKEYS] ESC успешно передан в AreaSelector")
+                        except Exception as e:
+                            self.logger.error(f"[HOTKEYS] Ошибка передачи ESC в AreaSelector: {e}")
+                        return False
+                    return True
+
+                # Если действия заблокированы - НЕ выполняем их, но клавиши продолжают перехватываться
+                if self._actions_blocked:
+                    self.logger.debug(f"[HOTKEYS] Действия заблокированы, игнорируем нажатие {event.name}")
+                    return False
+
+                # Проверяем нажатие по сохраненным клавишам
+                pressed_key = event.name
+
+                if pressed_key == self._hotkey_actions['f1'] and event.event_type == 'down':
+                    self.logger.info(f"[HOTKEYS] ДЕЙСТВИЕ: toggle_overlay (клавиша {pressed_key})")
+                    current_time = time.time() * 1000
+                    if current_time - self._key_last_time.get('f1', 0) >= self._debounce_ms:
+                        self._key_last_time['f1'] = current_time
+                        self.root.after(0, self.toggle_overlay)
+                        self.logger.debug("[HOTKEYS] toggle_overlay выполнен")
+                    else:
+                        self.logger.debug(f"[HOTKEYS] toggle_overlay пропущен (debounce)")
+                    return False
+
+                elif pressed_key == self._hotkey_actions['f2'] and event.event_type == 'down':
+                    self.logger.info(f"[HOTKEYS] ДЕЙСТВИЕ: screenshot (клавиша {pressed_key})")
+                    current_time = time.time() * 1000
+                    if current_time - self._key_last_time.get('f2', 0) >= self._debounce_ms:
+                        self._key_last_time['f2'] = current_time
+                        self.root.after(0, self.process)
+                        self.logger.debug("[HOTKEYS] screenshot выполнен")
+                    else:
+                        self.logger.debug(f"[HOTKEYS] screenshot пропущен (debounce)")
+                    return False
+
+                elif pressed_key == self._hotkey_actions['f3'] and event.event_type == 'down':
+                    self.logger.info(f"[HOTKEYS] ДЕЙСТВИЕ: area (клавиша {pressed_key})")
+                    current_time = time.time() * 1000
+                    if current_time - self._key_last_time.get('f3', 0) >= self._debounce_ms:
+                        self._key_last_time['f3'] = current_time
+                        self.root.after(0, self.capture_area)
+                        self.logger.debug("[HOTKEYS] area выполнен")
+                    else:
+                        self.logger.debug(f"[HOTKEYS] area пропущен (debounce)")
+                    return False
+
+                elif pressed_key == self._hotkey_actions['f4'] and event.event_type == 'down':
+                    self.logger.info(f"[HOTKEYS] ДЕЙСТВИЕ: clear_all (клавиша {pressed_key})")
+                    current_time = time.time() * 1000
+                    if current_time - self._key_last_time.get('f4', 0) >= self._debounce_ms:
+                        self._key_last_time['f4'] = current_time
+                        self.root.after(0, self.clear_all_overlays)
+                        self.logger.debug("[HOTKEYS] clear_all выполнен")
+                    else:
+                        self.logger.debug(f"[HOTKEYS] clear_all пропущен (debounce)")
+                    return False
+
+                elif pressed_key == self._hotkey_actions['f5'] and event.event_type == 'down':
+                    self.logger.info(f"[HOTKEYS] ДЕЙСТВИЕ: edit_mode (клавиша {pressed_key})")
+                    current_time = time.time() * 1000
+                    if current_time - self._key_last_time.get('f5', 0) >= self._debounce_ms:
+                        self._key_last_time['f5'] = current_time
+                        self.root.after(0, self.toggle_edit_mode)
+                        self.logger.debug("[HOTKEYS] edit_mode выполнен")
+                    else:
+                        self.logger.debug(f"[HOTKEYS] edit_mode пропущен (debounce)")
+                    return False
+
+                return True
+
+            keyboard.hook(on_key, suppress=True)
+            self._hotkey_hook_active = True
+            self.logger.info("=" * 60)
+            self.logger.info(
+                f"[HOTKEYS] ✅ Горячие клавиши зарегистрированы:\n"
+                f"  toggle_overlay: {self._hotkey_actions['f1']}\n"
+                f"  screenshot:     {self._hotkey_actions['f2']}\n"
+                f"  area:           {self._hotkey_actions['f3']}\n"
+                f"  clear_all:      {self._hotkey_actions['f4']}\n"
+                f"  edit_mode:      {self._hotkey_actions['f5']}"
+            )
+            self.logger.info("=" * 60)
+        except Exception as e:
+            self.logger.error(f"[HOTKEYS] ❌ Ошибка регистрации горячих клавиш: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+            self._setup_tkinter_hotkeys()
+
+    def set_actions_blocked(self, blocked: bool):
+        """Устанавливает флаг блокировки ДЕЙСТВИЙ горячих клавиш."""
+        old_state = self._actions_blocked
+        self._actions_blocked = blocked
+        self.logger.info(f"[HOTKEYS] 🔒 Блокировка действий: {old_state} → {blocked}")
+
+        if blocked:
+            self.logger.info("[HOTKEYS] ⚠️ ДЕЙСТВИЯ ГОРЯЧИХ КЛАВИШ ЗАБЛОКИРОВАНЫ")
+            # Отключаем глобальный хук, чтобы клавиши доходили до окна настроек
+            try:
+                keyboard.unhook_all()
+                self._hotkey_hook_active = False
+                self.logger.info("[HOTKEYS] ✅ Глобальный хук временно ОТКЛЮЧЕН для захвата клавиши")
+            except Exception as e:
+                self.logger.error(f"[HOTKEYS] Ошибка отключения хука: {e}")
+        else:
+            self.logger.info("[HOTKEYS] ✅ ДЕЙСТВИЯ ГОРЯЧИХ КЛАВИШ РАЗБЛОКИРОВАНЫ")
+            # Восстанавливаем глобальный хук
+            try:
+                self.setup_hotkeys()
+                self.logger.info("[HOTKEYS] ✅ Глобальный хук ВОССТАНОВЛЕН")
+            except Exception as e:
+                self.logger.error(f"[HOTKEYS] Ошибка восстановления хука: {e}")
+
+    def set_hotkeys_blocked(self, blocked: bool):
+        """Устанавливает флаг блокировки горячих клавиш."""
+        self._hotkeys_blocked = blocked
+        if blocked:
+            self.logger.debug("Горячие клавиши заблокированы")
+        else:
+            self.logger.debug("Горячие клавиши разблокированы")
+
+    def _setup_tkinter_hotkeys(self):
+        """Запасной вариант через Tkinter bind_all с использованием настроек."""
+        self.logger.warning("Используется запасной метод горячих клавиш (Tkinter)")
+
+        hotkeys = self.settings.get_all_hotkeys()
+
+        def handle_hotkey(event):
+            keysym = event.keysym.lower()
+
+            if keysym == hotkeys.get('toggle_overlay', 'f1').lower():
+                self.toggle_overlay()
+                return "break"
+            if keysym == hotkeys.get('screenshot', 'f2').lower():
+                self.process()
+                return "break"
+            if keysym == hotkeys.get('area', 'f3').lower():
+                self.capture_area()
+                return "break"
+            if keysym == hotkeys.get('clear_all', 'f4').lower():
+                self.clear_all_overlays()
+                return "break"
+            if keysym == hotkeys.get('edit_mode', 'f5').lower():
+                self.toggle_edit_mode()
+                return "break"
+            return None
+
+        self.root.bind_all("<Key>", handle_hotkey)
+        self.root.focus_force()
+        self.logger.info("Tkinter горячие клавиши зарегистрированы")
+
     def toggle_edit_mode(self):
         """Переключает режим редактирования оверлеев (F5)."""
         self._edit_mode_enabled = not self._edit_mode_enabled
@@ -268,121 +470,6 @@ class ScreenshotTranslatorApp:
     def is_edit_mode_enabled(self) -> bool:
         """Возвращает состояние режима редактирования."""
         return self._edit_mode_enabled
-
-    def setup_hotkeys(self):
-        """Настройка глобальных горячих клавиш"""
-        try:
-            keyboard.unhook_all()
-
-            # Инициализируем флаги для режима захвата области
-            self._capture_mode = False
-            self._area_selector = None
-
-            def on_key(event):
-                # === ОБРАБОТКА ESC ТОЛЬКО В РЕЖИМЕ ЗАХВАТА ===
-                if event.name == 'esc' and event.event_type == 'down':
-                    if self._capture_mode and self._area_selector is not None:
-                        self.logger.info("[DEBUG] keyboard: перехват ESC в режиме захвата")
-                        try:
-                            if hasattr(self._area_selector, 'on_escape'):
-                                fake_event = type('obj', (object,), {
-                                    'keysym': 'Escape',
-                                    'keycode': 27
-                                })()
-                                self._area_selector.on_escape(fake_event)
-                                self.logger.info("[DEBUG] keyboard: ESC передан в AreaSelector")
-                        except Exception as e:
-                            self.logger.error(f"[DEBUG] keyboard: ошибка передачи ESC: {e}")
-                        return False
-                    return True
-
-                if event.name == 'f1' and event.event_type == 'down':
-                    self.logger.info("[DEBUG] F1 нажата!")
-                    current_time = time.time() * 1000
-                    if current_time - self._key_last_time.get('f1', 0) >= self._debounce_ms:
-                        self._key_last_time['f1'] = current_time
-                        self.root.after(0, self.toggle_overlay)
-                        self.logger.info("[DEBUG] F1 перехвачена")
-                    return False
-
-                elif event.name == 'f2' and event.event_type == 'down':
-                    self.logger.info("[DEBUG] F2 нажата!")
-                    current_time = time.time() * 1000
-                    if current_time - self._key_last_time.get('f2', 0) >= self._debounce_ms:
-                        self._key_last_time['f2'] = current_time
-                        self.root.after(0, self.process)
-                        self.logger.info("[DEBUG] F2 перехвачена")
-                    return False
-
-                elif event.name == 'f3' and event.event_type == 'down':
-                    self.logger.info("[DEBUG] F3 нажата!")
-                    current_time = time.time() * 1000
-                    if current_time - self._key_last_time.get('f3', 0) >= self._debounce_ms:
-                        self._key_last_time['f3'] = current_time
-                        self.root.after(0, self.capture_area)
-                        self.logger.info("[DEBUG] F3 перехвачена")
-                    return False
-
-                elif event.name == 'f4' and event.event_type == 'down':
-                    self.logger.info("[DEBUG] F4 нажата!")
-                    current_time = time.time() * 1000
-                    if current_time - self._key_last_time.get('f4', 0) >= self._debounce_ms:
-                        self._key_last_time['f4'] = current_time
-                        self.root.after(0, self.clear_all_overlays)
-                        self.logger.info("[DEBUG] F4 перехвачена - удаление всех оверлеев")
-                    return False
-
-                # === НОВАЯ КЛАВИША F5 - ПЕРЕКЛЮЧЕНИЕ РЕЖИМА РЕДАКТИРОВАНИЯ ===
-                elif event.name == 'f5' and event.event_type == 'down':
-                    self.logger.info("[DEBUG] F5 нажата!")
-                    current_time = time.time() * 1000
-                    if current_time - self._key_last_time.get('f5', 0) >= self._debounce_ms:
-                        self._key_last_time['f5'] = current_time
-                        self.root.after(0, self.toggle_edit_mode)
-                        self.logger.info("[DEBUG] F5 перехвачена - переключение режима редактирования")
-                    return False
-
-                return True
-
-            keyboard.hook(on_key, suppress=True)
-            self.logger.info(
-                "Горячие клавиши зарегистрированы (F1 - зависит от автоскрытия, F2 - скриншот окна, F3 - область, F4 - удалить все оверлеи, F5 - режим редактирования)"
-            )
-        except Exception as e:
-            self.logger.error(f"Ошибка регистрации горячих клавиш: {e}")
-            self._setup_tkinter_hotkeys()
-
-    def _setup_tkinter_hotkeys(self):
-        """Запасной вариант через Tkinter bind_all"""
-        self.logger.warning("Используется запасной метод горячих клавиш (Tkinter)")
-
-        def handle_hotkey(event):
-            keysym = event.keysym
-            if keysym == "F1" or keysym == "f1":
-                self.toggle_overlay()
-                return "break"
-            if keysym == "F2" or keysym == "f2":
-                self.process()
-                return "break"
-            if keysym == "F3" or keysym == "f3":
-                self.capture_area()
-                return "break"
-            if keysym == "F4" or keysym == "f4":
-                self.clear_all_overlays()
-                return "break"
-            # === НОВАЯ КЛАВИША F5 ===
-            if keysym == "F5" or keysym == "f5":
-                self.toggle_edit_mode()
-                return "break"
-            return None
-
-        self.root.bind_all("<Key-F1>", handle_hotkey)
-        self.root.bind_all("<Key-F2>", handle_hotkey)
-        self.root.bind_all("<Key-F3>", handle_hotkey)
-        self.root.bind_all("<Key-F4>", handle_hotkey)
-        self.root.bind_all("<Key-F5>", handle_hotkey)  # <-- НОВОЕ
-        self.root.focus_force()
-        self.logger.info("Tkinter горячие клавиши зарегистрированы (F1, F2, F3, F4, F5)")
 
     def create_gui(self):
         """Создает главное окно приложения с адаптивной версткой"""
@@ -617,7 +704,8 @@ class ScreenshotTranslatorApp:
 
         if not self.overlay_manager.overlays:
             self.logger.info("clear_all_overlays: нет активных оверлеев")
-            self.update_status("● Нет оверлеев для удаления", '#ff9800')
+            # Убираем статус "Нет оверлеев для удаления" - просто логируем
+            # self.update_status("● Нет оверлеев для удаления", '#ff9800')
             return
 
         count = len(self.overlay_manager.overlays)
@@ -625,7 +713,8 @@ class ScreenshotTranslatorApp:
 
         # Закрываем все оверлеи через менеджер
         self.overlay_manager.close_all()
-        self.update_status(f"● Удалено {count} оверлеев", '#4CAF50')
+        # Убираем статус "Удалено X оверлеев" - просто логируем
+        # self.update_status(f"● Удалено {count} оверлеев", '#4CAF50')
         self.logger.info(f"Удалено {count} оверлеев (F4)")
 
     def process(self):
@@ -1179,7 +1268,8 @@ class ScreenshotTranslatorApp:
 
         if not self.overlay_manager.overlays:
             self.logger.info("toggle_overlay: нет активных оверлеев")
-            self.update_status("● Нет активных оверлеев", '#ff9800')
+            # Убираем статус "Нет активных оверлеев"
+            # self.update_status("● Нет активных оверлеев", '#ff9800')
             return
 
         auto_hide_enabled = self.settings.get_auto_hide_overlay()
@@ -1207,31 +1297,37 @@ class ScreenshotTranslatorApp:
                         f"[DEBUG] toggle_overlay: активное окно {active_hwnd} является целевым для оверлея")
                     # Переключаем ВСЕ оверлеи
                     new_state = self.overlay_manager.toggle_all_overlays()
-                    status_text = "показаны" if new_state else "скрыты"
-                    self.update_status(f"● Все оверлеи {status_text} (всего: {len(self.overlay_manager.overlays)})",
-                                       '#2196F3' if new_state else '#ff9800')
-                    self.logger.info(f"F1: все оверлеи {status_text}")
+                    # Убираем статус
+                    # status_text = "показаны" if new_state else "скрыты"
+                    # self.update_status(f"● Все оверлеи {status_text} (всего: {len(self.overlay_manager.overlays)})",
+                    #                    '#2196F3' if new_state else '#ff9800')
+                    self.logger.info(f"F1: все оверлеи {'показаны' if new_state else 'скрыты'}")
                     return
+
                 else:
                     self.logger.info("[DEBUG] toggle_overlay: активное окно не является целевым для любого оверлея")
-                    self.update_status("● F1 работает только в целевом окне", '#ff9800')
+                    # Убираем статус
+                    # self.update_status("● F1 работает только в целевом окне", '#ff9800')
                     return
 
             except Exception as e:
                 self.logger.warning(f"toggle_overlay: ошибка проверки активного окна: {e}")
                 # В случае ошибки все равно переключаем
                 new_state = self.overlay_manager.toggle_all_overlays()
-                status_text = "показаны" if new_state else "скрыты"
-                self.update_status(f"● Все оверлеи {status_text} (всего: {len(self.overlay_manager.overlays)})",
-                                   '#2196F3' if new_state else '#ff9800')
+                # Убираем статус
+                # status_text = "показаны" if new_state else "скрыты"
+                # self.update_status(f"● Все оверлеи {status_text} (всего: {len(self.overlay_manager.overlays)})",
+                #                    '#2196F3' if new_state else '#ff9800')
                 return
+
         else:
             # Автоскрытие отключено - переключаем все оверлеи без проверки
             new_state = self.overlay_manager.toggle_all_overlays()
-            status_text = "показаны" if new_state else "скрыты"
-            self.update_status(f"● Все оверлеи {status_text} (всего: {len(self.overlay_manager.overlays)})",
-                               '#2196F3' if new_state else '#ff9800')
-            self.logger.info(f"F1: все оверлеи {status_text}")
+            # Убираем статус
+            # status_text = "показаны" if new_state else "скрыты"
+            # self.update_status(f"● Все оверлеи {status_text} (всего: {len(self.overlay_manager.overlays)})",
+            #                    '#2196F3' if new_state else '#ff9800')
+            self.logger.info(f"F1: все оверлеи {'показаны' if new_state else 'скрыты'}")
 
     def on_close(self):
         """Обработчик закрытия приложения"""
@@ -1439,8 +1535,11 @@ class ScreenshotTranslatorApp:
             return
         self._restarting = True
         self.logger.info("Перезапуск переводчика с новыми настройками...")
+
+        # Обновляем статус в главном окне
         self.update_status("● Перезапуск браузера...", '#ff9800')
-        self.btn_capture.config(state=DISABLED, bg='#333')
+        self.btn_capture.config(state=DISABLED, bg='#333', fg='#888')
+
         show_browser = self.settings.get_show_browser()
         target_lang = self.settings.get_target_language()
         cmd_id = self.browser_worker.restart_browser(

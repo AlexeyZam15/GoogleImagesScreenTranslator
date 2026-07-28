@@ -9,6 +9,7 @@ from PIL import Image
 import win32gui
 import win32con
 import win32api
+import win32ui  # <-- ДОБАВЛЯЕМ ИМПОРТ
 import ctypes
 import dxcam
 import cv2
