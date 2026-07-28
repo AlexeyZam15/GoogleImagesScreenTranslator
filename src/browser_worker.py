@@ -30,6 +30,72 @@ class BrowserWorker:
         self._initializing = False
         self._cancel_flag = False  # НОВЫЙ ФЛАГ
 
+    def _init_browser(self, show_browser: bool, target_lang: str):
+        """Инициализация браузера с полной очисткой при ошибке."""
+        self.logger.info("Инициализация браузера...")
+        self._initializing = True
+        try:
+            if self.translator:
+                self.logger.info("Закрываем существующий экземпляр переводчика...")
+                try:
+                    self.translator.close_browser()
+                except Exception as e:
+                    self.logger.warning(f"Ошибка при закрытии старого браузера: {e}")
+                self.translator = None
+
+            import time
+            time.sleep(0.5)
+
+            self.logger.info("Создаем новый экземпляр GoogleTranslateDebug...")
+            self.translator = GoogleTranslateDebug(
+                headless=not show_browser,
+                target_lang=target_lang,
+                settings=self.settings
+            )
+
+            self.logger.info("Запускаем браузер...")
+            self.translator.start_browser()
+
+            self._ready = True
+            self._initializing = False
+            self.logger.info("Браузер инициализирован успешно")
+            return {'ready': True}
+
+        except Exception as e:
+            self._initializing = False
+            self._ready = False
+            self.logger.error(f"Ошибка инициализации браузера: {e}")
+            if self.translator:
+                try:
+                    self.logger.info("Закрываем браузер после ошибки...")
+                    self.translator.close_browser()
+                except Exception as e2:
+                    self.logger.warning(f"Ошибка при закрытии браузера после ошибки: {e2}")
+                # === ВАЖНО: полностью освобождаем translator ===
+                self.translator = None
+            # === НЕМНОГО ЖДЕМ ПЕРЕД ПОВТОРНОЙ ПОПЫТКОЙ ===
+            import time
+            time.sleep(0.5)
+            # Пробрасываем исключение для перезапуска через app
+            raise
+
+    def _restart_browser(self, show_browser: bool, target_lang: str):
+        """Перезапуск браузера."""
+        self.logger.info("Перезапуск браузера...")
+        if self.translator:
+            self.logger.info("Закрываем существующий браузер...")
+            try:
+                self.translator.close_browser()
+            except Exception as e:
+                self.logger.warning(f"Ошибка при закрытии браузера: {e}")
+            self.translator = None
+        self._ready = False
+
+        import time
+        time.sleep(1.0)
+
+        return self._init_browser(show_browser, target_lang)
+
     def _reset_page(self):
         """Сбрасывает страницу Google Translate"""
         if not self.translator:
@@ -138,39 +204,6 @@ class BrowserWorker:
         except Exception as e:
             self.logger.error(f"Ошибка выполнения команды {cmd_type}: {e}")
             raise
-
-    def _init_browser(self, show_browser: bool, target_lang: str):
-        """Инициализация браузера"""
-        self.logger.info("Инициализация браузера...")
-        self._initializing = True
-        try:
-            if self.translator:
-                self.translator.close_browser()
-                self.translator = None
-            self.translator = GoogleTranslateDebug(
-                headless=not show_browser,
-                target_lang=target_lang,
-                settings=self.settings
-            )
-            self.translator.start_browser()
-            self._ready = True
-            self._initializing = False
-            self.logger.info("Браузер инициализирован успешно")
-            return {'ready': True}
-        except Exception as e:
-            self._initializing = False
-            self._ready = False
-            self.logger.error(f"Ошибка инициализации браузера: {e}")
-            raise
-
-    def _restart_browser(self, show_browser: bool, target_lang: str):
-        """Перезапуск браузера"""
-        self.logger.info("Перезапуск браузера...")
-        if self.translator:
-            self.translator.close_browser()
-            self.translator = None
-        self._ready = False
-        return self._init_browser(show_browser, target_lang)
 
     def _translate_image(self, image_path: Path, output_dir: Path):
         """Перевод изображения"""

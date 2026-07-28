@@ -132,6 +132,10 @@ class ScreenshotTranslatorApp:
         self.browser_worker.start()
         self._pending_command_ids = {}
         self._translation_in_progress = False
+        self._edit_mode_enabled = self.settings.get_edit_mode_enabled()
+        self._init_attempts = 0
+        self._max_init_attempts = 3
+        self._init_retry_delay = 2000  # увеличил до 2 секунд
         self.create_gui()
         self.update_ui_language()
         self.app_title = self.get_string('app_title')
@@ -139,6 +143,436 @@ class ScreenshotTranslatorApp:
         self._setup_app_icon()
         self.setup_hotkeys()
         self.root.after(100, self._init_translator_step)
+
+    def toggle_edit_mode(self):
+        """Переключает режим редактирования оверлеев (F5)."""
+        self._edit_mode_enabled = not self._edit_mode_enabled
+        self.settings.set_edit_mode_enabled(self._edit_mode_enabled)
+        status_text = "ВКЛЮЧЕН" if self._edit_mode_enabled else "ВЫКЛЮЧЕН"
+        status_color = '#4CAF50' if self._edit_mode_enabled else '#ff9800'
+        self.update_status(f"● Режим редактирования: {status_text}", status_color)
+        self.logger.info(f"Режим редактирования переключен: {status_text}")
+        if hasattr(self, 'btn_edit_mode'):
+            self.btn_edit_mode.config(
+                text=f"✏️ Редактирование: {status_text} (F5)",
+                bg='#4CAF50' if self._edit_mode_enabled else '#ff9800'
+            )
+        return self._edit_mode_enabled
+
+    def _on_init_error(self, error_msg):
+        """Обработчик ошибки инициализации."""
+        self.initializing = False
+        self._init_done = True
+
+        if "Не найден" in error_msg and ("браузер" in error_msg or "Chrome" in error_msg):
+            self._handle_browser_not_found(error_msg)
+        else:
+            self.update_status("● " + self.get_string('error') + ": " + error_msg[:50], '#f44336')
+            self.btn_capture.config(state=DISABLED, bg='#333', fg='#888')
+            self.logger.error(f"❌ Ошибка инициализации: {error_msg}")
+            # Показываем диалог с ошибкой (не блокирующий)
+            try:
+                import tkinter.messagebox as messagebox
+                messagebox.showerror(
+                    "Ошибка инициализации",
+                    f"Не удалось запустить браузер:\n\n{error_msg[:200]}\n\n"
+                    "Программа попытается перезапустить браузер автоматически."
+                )
+            except:
+                pass
+
+    def _init_translator_step(self):
+        """Инициализация переводчика в фоновом режиме с автоматическим повторением."""
+        if self._init_done:
+            return
+
+        self._init_attempts += 1
+        self.logger.info(f"Попытка инициализации #{self._init_attempts} из {self._max_init_attempts}")
+
+        if self._init_attempts > self._max_init_attempts:
+            self.logger.error(f"❌ Инициализация не удалась после {self._max_init_attempts} попыток")
+            self.update_status("● Ошибка инициализации (превышено число попыток)", '#f44336')
+            self.btn_capture.config(state=DISABLED, bg='#333', fg='#888')
+            import tkinter.messagebox as messagebox
+            messagebox.showerror(
+                "Ошибка инициализации",
+                f"Не удалось запустить браузер после {self._max_init_attempts} попыток.\n\n"
+                "Пожалуйста, проверьте:\n"
+                "1. Подключение к интернету\n"
+                "2. Доступность Google Translate\n"
+                "3. Путь к браузеру в настройках\n\n"
+                "Нажмите 'OK' для повторной попытки."
+            )
+            self._init_attempts = 0
+            self.root.after(3000, self._init_translator_step)
+            return
+
+        self.initializing = True
+        self.update_status("● " + self.get_string('starting_browser'), '#ff9800')
+        self.root.update_idletasks()
+        self._start_result_processor()
+        show_browser = self.settings.get_show_browser()
+        target_lang = self.settings.get_target_language()
+        cmd_id = self.browser_worker.init_browser(
+            show_browser,
+            target_lang,
+            callback=self._on_init_complete
+        )
+        self._pending_command_ids[cmd_id] = 'init'
+
+    def _on_init_complete(self, result, error):
+        """Обработчик завершения инициализации."""
+        self.logger.info(f"_on_init_complete вызван: result={result}, error={error}")
+        if error:
+            self.logger.error(f"Ошибка инициализации: {error}")
+            # === НЕ ЗАКРЫВАЕМ БРАУЗЕР ЗДЕСЬ, ТАК КАК _init_browser УЖЕ ЗАКРЫЛ ЕГО ===
+            # Просто обрабатываем ошибку и планируем повтор
+            self._on_init_error(error)
+            self.logger.info(f"Планируем повторную попытку через {self._init_retry_delay}мс...")
+            self.root.after(self._init_retry_delay, self._init_translator_step)
+        else:
+            self.logger.info("Инициализация завершена успешно, обновляем UI")
+            self.ready = True
+            self.initializing = False
+            self._init_done = True
+            self._init_attempts = 0
+
+            if self.overlay_manager is None:
+                self.logger.info("Создание OverlayManager")
+                from src.overlay_manager import OverlayManager
+                self.overlay_manager = OverlayManager(self)
+                self.logger.info(f"OverlayManager создан: {self.overlay_manager}")
+            else:
+                self.logger.info(f"OverlayManager уже существует: {self.overlay_manager}")
+
+            self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+            self.update_status("● " + self.get_string('ready'), '#4CAF50')
+            self.logger.info("UI обновлен: статус 'Готово'")
+        self._pending_command_ids = {}
+
+    def _update_overlay_alpha(self):
+        """Обновляет прозрачность всех оверлеев в зависимости от режима редактирования."""
+        if not self.overlay_manager:
+            return
+        alpha = 1.0 if self._edit_mode_enabled else 0.7  # 0.7 = полупрозрачный
+        self.logger.info(
+            f"[DEBUG] Установка прозрачности оверлеев: {alpha} (режим редактирования: {self._edit_mode_enabled})")
+        for overlay in self.overlay_manager.overlays:
+            try:
+                if overlay and overlay.root and overlay.root.winfo_exists():
+                    overlay.root.attributes('-alpha', alpha)
+                    overlay.logger.info(f"[DEBUG] Установлена прозрачность {alpha} для оверлея")
+            except Exception as e:
+                self.logger.warning(f"[DEBUG] Не удалось установить прозрачность: {e}")
+
+    def is_edit_mode_enabled(self) -> bool:
+        """Возвращает состояние режима редактирования."""
+        return self._edit_mode_enabled
+
+    def setup_hotkeys(self):
+        """Настройка глобальных горячих клавиш"""
+        try:
+            keyboard.unhook_all()
+
+            # Инициализируем флаги для режима захвата области
+            self._capture_mode = False
+            self._area_selector = None
+
+            def on_key(event):
+                # === ОБРАБОТКА ESC ТОЛЬКО В РЕЖИМЕ ЗАХВАТА ===
+                if event.name == 'esc' and event.event_type == 'down':
+                    if self._capture_mode and self._area_selector is not None:
+                        self.logger.info("[DEBUG] keyboard: перехват ESC в режиме захвата")
+                        try:
+                            if hasattr(self._area_selector, 'on_escape'):
+                                fake_event = type('obj', (object,), {
+                                    'keysym': 'Escape',
+                                    'keycode': 27
+                                })()
+                                self._area_selector.on_escape(fake_event)
+                                self.logger.info("[DEBUG] keyboard: ESC передан в AreaSelector")
+                        except Exception as e:
+                            self.logger.error(f"[DEBUG] keyboard: ошибка передачи ESC: {e}")
+                        return False
+                    return True
+
+                if event.name == 'f1' and event.event_type == 'down':
+                    self.logger.info("[DEBUG] F1 нажата!")
+                    current_time = time.time() * 1000
+                    if current_time - self._key_last_time.get('f1', 0) >= self._debounce_ms:
+                        self._key_last_time['f1'] = current_time
+                        self.root.after(0, self.toggle_overlay)
+                        self.logger.info("[DEBUG] F1 перехвачена")
+                    return False
+
+                elif event.name == 'f2' and event.event_type == 'down':
+                    self.logger.info("[DEBUG] F2 нажата!")
+                    current_time = time.time() * 1000
+                    if current_time - self._key_last_time.get('f2', 0) >= self._debounce_ms:
+                        self._key_last_time['f2'] = current_time
+                        self.root.after(0, self.process)
+                        self.logger.info("[DEBUG] F2 перехвачена")
+                    return False
+
+                elif event.name == 'f3' and event.event_type == 'down':
+                    self.logger.info("[DEBUG] F3 нажата!")
+                    current_time = time.time() * 1000
+                    if current_time - self._key_last_time.get('f3', 0) >= self._debounce_ms:
+                        self._key_last_time['f3'] = current_time
+                        self.root.after(0, self.capture_area)
+                        self.logger.info("[DEBUG] F3 перехвачена")
+                    return False
+
+                elif event.name == 'f4' and event.event_type == 'down':
+                    self.logger.info("[DEBUG] F4 нажата!")
+                    current_time = time.time() * 1000
+                    if current_time - self._key_last_time.get('f4', 0) >= self._debounce_ms:
+                        self._key_last_time['f4'] = current_time
+                        self.root.after(0, self.clear_all_overlays)
+                        self.logger.info("[DEBUG] F4 перехвачена - удаление всех оверлеев")
+                    return False
+
+                # === НОВАЯ КЛАВИША F5 - ПЕРЕКЛЮЧЕНИЕ РЕЖИМА РЕДАКТИРОВАНИЯ ===
+                elif event.name == 'f5' and event.event_type == 'down':
+                    self.logger.info("[DEBUG] F5 нажата!")
+                    current_time = time.time() * 1000
+                    if current_time - self._key_last_time.get('f5', 0) >= self._debounce_ms:
+                        self._key_last_time['f5'] = current_time
+                        self.root.after(0, self.toggle_edit_mode)
+                        self.logger.info("[DEBUG] F5 перехвачена - переключение режима редактирования")
+                    return False
+
+                return True
+
+            keyboard.hook(on_key, suppress=True)
+            self.logger.info(
+                "Горячие клавиши зарегистрированы (F1 - зависит от автоскрытия, F2 - скриншот окна, F3 - область, F4 - удалить все оверлеи, F5 - режим редактирования)"
+            )
+        except Exception as e:
+            self.logger.error(f"Ошибка регистрации горячих клавиш: {e}")
+            self._setup_tkinter_hotkeys()
+
+    def _setup_tkinter_hotkeys(self):
+        """Запасной вариант через Tkinter bind_all"""
+        self.logger.warning("Используется запасной метод горячих клавиш (Tkinter)")
+
+        def handle_hotkey(event):
+            keysym = event.keysym
+            if keysym == "F1" or keysym == "f1":
+                self.toggle_overlay()
+                return "break"
+            if keysym == "F2" or keysym == "f2":
+                self.process()
+                return "break"
+            if keysym == "F3" or keysym == "f3":
+                self.capture_area()
+                return "break"
+            if keysym == "F4" or keysym == "f4":
+                self.clear_all_overlays()
+                return "break"
+            # === НОВАЯ КЛАВИША F5 ===
+            if keysym == "F5" or keysym == "f5":
+                self.toggle_edit_mode()
+                return "break"
+            return None
+
+        self.root.bind_all("<Key-F1>", handle_hotkey)
+        self.root.bind_all("<Key-F2>", handle_hotkey)
+        self.root.bind_all("<Key-F3>", handle_hotkey)
+        self.root.bind_all("<Key-F4>", handle_hotkey)
+        self.root.bind_all("<Key-F5>", handle_hotkey)  # <-- НОВОЕ
+        self.root.focus_force()
+        self.logger.info("Tkinter горячие клавиши зарегистрированы (F1, F2, F3, F4, F5)")
+
+    def create_gui(self):
+        """Создает главное окно приложения с адаптивной версткой"""
+        self.root = Tk()
+        self.root.title(self.get_string('app_title'))
+        self.root.withdraw()
+        self.root.geometry("520x600")
+        self.root.minsize(520, 600)
+        self.root.maxsize(520, 600)
+        self.root.resizable(False, False)
+        self.root.configure(bg='#1e1e1e')
+        self.create_menu()
+        self.show_browser_var = BooleanVar(value=self.settings.get_show_browser())
+        self.target_lang_var = StringVar(value=self.settings.get_target_language())
+        self.show_indicator_var = BooleanVar(value=self.settings.get_show_translation_indicator())
+        self.auto_hide_var = BooleanVar(value=self.settings.get_auto_hide_overlay())
+        main = Frame(self.root, bg='#1e1e1e')
+        main.pack(expand=True, fill=BOTH, padx=25, pady=20)
+        header_frame = Frame(main, bg='#1e1e1e', height=60)
+        header_frame.pack(fill=X, pady=(0, 15))
+        header_frame.pack_propagate(False)
+        title_frame = Frame(header_frame, bg='#1e1e1e')
+        title_frame.pack(side=LEFT, expand=True, fill=X)
+        icon_label = Label(title_frame, text="📸",
+                           bg='#1e1e1e', fg='white', font=("Arial", 26))
+        icon_label.pack(side=LEFT, padx=(0, 10))
+        self.title_label = Label(title_frame, text=self.get_string('app_title'),
+                                 bg='#1e1e1e', fg='#4CAF50', font=("Arial", 15, "bold"))
+        self.title_label.pack(side=LEFT)
+        header_right = Frame(header_frame, bg='#1e1e1e')
+        header_right.pack(side=RIGHT, padx=(10, 0))
+        current_lang = self.settings.get_language()
+        lang_text = "EN" if current_lang == "ru" else "RU"
+        self.lang_btn = Button(
+            header_right,
+            text=lang_text,
+            command=self.toggle_language,
+            font=("Arial", 12, "bold"),
+            bg='#3c3c3c',
+            fg='#4CAF50',
+            relief=FLAT,
+            width=4,
+            padx=0,
+            pady=6,
+            cursor="hand2"
+        )
+        self.lang_btn.pack(side=RIGHT, padx=(0, 5))
+        self.settings_btn = Button(
+            header_right,
+            text="⚙️",
+            command=self.open_settings,
+            font=("Arial", 14),
+            bg='#3c3c3c',
+            fg='#cccccc',
+            relief=FLAT,
+            width=4,
+            padx=0,
+            pady=6,
+            cursor="hand2"
+        )
+        self.settings_btn.pack(side=RIGHT, padx=(0, 5))
+
+        def on_enter(e):
+            self.lang_btn.config(bg='#4CAF50', fg='white')
+
+        def on_leave(e):
+            self.lang_btn.config(bg='#3c3c3c', fg='#4CAF50')
+
+        self.lang_btn.bind('<Enter>', on_enter)
+        self.lang_btn.bind('<Leave>', on_leave)
+
+        def on_settings_enter(e):
+            self.settings_btn.config(bg='#4CAF50', fg='white')
+
+        def on_settings_leave(e):
+            self.settings_btn.config(bg='#3c3c3c', fg='#cccccc')
+
+        self.settings_btn.bind('<Enter>', on_settings_enter)
+        self.settings_btn.bind('<Leave>', on_settings_leave)
+        self.status = Label(main, text="● " + self.get_string('starting'),
+                            fg='#ff9800', bg='#1e1e1e', font=("Arial", 11), height=1)
+        self.status.pack(pady=(5, 10), fill=X)
+        lang_select_frame = Frame(main, bg='#1e1e1e')
+        lang_select_frame.pack(fill=X, pady=(5, 10))
+        self.target_lang_label = Label(
+            lang_select_frame,
+            text=self.get_string('target_language'),
+            bg='#1e1e1e',
+            fg='#cccccc',
+            font=("Arial", 10),
+            anchor='w'
+        )
+        self.target_lang_label.pack(anchor=W, fill=X)
+        lang_combo_frame = Frame(lang_select_frame, bg='#1e1e1e')
+        lang_combo_frame.pack(fill=X, pady=(5, 0))
+        lang_codes = sorted(LANGUAGES.keys())
+        self._all_lang_items = [f"{LANGUAGES[code]} ({code})" for code in lang_codes]
+        self.target_lang_combo = ttk.Combobox(
+            lang_combo_frame,
+            textvariable=self.target_lang_var,
+            values=self._all_lang_items,
+            font=("Arial", 10),
+            state="normal",
+            width=45
+        )
+        self.target_lang_combo.pack(fill=X)
+        self.target_lang_combo.bind('<KeyRelease>', self._on_lang_search)
+        self.target_lang_combo.bind('<Return>', self._on_lang_enter)
+        self.target_lang_combo.bind('<<ComboboxSelected>>', self._on_target_lang_changed)
+        current_lang_code = self.settings.get_target_language()
+        current_display = f"{LANGUAGES.get(current_lang_code, 'Russian')} ({current_lang_code})"
+        self.target_lang_combo.set(current_display)
+        btn_frame = Frame(main, bg='#1e1e1e')
+        btn_frame.pack(fill=X, pady=5)
+        self.btn_capture = Button(
+            btn_frame,
+            text=self.get_string('btn_capture'),
+            command=self.process,
+            font=("Arial", 11),
+            bg='#333',
+            fg='#888',
+            relief=FLAT,
+            height=1,
+            pady=12,
+            state=DISABLED
+        )
+        self.btn_capture.pack(fill=X, pady=(0, 10), ipady=2)
+
+        self.btn_clear_all = Button(
+            btn_frame,
+            text="🗑️ Очистить все (F4)",
+            command=self.clear_all_overlays,
+            font=("Arial", 11),
+            bg='#d32f2f',
+            fg='white',
+            relief=FLAT,
+            height=1,
+            pady=12
+        )
+        self.btn_clear_all.pack(fill=X, pady=(0, 10), ipady=2)
+
+        self.btn_toggle = Button(
+            btn_frame,
+            text=self.get_string('btn_toggle'),
+            command=self.toggle_overlay,
+            font=("Arial", 11),
+            bg='#2196F3',
+            fg='white',
+            relief=FLAT,
+            height=1,
+            pady=12
+        )
+        self.btn_toggle.pack(fill=X, ipady=2)
+
+        # === КНОПКА РЕЖИМА РЕДАКТИРОВАНИЯ ===
+        # Создаем кнопку с текстом в зависимости от состояния _edit_mode_enabled
+        status_text = "ВКЛЮЧЕН" if self._edit_mode_enabled else "ВЫКЛЮЧЕН"
+        self.btn_edit_mode = Button(
+            btn_frame,
+            text=f"✏️ Редактирование: {status_text} (F5)",
+            command=self.toggle_edit_mode,
+            font=("Arial", 11),
+            bg='#4CAF50' if self._edit_mode_enabled else '#ff9800',
+            fg='white',
+            relief=FLAT,
+            height=1,
+            pady=12
+        )
+        self.btn_edit_mode.pack(fill=X, pady=(10, 10), ipady=2)
+
+        self.hotkeys_label = Label(
+            main,
+            text="F2 - скриншот окна | F3 - область | F1 - оверлей | F4 - удалить все | F5 - режим редактирования | ESC - удалить оверлей под мышью",
+            bg='#1e1e1e',
+            fg='#888',
+            font=("Arial", 10),
+            wraplength=470,
+            justify='left'
+        )
+        self.hotkeys_label.pack(pady=(15, 5), fill=X)
+
+        self.root.update_idletasks()
+        w = self.root.winfo_width()
+        h = self.root.winfo_height()
+        x = (self.root.winfo_screenwidth() - w) // 2
+        y = (self.root.winfo_screenheight() - h) // 2
+        self.root.geometry(f"{w}x{h}+{x}+{y}")
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
 
     def _cancel_translation(self):
         """Отменяет текущий перевод"""
@@ -736,79 +1170,6 @@ class ScreenshotTranslatorApp:
 
         threading.Thread(target=capture_area_task, daemon=True).start()
 
-    def setup_hotkeys(self):
-        """Настройка глобальных горячих клавиш"""
-        try:
-            keyboard.unhook_all()
-
-            # Инициализируем флаги для режима захвата области
-            self._capture_mode = False
-            self._area_selector = None
-
-            def on_key(event):
-                # === ОБРАБОТКА ESC ТОЛЬКО В РЕЖИМЕ ЗАХВАТА ===
-                if event.name == 'esc' and event.event_type == 'down':
-                    if self._capture_mode and self._area_selector is not None:
-                        self.logger.info("[DEBUG] keyboard: перехват ESC в режиме захвата")
-                        try:
-                            if hasattr(self._area_selector, 'on_escape'):
-                                fake_event = type('obj', (object,), {
-                                    'keysym': 'Escape',
-                                    'keycode': 27
-                                })()
-                                self._area_selector.on_escape(fake_event)
-                                self.logger.info("[DEBUG] keyboard: ESC передан в AreaSelector")
-                        except Exception as e:
-                            self.logger.error(f"[DEBUG] keyboard: ошибка передачи ESC: {e}")
-                        return False
-                    return True
-
-                if event.name == 'f1' and event.event_type == 'down':
-                    self.logger.info("[DEBUG] F1 нажата!")
-                    current_time = time.time() * 1000
-                    if current_time - self._key_last_time.get('f1', 0) >= self._debounce_ms:
-                        self._key_last_time['f1'] = current_time
-                        self.root.after(0, self.toggle_overlay)
-                        self.logger.info("[DEBUG] F1 перехвачена")
-                    return False
-
-                elif event.name == 'f2' and event.event_type == 'down':
-                    self.logger.info("[DEBUG] F2 нажата!")
-                    current_time = time.time() * 1000
-                    if current_time - self._key_last_time.get('f2', 0) >= self._debounce_ms:
-                        self._key_last_time['f2'] = current_time
-                        self.root.after(0, self.process)
-                        self.logger.info("[DEBUG] F2 перехвачена")
-                    return False
-
-                elif event.name == 'f3' and event.event_type == 'down':
-                    self.logger.info("[DEBUG] F3 нажата!")
-                    current_time = time.time() * 1000
-                    if current_time - self._key_last_time.get('f3', 0) >= self._debounce_ms:
-                        self._key_last_time['f3'] = current_time
-                        self.root.after(0, self.capture_area)
-                        self.logger.info("[DEBUG] F3 перехвачена")
-                    return False
-
-                # === НОВАЯ КЛАВИША F4 - УДАЛЕНИЕ ВСЕХ ОВЕРЛЕЕВ ===
-                elif event.name == 'f4' and event.event_type == 'down':
-                    self.logger.info("[DEBUG] F4 нажата!")
-                    current_time = time.time() * 1000
-                    if current_time - self._key_last_time.get('f4', 0) >= self._debounce_ms:
-                        self._key_last_time['f4'] = current_time
-                        self.root.after(0, self.clear_all_overlays)
-                        self.logger.info("[DEBUG] F4 перехвачена - удаление всех оверлеев")
-                    return False
-
-                return True
-
-            keyboard.hook(on_key, suppress=True)
-            self.logger.info(
-                "Горячие клавиши зарегистрированы (F1 - зависит от автоскрытия, F2 - скриншот окна, F3 - область, F4 - удалить все оверлеи)")
-        except Exception as e:
-            self.logger.error(f"Ошибка регистрации горячих клавиш: {e}")
-            self._setup_tkinter_hotkeys()
-
     def toggle_overlay(self):
         """Переключает видимость всех оверлеев (F1)."""
         self.logger.info("[DEBUG] toggle_overlay вызван")
@@ -872,34 +1233,6 @@ class ScreenshotTranslatorApp:
                                '#2196F3' if new_state else '#ff9800')
             self.logger.info(f"F1: все оверлеи {status_text}")
 
-    def _setup_tkinter_hotkeys(self):
-        """Запасной вариант через Tkinter bind_all"""
-        self.logger.warning("Используется запасной метод горячих клавиш (Tkinter)")
-
-        def handle_hotkey(event):
-            keysym = event.keysym
-            if keysym == "F1" or keysym == "f1":
-                self.toggle_overlay()
-                return "break"
-            if keysym == "F2" or keysym == "f2":
-                self.process()
-                return "break"
-            if keysym == "F3" or keysym == "f3":
-                self.capture_area()
-                return "break"
-            # === НОВАЯ КЛАВИША F4 ===
-            if keysym == "F4" or keysym == "f4":
-                self.clear_all_overlays()
-                return "break"
-            return None
-
-        self.root.bind_all("<Key-F1>", handle_hotkey)
-        self.root.bind_all("<Key-F2>", handle_hotkey)
-        self.root.bind_all("<Key-F3>", handle_hotkey)
-        self.root.bind_all("<Key-F4>", handle_hotkey)  # <-- НОВОЕ
-        self.root.focus_force()
-        self.logger.info("Tkinter горячие клавиши зарегистрированы (F1, F2, F3, F4)")
-
     def on_close(self):
         """Обработчик закрытия приложения"""
         self._hide_translation_overlay()
@@ -934,23 +1267,6 @@ class ScreenshotTranslatorApp:
         """Устаревший метод - больше не используется"""
         pass
 
-    def _init_translator_step(self):
-        """Инициализация переводчика в фоновом режиме"""
-        if self._init_done:
-            return
-        self.initializing = True
-        self.update_status("● " + self.get_string('starting_browser'), '#ff9800')
-        self.root.update_idletasks()
-        self._start_result_processor()
-        show_browser = self.settings.get_show_browser()
-        target_lang = self.settings.get_target_language()
-        cmd_id = self.browser_worker.init_browser(
-            show_browser,
-            target_lang,
-            callback=self._on_init_complete
-        )
-        self._pending_command_ids[cmd_id] = 'init'
-
     def _start_result_processor(self):
         """Запускает постоянную проверку результатов из рабочего потока"""
         if hasattr(self, '_processor_running') and self._processor_running:
@@ -979,42 +1295,6 @@ class ScreenshotTranslatorApp:
             self.logger.error(f"Ошибка обработки результатов: {e}")
         if self._pending_command_ids:
             self.root.after(100, self._check_results)
-
-    def _on_init_complete(self, result, error):
-        """Обработчик завершения инициализации"""
-        self.logger.info(f"_on_init_complete вызван: result={result}, error={error}")
-        if error:
-            self.logger.error(f"Ошибка инициализации: {error}")
-            self._on_init_error(error)
-        else:
-            self.logger.info("Инициализация завершена успешно, обновляем UI")
-            self.ready = True
-            self.initializing = False
-            self._init_done = True
-
-            if self.overlay_manager is None:
-                self.logger.info("Создание OverlayManager")
-                from src.overlay_manager import OverlayManager
-                self.overlay_manager = OverlayManager(self)
-                self.logger.info(f"OverlayManager создан: {self.overlay_manager}")
-            else:
-                self.logger.info(f"OverlayManager уже существует: {self.overlay_manager}")
-
-            self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
-            self.update_status("● " + self.get_string('ready'), '#4CAF50')
-            self.logger.info("UI обновлен: статус 'Готово'")
-        self._pending_command_ids = {}
-
-    def _on_init_error(self, error_msg):
-        """Обработчик ошибки инициализации"""
-        self.initializing = False
-        self._init_done = True
-        if "Не найден" in error_msg and ("браузер" in error_msg or "Chrome" in error_msg):
-            self._handle_browser_not_found(error_msg)
-        else:
-            self.update_status("● " + self.get_string('error') + ": " + error_msg[:50], '#f44336')
-            self.btn_capture.config(state=DISABLED, bg='#333', fg='#888')
-            self.logger.error(f"❌ Ошибка инициализации: {error_msg}")
 
     def _handle_browser_not_found(self, error_msg: str):
         """Обрабатывает ситуацию, когда браузер не найден"""
@@ -1350,181 +1630,6 @@ class ScreenshotTranslatorApp:
         except Exception as e:
             self.logger.error(f"Ошибка открытия папки: {e}")
             messagebox.showerror("Ошибка", f"Не удалось открыть папку:\n{e}")
-
-    def create_gui(self):
-        """Создает главное окно приложения с адаптивной версткой"""
-        self.root = Tk()
-        self.root.title(self.get_string('app_title'))
-        self.root.withdraw()
-        self.root.geometry("520x570")  # Немного увеличиваем высоту для новой кнопки
-        self.root.minsize(520, 570)
-        self.root.maxsize(520, 570)
-        self.root.resizable(False, False)
-        self.root.configure(bg='#1e1e1e')
-        self.create_menu()
-        self.show_browser_var = BooleanVar(value=self.settings.get_show_browser())
-        self.target_lang_var = StringVar(value=self.settings.get_target_language())
-        self.show_indicator_var = BooleanVar(value=self.settings.get_show_translation_indicator())
-        self.auto_hide_var = BooleanVar(value=self.settings.get_auto_hide_overlay())
-        main = Frame(self.root, bg='#1e1e1e')
-        main.pack(expand=True, fill=BOTH, padx=25, pady=20)
-        header_frame = Frame(main, bg='#1e1e1e', height=60)
-        header_frame.pack(fill=X, pady=(0, 15))
-        header_frame.pack_propagate(False)
-        title_frame = Frame(header_frame, bg='#1e1e1e')
-        title_frame.pack(side=LEFT, expand=True, fill=X)
-        icon_label = Label(title_frame, text="📸",
-                           bg='#1e1e1e', fg='white', font=("Arial", 26))
-        icon_label.pack(side=LEFT, padx=(0, 10))
-        self.title_label = Label(title_frame, text=self.get_string('app_title'),
-                                 bg='#1e1e1e', fg='#4CAF50', font=("Arial", 15, "bold"))
-        self.title_label.pack(side=LEFT)
-        header_right = Frame(header_frame, bg='#1e1e1e')
-        header_right.pack(side=RIGHT, padx=(10, 0))
-        current_lang = self.settings.get_language()
-        lang_text = "EN" if current_lang == "ru" else "RU"
-        self.lang_btn = Button(
-            header_right,
-            text=lang_text,
-            command=self.toggle_language,
-            font=("Arial", 12, "bold"),
-            bg='#3c3c3c',
-            fg='#4CAF50',
-            relief=FLAT,
-            width=4,
-            padx=0,
-            pady=6,
-            cursor="hand2"
-        )
-        self.lang_btn.pack(side=RIGHT, padx=(0, 5))
-        self.settings_btn = Button(
-            header_right,
-            text="⚙️",
-            command=self.open_settings,
-            font=("Arial", 14),
-            bg='#3c3c3c',
-            fg='#cccccc',
-            relief=FLAT,
-            width=4,
-            padx=0,
-            pady=6,
-            cursor="hand2"
-        )
-        self.settings_btn.pack(side=RIGHT, padx=(0, 5))
-
-        def on_enter(e):
-            self.lang_btn.config(bg='#4CAF50', fg='white')
-
-        def on_leave(e):
-            self.lang_btn.config(bg='#3c3c3c', fg='#4CAF50')
-
-        self.lang_btn.bind('<Enter>', on_enter)
-        self.lang_btn.bind('<Leave>', on_leave)
-
-        def on_settings_enter(e):
-            self.settings_btn.config(bg='#4CAF50', fg='white')
-
-        def on_settings_leave(e):
-            self.settings_btn.config(bg='#3c3c3c', fg='#cccccc')
-
-        self.settings_btn.bind('<Enter>', on_settings_enter)
-        self.settings_btn.bind('<Leave>', on_settings_leave)
-        self.status = Label(main, text="● " + self.get_string('starting'),
-                            fg='#ff9800', bg='#1e1e1e', font=("Arial", 11), height=1)
-        self.status.pack(pady=(5, 10), fill=X)
-        lang_select_frame = Frame(main, bg='#1e1e1e')
-        lang_select_frame.pack(fill=X, pady=(5, 10))
-        self.target_lang_label = Label(
-            lang_select_frame,
-            text=self.get_string('target_language'),
-            bg='#1e1e1e',
-            fg='#cccccc',
-            font=("Arial", 10),
-            anchor='w'
-        )
-        self.target_lang_label.pack(anchor=W, fill=X)
-        lang_combo_frame = Frame(lang_select_frame, bg='#1e1e1e')
-        lang_combo_frame.pack(fill=X, pady=(5, 0))
-        lang_codes = sorted(LANGUAGES.keys())
-        self._all_lang_items = [f"{LANGUAGES[code]} ({code})" for code in lang_codes]
-        self.target_lang_combo = ttk.Combobox(
-            lang_combo_frame,
-            textvariable=self.target_lang_var,
-            values=self._all_lang_items,
-            font=("Arial", 10),
-            state="normal",
-            width=45
-        )
-        self.target_lang_combo.pack(fill=X)
-        self.target_lang_combo.bind('<KeyRelease>', self._on_lang_search)
-        self.target_lang_combo.bind('<Return>', self._on_lang_enter)
-        self.target_lang_combo.bind('<<ComboboxSelected>>', self._on_target_lang_changed)
-        current_lang_code = self.settings.get_target_language()
-        current_display = f"{LANGUAGES.get(current_lang_code, 'Russian')} ({current_lang_code})"
-        self.target_lang_combo.set(current_display)
-        btn_frame = Frame(main, bg='#1e1e1e')
-        btn_frame.pack(fill=X, pady=5)
-        self.btn_capture = Button(
-            btn_frame,
-            text=self.get_string('btn_capture'),
-            command=self.process,
-            font=("Arial", 11),
-            bg='#333',
-            fg='#888',
-            relief=FLAT,
-            height=1,
-            pady=12,
-            state=DISABLED
-        )
-        self.btn_capture.pack(fill=X, pady=(0, 10), ipady=2)
-
-        # === НОВАЯ КНОПКА "Очистить все" ===
-        self.btn_clear_all = Button(
-            btn_frame,
-            text="🗑️ Очистить все (F4)",
-            command=self.clear_all_overlays,
-            font=("Arial", 11),
-            bg='#d32f2f',
-            fg='white',
-            relief=FLAT,
-            height=1,
-            pady=12
-        )
-        self.btn_clear_all.pack(fill=X, pady=(0, 10), ipady=2)
-
-        self.btn_toggle = Button(
-            btn_frame,
-            text=self.get_string('btn_toggle'),
-            command=self.toggle_overlay,
-            font=("Arial", 11),
-            bg='#2196F3',
-            fg='white',
-            relief=FLAT,
-            height=1,
-            pady=12
-        )
-        self.btn_toggle.pack(fill=X, ipady=2)
-
-        self.hotkeys_label = Label(
-            main,
-            text="F2 - скриншот окна | F3 - область | F1 - оверлей | F4 - удалить все | ESC - закрыть оверлей",
-            bg='#1e1e1e',
-            fg='#888',
-            font=("Arial", 10),
-            wraplength=470,
-            justify='left'
-        )
-        self.hotkeys_label.pack(pady=(15, 5), fill=X)
-
-        self.root.update_idletasks()
-        w = self.root.winfo_width()
-        h = self.root.winfo_height()
-        x = (self.root.winfo_screenwidth() - w) // 2
-        y = (self.root.winfo_screenheight() - h) // 2
-        self.root.geometry(f"{w}x{h}+{x}+{y}")
-        self.root.deiconify()
-        self.root.lift()
-        self.root.focus_force()
 
     def create_menu(self):
         """Создает главное меню приложения"""

@@ -30,6 +30,149 @@ class GoogleTranslateDebug:
         self._cancel_flag = False
         self._worker = None
 
+    def start_browser(self):
+        """Запускает браузер с Playwright."""
+        import shutil
+        import tempfile
+        from src.utils import get_safe_temp_dir
+        import time
+
+        self.logger.info("Запуск Playwright...")
+        self._pw = sync_playwright().start()
+        self.logger.info("Поиск браузера...")
+
+        browser_path = None
+        if hasattr(self, 'settings'):
+            custom_path = self.settings.get_browser_path()
+            if custom_path and os.path.exists(custom_path):
+                browser_path = custom_path
+                self.logger.info(f"✅ Используется пользовательский путь: {browser_path}")
+
+        if not browser_path:
+            browser_path = self._find_any_browser()
+            if browser_path and hasattr(self, 'settings'):
+                self.settings.set_browser_path(browser_path)
+                self.logger.info(f"✅ Автоматически найденный путь сохранен: {browser_path}")
+
+        if not browser_path:
+            error_msg = (
+                "Не найден Яндекс Браузер или Google Chrome.\n"
+                "Пожалуйста, установите один из браузеров или укажите путь вручную.\n"
+                "Рекомендуется установить Яндекс Браузер для лучшей совместимости."
+            )
+            self.logger.error(error_msg)
+            raise Exception(error_msg)
+
+        self.logger.info(f"Используется браузер: {browser_path}")
+
+        safe_temp_dir = get_safe_temp_dir()
+        timestamp = int(time.time() * 1000)
+        profile_dir = safe_temp_dir / f"google_translate_profile_{timestamp}"
+
+        if profile_dir.exists():
+            try:
+                shutil.rmtree(profile_dir)
+                self.logger.info("✅ Старый профиль удален")
+            except Exception as e:
+                self.logger.warning(f"Не удалось удалить профиль: {e}")
+
+        try:
+            self.logger.info("Запуск браузера...")
+            self._context = self._pw.chromium.launch_persistent_context(
+                user_data_dir=str(profile_dir),
+                headless=self.headless,
+                locale="ru-RU",
+                viewport={"width": 1440, "height": 900},
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 "
+                    "YaBrowser/24.4.0.0 (1) Yowser/2.5"
+                ),
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-gpu",
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-setuid-sandbox",
+                    "--disable-web-security",
+                    "--disable-features=IsolateOrigins,site-per-process",
+                ],
+                ignore_default_args=["--enable-automation"],
+                timeout=30000,
+                permissions=["clipboard-read", "clipboard-write"],
+                executable_path=browser_path,
+            )
+            self.logger.info("✅ Браузер запущен")
+            self.logger.info("Ожидание инициализации браузера (2с)...")
+            time.sleep(2)
+
+            pages = self._context.pages
+            if pages:
+                self.logger.info(f"Закрытие {len(pages)} существующих вкладок...")
+                for page in pages:
+                    try:
+                        page.close()
+                    except Exception as e:
+                        self.logger.warning(f"Не удалось закрыть вкладку: {e}")
+                self.logger.info("Все вкладки закрыты")
+
+            self._page = self._context.new_page()
+            self.logger.info("Создана новая вкладка")
+            self.logger.info("Открытие Google Translate...")
+
+            # ОДНА попытка с таймаутом 12 секунд
+            try:
+                self.logger.info(f"Загрузка страницы (таймаут 12с): {self.base_url}")
+                self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=12000)
+                self.logger.info(f"✅ Google Translate открыт: {self.base_url}")
+            except Exception as e:
+                self.logger.error(f"Ошибка загрузки страницы: {e}")
+                # === ПОЛНОСТЬЮ ЗАКРЫВАЕМ ВСЕ ===
+                try:
+                    if self._context:
+                        self._context.close()
+                        self._context = None
+                except:
+                    pass
+                if self._pw:
+                    try:
+                        self._pw.stop()
+                    except:
+                        pass
+                    self._pw = None
+                if profile_dir.exists():
+                    try:
+                        shutil.rmtree(profile_dir, ignore_errors=True)
+                        self.logger.info("🧹 Папка профиля удалена после ошибки")
+                    except:
+                        pass
+                raise Exception(f"Не удалось загрузить Google Translate: {e}")
+
+            self._profile_dir = profile_dir
+
+        except Exception as e:
+            self.logger.error(f"Ошибка запуска браузера: {e}")
+            # === ПОЛНОСТЬЮ ЗАКРЫВАЕМ ВСЕ ===
+            try:
+                if hasattr(self, '_context') and self._context:
+                    self._context.close()
+                    self._context = None
+            except:
+                pass
+            if hasattr(self, '_pw') and self._pw:
+                try:
+                    self._pw.stop()
+                except:
+                    pass
+                self._pw = None
+            try:
+                if profile_dir.exists():
+                    shutil.rmtree(profile_dir, ignore_errors=True)
+                    self.logger.info("🧹 Папка профиля удалена после ошибки")
+            except:
+                pass
+            raise
+
     def _wait_for_blob_with_cancel(self, timeout: int = 15) -> bool:
         """
         Ожидает появления переведенного изображения (blob) с проверкой отмены.
@@ -290,122 +433,6 @@ class GoogleTranslateDebug:
                 raise
         else:
             self.logger.warning("Страница не инициализирована, URL обновлен для следующего запуска")
-
-    def start_browser(self):
-        """Запускает браузер с Playwright"""
-        import shutil
-        import tempfile
-        from src.utils import get_safe_temp_dir
-        import time
-
-        self.logger.info("Запуск Playwright...")
-        self._pw = sync_playwright().start()
-        self.logger.info("Поиск браузера...")
-
-        browser_path = None
-        if hasattr(self, 'settings'):
-            custom_path = self.settings.get_browser_path()
-            if custom_path and os.path.exists(custom_path):
-                browser_path = custom_path
-                self.logger.info(f"✅ Используется пользовательский путь: {browser_path}")
-
-        if not browser_path:
-            browser_path = self._find_any_browser()
-            if browser_path and hasattr(self, 'settings'):
-                self.settings.set_browser_path(browser_path)
-                self.logger.info(f"✅ Автоматически найденный путь сохранен: {browser_path}")
-
-        if not browser_path:
-            error_msg = (
-                "Не найден Яндекс Браузер или Google Chrome.\n"
-                "Пожалуйста, установите один из браузеров или укажите путь вручную.\n"
-                "Рекомендуется установить Яндекс Браузер для лучшей совместимости."
-            )
-            self.logger.error(error_msg)
-            raise Exception(error_msg)
-
-        self.logger.info(f"Используется браузер: {browser_path}")
-
-        # ИСПРАВЛЕНО: используем уникальную папку профиля с временной меткой
-        safe_temp_dir = get_safe_temp_dir()
-        timestamp = int(time.time() * 1000)
-        profile_dir = safe_temp_dir / f"google_translate_profile_{timestamp}"
-
-        # Убеждаемся что папка пустая
-        if profile_dir.exists():
-            try:
-                shutil.rmtree(profile_dir)
-                self.logger.info("✅ Старый профиль удален")
-            except Exception as e:
-                self.logger.warning(f"Не удалось удалить профиль: {e}")
-
-        try:
-            self._context = self._pw.chromium.launch_persistent_context(
-                user_data_dir=str(profile_dir),
-                headless=self.headless,
-                locale="ru-RU",
-                viewport={"width": 1440, "height": 900},
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 "
-                    "YaBrowser/24.4.0.0 (1) Yowser/2.5"
-                ),
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--disable-gpu",
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-setuid-sandbox",
-                ],
-                ignore_default_args=["--enable-automation"],
-                timeout=30000,
-                permissions=["clipboard-read", "clipboard-write"],
-                executable_path=browser_path,
-            )
-            self.logger.info("✅ Браузер запущен")
-            self.logger.info("Ожидание инициализации браузера (3с)...")
-            time.sleep(3)
-
-            pages = self._context.pages
-            if pages:
-                self.logger.info(f"Закрытие {len(pages)} существующих вкладок...")
-                for page in pages:
-                    try:
-                        page.close()
-                    except Exception as e:
-                        self.logger.warning(f"Не удалось закрыть вкладку: {e}")
-                self.logger.info("Все вкладки закрыты")
-
-            self._page = self._context.new_page()
-            self.logger.info("Создана новая вкладка")
-            self.logger.info("Открытие Google Translate...")
-
-            try:
-                self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=15000)
-                self.logger.info(f"✅ Google Translate открыт: {self.base_url}")
-            except Exception as e:
-                self.logger.error(f"Ошибка при открытии Google Translate: {e}")
-                try:
-                    self.logger.info("Повторная попытка открытия...")
-                    self._page.goto(self.base_url, timeout=15000)
-                    self.logger.info(f"✅ Google Translate открыт (повторно): {self.base_url}")
-                except Exception as e2:
-                    self.logger.error(f"Повторная ошибка при открытии: {e2}")
-                    raise
-
-            # Сохраняем путь к папке профиля для последующей очистки
-            self._profile_dir = profile_dir
-
-        except Exception as e:
-            self.logger.error(f"Ошибка запуска браузера: {e}")
-            # Пытаемся очистить папку профиля при ошибке
-            try:
-                if profile_dir.exists():
-                    shutil.rmtree(profile_dir, ignore_errors=True)
-                    self.logger.info("🧹 Папка профиля удалена после ошибки")
-            except:
-                pass
-            raise
 
     def _reset_pages_fast(self):
         """Быстрое обнуление вкладок - используем первую существующую"""

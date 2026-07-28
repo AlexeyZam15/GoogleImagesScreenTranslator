@@ -99,7 +99,7 @@ def get_russian_menu_strings():
 
 
 def get_russian_settings_window_strings():
-    """Возвращает русские строки для окна настроек"""
+    """Возвращает русские строки для окна настроек."""
     return {
         'settings_browser_section': "🌐 Браузер",
         'settings_browser_path': "Путь к браузеру:",
@@ -112,7 +112,29 @@ def get_russian_settings_window_strings():
         'settings_cancel': "❌ Отмена",
         'settings_ui': "🎨 Интерфейс",
         'auto_windowed_fullscreen': "Фулскрин → оконный фулскрин при F3",
+        'edit_mode': "✏️ Режим редактирования",  # КРАТКО
+        'edit_mode_tooltip': "Разрешить перемещение и удаление оверлеев",  # ПОДСКАЗКА
     }
+
+
+def get_english_settings_window_strings():
+    """Возвращает английские строки для окна настроек."""
+    return {
+        'settings_browser_section': "🌐 Browser",
+        'settings_browser_path': "Browser path:",
+        'settings_browser_path_hint': "Leave empty for automatic search",
+        'settings_browser_browse': "Browse...",
+        'settings_browser_using': "✅ Using: {}",
+        'settings_browser_not_specified': "⚠️ Browser not specified (automatic search will be performed)",
+        'settings_browser_path_label': "Path: {}",
+        'settings_save': "💾 Save",
+        'settings_cancel': "❌ Cancel",
+        'settings_ui': "🎨 Interface",
+        'auto_windowed_fullscreen': "Fullscreen → windowed fullscreen on F3",
+        'edit_mode': "✏️ Edit mode",  # КРАТКО
+        'edit_mode_tooltip': "Allow moving and removing overlays",  # ПОДСКАЗКА
+    }
+
 
 
 def get_russian_about_strings():
@@ -173,23 +195,6 @@ def get_english_menu_strings():
         'menu_shortcuts': "Shortcuts",
         'menu_about': "About",
         'menu_open_folder': "📁 Open App Folder",
-    }
-
-
-def get_english_settings_window_strings():
-    """Возвращает английские строки для окна настроек"""
-    return {
-        'settings_browser_section': "🌐 Browser",
-        'settings_browser_path': "Browser path:",
-        'settings_browser_path_hint': "Leave empty for automatic search",
-        'settings_browser_browse': "Browse...",
-        'settings_browser_using': "✅ Using: {}",
-        'settings_browser_not_specified': "⚠️ Browser not specified (automatic search will be performed)",
-        'settings_browser_path_label': "Path: {}",
-        'settings_save': "💾 Save",
-        'settings_cancel': "❌ Cancel",
-        'settings_ui': "🎨 Interface",
-        'auto_windowed_fullscreen': "Fullscreen → windowed fullscreen on F3",
     }
 
 

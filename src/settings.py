@@ -23,8 +23,18 @@ class Settings:
         "show_translation_indicator": True,
         "browser_path": "",
         "auto_hide_overlay": True,
-        "auto_windowed_fullscreen": True  # ИЗМЕНЕНО: True вместо False
+        "auto_windowed_fullscreen": True,
+        "edit_mode_enabled": False  # НОВОЕ: режим редактирования по умолчанию ВЫКЛЮЧЕН
     }
+
+    def get_edit_mode_enabled(self) -> bool:
+        """Возвращает настройку режима редактирования."""
+        return self.settings.get("edit_mode_enabled", False)
+
+    def set_edit_mode_enabled(self, enabled: bool):
+        """Устанавливает настройку режима редактирования."""
+        self.settings["edit_mode_enabled"] = enabled
+        self.save()
 
     def __init__(self):
         self.settings = self.DEFAULT_SETTINGS.copy()
