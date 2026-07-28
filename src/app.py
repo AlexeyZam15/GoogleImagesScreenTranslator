@@ -157,8 +157,9 @@ class ScreenshotTranslatorApp:
 
             self._capture_mode = False
             self._area_selector = None
-            self._actions_blocked = False  # Флаг блокировки ДЕЙСТВИЙ горячих клавиш
-            self._hotkey_hook_active = True  # Флаг активности хука
+            self._selection_window = None  # <-- ДОБАВЛЕНО: хранение ссылки на окно выделения
+            self._actions_blocked = False
+            self._hotkey_hook_active = True
             self.logger.info(f"[HOTKEYS] _actions_blocked = {self._actions_blocked}")
 
             # Получаем назначенные клавиши из настроек
@@ -177,27 +178,62 @@ class ScreenshotTranslatorApp:
             def on_key(event):
                 # Если хук отключен - пропускаем все события (они пойдут в окно настроек)
                 if not self._hotkey_hook_active:
-                    return True  # Возвращаем True чтобы событие шло дальше
+                    return True
 
                 # Логируем все нажатия в режиме отладки (только для важных клавиш)
                 if event.event_type == 'down' and event.name in ['f1', 'f2', 'f3', 'f4', 'f5', 'esc']:
                     self.logger.debug(
                         f"[HOTKEYS] Нажата клавиша: {event.name}, actions_blocked={self._actions_blocked}")
 
-                # Обрабатываем ESC в режиме захвата области
+                # Обрабатываем ESC в режиме захвата области (ОБА МЕХАНИЗМА)
                 if event.name == 'esc' and event.event_type == 'down':
-                    if self._capture_mode and self._area_selector is not None:
-                        self.logger.info("[HOTKEYS] ESC в режиме захвата области - передаем в AreaSelector")
-                        try:
-                            if hasattr(self._area_selector, 'on_escape'):
-                                fake_event = type('obj', (object,), {
-                                    'keysym': 'Escape',
-                                    'keycode': 27
-                                })()
-                                self._area_selector.on_escape(fake_event)
-                                self.logger.info("[HOTKEYS] ESC успешно передан в AreaSelector")
-                        except Exception as e:
-                            self.logger.error(f"[HOTKEYS] Ошибка передачи ESC в AreaSelector: {e}")
+                    if self._capture_mode:
+                        # --- СТАРЫЙ МЕХАНИЗМ: через AreaSelector ---
+                        if self._area_selector is not None:
+                            self.logger.info("[HOTKEYS] ESC в режиме захвата области (AreaSelector)")
+                            try:
+                                if hasattr(self._area_selector, 'on_escape'):
+                                    fake_event = type('obj', (object,), {
+                                        'keysym': 'Escape',
+                                        'keycode': 27
+                                    })()
+                                    self._area_selector.on_escape(fake_event)
+                                    self.logger.info("[HOTKEYS] ESC успешно передан в AreaSelector")
+                            except Exception as e:
+                                self.logger.error(f"[HOTKEYS] Ошибка передачи ESC в AreaSelector: {e}")
+                            return False
+
+                        # --- НОВЫЙ МЕХАНИЗМ: через selection_window ---
+                        if self._selection_window is not None:
+                            self.logger.info("[HOTKEYS] ESC в режиме захвата области (selection_window)")
+                            try:
+                                # Симулируем событие ESC для окна выделения
+                                if hasattr(self._selection_window,
+                                           'winfo_exists') and self._selection_window.winfo_exists():
+                                    # Создаем событие и передаем его
+                                    fake_event = type('obj', (object,), {
+                                        'keysym': 'Escape',
+                                        'keycode': 27
+                                    })()
+                                    # Вызываем обработчик напрямую
+                                    if hasattr(self, '_selection_window_on_escape'):
+                                        self._selection_window_on_escape(fake_event)
+                                        self.logger.info("[HOTKEYS] ESC успешно передан в selection_window")
+                                    else:
+                                        # Альтернативный способ: генерируем событие
+                                        self._selection_window.event_generate('<Escape>')
+                                        self.logger.info("[HOTKEYS] ESC сгенерирован для selection_window")
+                            except Exception as e:
+                                self.logger.error(f"[HOTKEYS] Ошибка передачи ESC в selection_window: {e}")
+                            return False
+
+                        # Если оба селектора None, но _capture_mode=True - сбрасываем режим
+                        self.logger.warning("[HOTKEYS] _capture_mode=True, но нет селектора - сбрасываем")
+                        self._capture_mode = False
+                        self.translating = False
+                        self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+                        self.root.deiconify()
+                        self.update_status("● Отменено", '#ff9800')
                         return False
                     return True
 
@@ -1132,13 +1168,19 @@ class ScreenshotTranslatorApp:
 
         def on_escape(event):
             self.logger.info("[DEBUG] ESC - отмена выделения")
-            selection_window.destroy()
             self._capture_mode = False
             self._selection_window = None
             self.translating = False
             self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
             self.root.deiconify()
             self.update_status("● Отменено", '#ff9800')
+            try:
+                selection_window.destroy()
+            except:
+                pass
+
+        # Сохраняем ссылку на обработчик для глобального хука
+        self._selection_window_on_escape = on_escape
 
         # Привязываем события
         canvas.bind("<ButtonPress-1>", on_mouse_down)
@@ -1146,6 +1188,18 @@ class ScreenshotTranslatorApp:
         canvas.bind("<ButtonRelease-1>", on_mouse_up)
         selection_window.bind("<Escape>", on_escape)
         canvas.bind("<Escape>", on_escape)
+
+        # ДОПОЛНИТЕЛЬНО: привязываем событие Escape через bind_all для надежности
+        # Это гарантирует, что даже если фокус не на canvas, ESC сработает
+        def on_escape_bind_all(event):
+            if self._capture_mode and self._selection_window is not None:
+                self.logger.info("[DEBUG] ESC через bind_all - отмена выделения")
+                on_escape(event)
+                return "break"
+            return None
+
+        # Сохраняем привязку для отмены позже
+        self._selection_window_bind_id = selection_window.bind_all("<Escape>", on_escape_bind_all)
 
         # Устанавливаем флаг для перехвата ESC
         self._capture_mode = True
@@ -1157,10 +1211,20 @@ class ScreenshotTranslatorApp:
         def on_close():
             self._capture_mode = False
             self._selection_window = None
+            self._selection_window_on_escape = None
+            if hasattr(self, '_selection_window_bind_id'):
+                try:
+                    selection_window.unbind_all("<Escape>", self._selection_window_bind_id)
+                except:
+                    pass
+                self._selection_window_bind_id = None
             self.translating = False
             self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
             self.root.deiconify()
-            selection_window.destroy()
+            try:
+                selection_window.destroy()
+            except:
+                pass
 
         selection_window.protocol("WM_DELETE_WINDOW", on_close)
 
@@ -1170,6 +1234,7 @@ class ScreenshotTranslatorApp:
 
         self._capture_mode = False
         self._selection_window = None
+        self._selection_window_on_escape = None
 
         self.logger.info(
             f"[DEBUG] _process_area_selection: текущее количество оверлеев: {len(self.overlay_manager.overlays) if self.overlay_manager else 0}")
