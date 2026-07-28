@@ -265,49 +265,52 @@ class OverlayWindow:
     def _check_and_update_visibility(self):
         """Унифицированная проверка активного окна."""
         if not self.auto_hide_enabled or not self._is_visible_by_user:
+            self.logger.debug(
+                f"[DEBUG] _check_and_update_visibility: пропускаем (auto_hide={self.auto_hide_enabled}, is_visible_by_user={self._is_visible_by_user})")
             return
 
         if hasattr(self, '_overlay_manager') and self._overlay_manager:
             if self._overlay_manager.is_dragging():
+                self.logger.debug("[DEBUG] _check_and_update_visibility: идет перетаскивание, пропускаем")
                 return
 
         if time.time() < self._monitor_stable_time:
+            self.logger.debug(
+                f"[DEBUG] _check_and_update_visibility: монитор стабилизируется ({time.time() - self._monitor_stable_time:.2f}с)")
             return
 
         try:
+            import win32gui
+
             active_hwnd = win32gui.GetForegroundWindow()
+            self.logger.info(
+                f"[DEBUG] _check_and_update_visibility: active_hwnd={active_hwnd}, target_hwnd={self._target_hwnd}, visible={self.visible}")
 
             if active_hwnd == 0:
+                self.logger.info("[DEBUG] _check_and_update_visibility: активное окно = 0, пропускаем")
                 return
 
+            # Пропускаем системные окна
             try:
                 class_name = win32gui.GetClassName(active_hwnd)
                 if class_name in ['MultitaskingViewFrame', 'ForegroundStaging']:
+                    self.logger.info(f"[DEBUG] _check_and_update_visibility: системное окно {class_name}, пропускаем")
                     return
             except:
                 pass
 
             if active_hwnd == self._last_active_hwnd:
+                self.logger.debug(f"[DEBUG] _check_and_update_visibility: активное окно не изменилось: {active_hwnd}")
                 return
 
             self._last_active_hwnd = active_hwnd
-            self.logger.info(f"[DEBUG] Активное окно изменилось на HWND={active_hwnd}")
+            self.logger.info(f"[DEBUG] _check_and_update_visibility: активное окно изменилось на HWND={active_hwnd}")
 
-            # === НОВОЕ: ПРОВЕРКА РЕЖИМА РЕДАКТИРОВАНИЯ ===
-            # Если режим редактирования включен - НЕ СКРЫВАЕМ оверлей при смене фокуса
-            is_edit_mode = False
-            if hasattr(self, '_overlay_manager') and self._overlay_manager:
-                try:
-                    is_edit_mode = self._overlay_manager.parent.is_edit_mode_enabled()
-                except:
-                    pass
+            # === УБИРАЕМ ПРОВЕРКУ РЕЖИМА РЕДАКТИРОВАНИЯ ===
+            # Оверлей всегда скрывается при переключении на другое окно,
+            # независимо от режима редактирования
 
-            if is_edit_mode:
-                self.logger.info("[DEBUG] Режим редактирования включен - оверлей не скрываем при смене фокуса")
-                # Принудительно поднимаем оверлей поверх всех окон
-                self._ensure_topmost()
-                return
-
+            # Проверяем, является ли активное окно окном выделения области
             is_selection_window = False
 
             if hasattr(self, '_overlay_manager') and self._overlay_manager:
@@ -339,25 +342,13 @@ class OverlayWindow:
                 except:
                     pass
 
-            if not is_selection_window:
-                try:
-                    class_name = win32gui.GetClassName(active_hwnd)
-                    if class_name == "TkTopLevel":
-                        rect = win32gui.GetWindowRect(active_hwnd)
-                        screen_width = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
-                        screen_height = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
-                        if rect[2] - rect[0] >= screen_width - 10 and rect[3] - rect[1] >= screen_height - 10:
-                            is_selection_window = True
-                            self.logger.info("[DEBUG] Обнаружено полноэкранное Toplevel - вероятно окно выделения")
-                except:
-                    pass
-
             if is_selection_window:
                 self.logger.info("[DEBUG] Активное окно является окном выделения области - НЕ СКРЫВАЕМ оверлей")
                 if self.visible and self._is_visible_by_user:
                     self._ensure_topmost()
                 return
 
+            # Проверяем, является ли активное окно нашим целевым окном или главным окном приложения
             app_hwnd = None
             try:
                 if hasattr(self.root, 'master'):
@@ -369,6 +360,7 @@ class OverlayWindow:
 
             is_our_window = False
 
+            # Проверяем, является ли активное окно целевым для любого оверлея
             if hasattr(self, '_overlay_manager') and self._overlay_manager:
                 for overlay in self._overlay_manager.overlays:
                     if overlay is not None:
@@ -383,18 +375,27 @@ class OverlayWindow:
                         (app_hwnd is not None and active_hwnd == app_hwnd)
                 )
 
-            self.logger.info(f"[DEBUG] is_our_window={is_our_window}, visible={self.visible}")
+            self.logger.info(
+                f"[DEBUG] _check_and_update_visibility: is_our_window={is_our_window}, visible={self.visible}, _is_visible_by_user={self._is_visible_by_user}")
 
+            # Если активное окно НЕ наше и оверлей виден - скрываем
             if not is_our_window and self.visible:
-                self.logger.info("[DEBUG] Переключились на другое окно - скрываем оверлей")
+                self.logger.info(
+                    "[DEBUG] _check_and_update_visibility: переключились на другое окно - СКРЫВАЕМ оверлей")
                 self._hide_internal()
+            # Если активное окно наше и оверлей скрыт но должен быть виден - показываем
             elif is_our_window and not self.visible and self._is_visible_by_user:
-                self.logger.info("[DEBUG] Переключились на наше окно - показываем оверлей")
+                self.logger.info(
+                    "[DEBUG] _check_and_update_visibility: переключились на наше окно - ПОКАЗЫВАЕМ оверлей")
                 if hasattr(self, '_overlay_manager') and self._overlay_manager:
                     self._overlay_manager.show_all_sync()
+            else:
+                self.logger.info(f"[DEBUG] _check_and_update_visibility: состояние не изменилось, ничего не делаем")
 
         except Exception as e:
             self.logger.warning(f"Ошибка в _check_and_update_visibility: {e}")
+            import traceback
+            self.logger.warning(traceback.format_exc())
 
     def _on_escape(self, event):
         """Обработчик ESC для оверлея - скрывает оверлей (не удаляет)."""
@@ -939,6 +940,9 @@ class OverlayWindow:
         self._last_image_path = image_path
         self._last_window_rect = window_rect
         self._is_visible_by_user = True
+
+        # Логируем состояние автоскрытия
+        self.logger.info(f"[DEBUG] show_for_window: auto_hide_enabled={self.auto_hide_enabled}")
 
         if show_immediately:
             self.logger.info("[DEBUG] show_immediately=True, показываем оверлей")

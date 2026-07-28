@@ -148,15 +148,11 @@ class SettingsWindow:
         if browser_path_changed:
             logger.info(f"[SETTINGS] Путь к браузеру изменен: {old_browser_path} -> {new_browser_path}")
 
-            # Если браузер уже инициализирован - перезапускаем его
             if hasattr(self.app, 'ready') and self.app.ready:
                 logger.info("[SETTINGS] Браузер активен, выполняем перезапуск...")
-
-                # Обновляем статус ДО перезапуска
                 if hasattr(self.app, 'update_status'):
-                    self.app.update_status("● Перезапуск браузера...", '#ff9800')
-                    logger.info("[SETTINGS] Статус обновлен: Перезапуск браузера...")
-
+                    self.app.update_status("● " + self.app.get_string('starting_browser'), '#ff9800')
+                    logger.info("[SETTINGS] Статус обновлен: Запуск браузера...")
                 if hasattr(self.app, '_restart_translator'):
                     self.app._restart_translator()
                     logger.info("[SETTINGS] Перезапуск браузера инициирован")
@@ -166,11 +162,10 @@ class SettingsWindow:
                         self.app.update_status("● Ошибка: браузер не перезапущен", '#f44336')
             else:
                 logger.info("[SETTINGS] Браузер не активен, перезапуск не требуется")
-                # Если браузер не активен, просто обновляем статус
                 if hasattr(self.app, 'update_status'):
                     self.app.update_status("● Настройки сохранены", '#4CAF50')
 
-        # Обновляем состояние режима редактирования
+        # Обновляем состояние режима редактирования (без статуса)
         if hasattr(self, 'app') and hasattr(self.app, '_edit_mode_enabled'):
             self.app._edit_mode_enabled = edit_mode
             if hasattr(self.app, 'btn_edit_mode'):
@@ -179,29 +174,28 @@ class SettingsWindow:
                     text=f"✏️ Редактирование: {status_text} (F5)",
                     bg='#4CAF50' if edit_mode else '#ff9800'
                 )
-            if hasattr(self.app, 'update_status'):
-                status_text = "ВКЛЮЧЕН" if edit_mode else "ВЫКЛЮЧЕН"
-                status_color = '#4CAF50' if edit_mode else '#ff9800'
-                # Не обновляем статус, если идет перезапуск браузера
-                if not browser_path_changed:
-                    self.app.update_status(f"● Режим редактирования: {status_text}", status_color)
+            # Убираем обновление статуса о режиме редактирования
+            # if hasattr(self.app, 'update_status'):
+            #     status_text = "ВКЛЮЧЕН" if edit_mode else "ВЫКЛЮЧЕН"
+            #     status_color = '#4CAF50' if edit_mode else '#ff9800'
+            #     self.app.update_status(f"● Режим редактирования: {status_text}", status_color)
             self.app.logger.info(f"Режим редактирования из настроек: {edit_mode}")
 
         # Перерегистрируем горячие клавиши (всегда)
         if hasattr(self, 'app') and hasattr(self.app, 'setup_hotkeys'):
             self.app.setup_hotkeys()
 
-        # Показываем сообщение только если не было перезапуска браузера
+        # Показываем сообщение
         if not browser_path_changed:
             messagebox.showinfo(
                 self.get_string('settings_title'),
                 self.get_string('settings_saved')
             )
         else:
-            # Если был перезапуск, показываем сообщение с информацией о перезапуске
             messagebox.showinfo(
                 self.get_string('settings_title'),
-                self.get_string('settings_saved') + "\n\n🔄 Браузер перезапускается..."
+                self.get_string(
+                    'settings_saved') + "\n\n🔄 Браузер перезапускается...\nСтатус будет обновлен автоматически."
             )
 
         if self.on_settings_changed:

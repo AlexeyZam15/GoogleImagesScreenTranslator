@@ -352,7 +352,8 @@ class ScreenshotTranslatorApp:
         self.settings.set_edit_mode_enabled(self._edit_mode_enabled)
         status_text = "ВКЛЮЧЕН" if self._edit_mode_enabled else "ВЫКЛЮЧЕН"
         status_color = '#4CAF50' if self._edit_mode_enabled else '#ff9800'
-        self.update_status(f"● Режим редактирования: {status_text}", status_color)
+        # Убираем статус о режиме редактирования
+        # self.update_status(f"● Режим редактирования: {status_text}", status_color)
         self.logger.info(f"Режим редактирования переключен: {status_text}")
         if hasattr(self, 'btn_edit_mode'):
             self.btn_edit_mode.config(
@@ -370,9 +371,12 @@ class ScreenshotTranslatorApp:
             self._handle_browser_not_found(error_msg)
         else:
             self.update_status("● " + self.get_string('error') + ": " + error_msg[:50], '#f44336')
+            # Кнопки остаются заблокированными при ошибке
             self.btn_capture.config(state=DISABLED, bg='#333', fg='#888')
+            self.btn_toggle.config(state=DISABLED, bg='#333', fg='#888')
+            self.btn_clear_all.config(state=DISABLED, bg='#333', fg='#888')
+            self.btn_edit_mode.config(state=DISABLED, bg='#333', fg='#888')
             self.logger.error(f"❌ Ошибка инициализации: {error_msg}")
-            # Показываем диалог с ошибкой (не блокирующий)
             try:
                 import tkinter.messagebox as messagebox
                 messagebox.showerror(
@@ -427,8 +431,6 @@ class ScreenshotTranslatorApp:
         self.logger.info(f"_on_init_complete вызван: result={result}, error={error}")
         if error:
             self.logger.error(f"Ошибка инициализации: {error}")
-            # === НЕ ЗАКРЫВАЕМ БРАУЗЕР ЗДЕСЬ, ТАК КАК _init_browser УЖЕ ЗАКРЫЛ ЕГО ===
-            # Просто обрабатываем ошибку и планируем повтор
             self._on_init_error(error)
             self.logger.info(f"Планируем повторную попытку через {self._init_retry_delay}мс...")
             self.root.after(self._init_retry_delay, self._init_translator_step)
@@ -447,9 +449,22 @@ class ScreenshotTranslatorApp:
             else:
                 self.logger.info(f"OverlayManager уже существует: {self.overlay_manager}")
 
+            # РАЗБЛОКИРУЕМ ВСЕ КНОПКИ
             self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+            self.btn_clear_all.config(state=NORMAL, bg='#d32f2f', fg='white')
+            self.btn_toggle.config(state=NORMAL, bg='#2196F3', fg='white')
+            status_text = "ВКЛЮЧЕН" if self._edit_mode_enabled else "ВЫКЛЮЧЕН"
+            self.btn_edit_mode.config(
+                state=NORMAL,
+                text=f"✏️ Редактирование: {status_text} (F5)",
+                bg='#4CAF50' if self._edit_mode_enabled else '#ff9800',
+                fg='white'
+            )
+
             self.update_status("● " + self.get_string('ready'), '#4CAF50')
             self.logger.info("UI обновлен: статус 'Готово'")
+
+            self._restarting = False
         self._pending_command_ids = {}
 
     def _update_overlay_alpha(self):
@@ -486,21 +501,36 @@ class ScreenshotTranslatorApp:
         self.target_lang_var = StringVar(value=self.settings.get_target_language())
         self.show_indicator_var = BooleanVar(value=self.settings.get_show_translation_indicator())
         self.auto_hide_var = BooleanVar(value=self.settings.get_auto_hide_overlay())
+        self.app_title = None
+        self.browser_worker = BrowserWorker(self.settings)
+        self.browser_worker.start()
+        self._pending_command_ids = {}
+        self._translation_in_progress = False
+        self._edit_mode_enabled = self.settings.get_edit_mode_enabled()
+        self._init_attempts = 0
+        self._max_init_attempts = 3
+        self._init_retry_delay = 2000
+
         main = Frame(self.root, bg='#1e1e1e')
         main.pack(expand=True, fill=BOTH, padx=25, pady=20)
+
         header_frame = Frame(main, bg='#1e1e1e', height=60)
         header_frame.pack(fill=X, pady=(0, 15))
         header_frame.pack_propagate(False)
+
         title_frame = Frame(header_frame, bg='#1e1e1e')
         title_frame.pack(side=LEFT, expand=True, fill=X)
-        icon_label = Label(title_frame, text="📸",
-                           bg='#1e1e1e', fg='white', font=("Arial", 26))
+
+        icon_label = Label(title_frame, text="📸", bg='#1e1e1e', fg='white', font=("Arial", 26))
         icon_label.pack(side=LEFT, padx=(0, 10))
+
         self.title_label = Label(title_frame, text=self.get_string('app_title'),
                                  bg='#1e1e1e', fg='#4CAF50', font=("Arial", 15, "bold"))
         self.title_label.pack(side=LEFT)
+
         header_right = Frame(header_frame, bg='#1e1e1e')
         header_right.pack(side=RIGHT, padx=(10, 0))
+
         current_lang = self.settings.get_language()
         lang_text = "EN" if current_lang == "ru" else "RU"
         self.lang_btn = Button(
@@ -517,6 +547,7 @@ class ScreenshotTranslatorApp:
             cursor="hand2"
         )
         self.lang_btn.pack(side=RIGHT, padx=(0, 5))
+
         self.settings_btn = Button(
             header_right,
             text="⚙️",
@@ -549,11 +580,14 @@ class ScreenshotTranslatorApp:
 
         self.settings_btn.bind('<Enter>', on_settings_enter)
         self.settings_btn.bind('<Leave>', on_settings_leave)
+
         self.status = Label(main, text="● " + self.get_string('starting'),
                             fg='#ff9800', bg='#1e1e1e', font=("Arial", 11), height=1)
         self.status.pack(pady=(5, 10), fill=X)
+
         lang_select_frame = Frame(main, bg='#1e1e1e')
         lang_select_frame.pack(fill=X, pady=(5, 10))
+
         self.target_lang_label = Label(
             lang_select_frame,
             text=self.get_string('target_language'),
@@ -563,8 +597,10 @@ class ScreenshotTranslatorApp:
             anchor='w'
         )
         self.target_lang_label.pack(anchor=W, fill=X)
+
         lang_combo_frame = Frame(lang_select_frame, bg='#1e1e1e')
         lang_combo_frame.pack(fill=X, pady=(5, 0))
+
         lang_codes = sorted(LANGUAGES.keys())
         self._all_lang_items = [f"{LANGUAGES[code]} ({code})" for code in lang_codes]
         self.target_lang_combo = ttk.Combobox(
@@ -579,11 +615,15 @@ class ScreenshotTranslatorApp:
         self.target_lang_combo.bind('<KeyRelease>', self._on_lang_search)
         self.target_lang_combo.bind('<Return>', self._on_lang_enter)
         self.target_lang_combo.bind('<<ComboboxSelected>>', self._on_target_lang_changed)
+
         current_lang_code = self.settings.get_target_language()
         current_display = f"{LANGUAGES.get(current_lang_code, 'Russian')} ({current_lang_code})"
         self.target_lang_combo.set(current_display)
+
         btn_frame = Frame(main, bg='#1e1e1e')
         btn_frame.pack(fill=X, pady=5)
+
+        # ВСЕ КНОПКИ НЕАКТИВНЫ ПРИ СТАРТЕ
         self.btn_capture = Button(
             btn_frame,
             text=self.get_string('btn_capture'),
@@ -603,11 +643,12 @@ class ScreenshotTranslatorApp:
             text="🗑️ Очистить все (F4)",
             command=self.clear_all_overlays,
             font=("Arial", 11),
-            bg='#d32f2f',
-            fg='white',
+            bg='#333',
+            fg='#888',
             relief=FLAT,
             height=1,
-            pady=12
+            pady=12,
+            state=DISABLED  # Теперь тоже неактивна
         )
         self.btn_clear_all.pack(fill=X, pady=(0, 10), ipady=2)
 
@@ -616,27 +657,27 @@ class ScreenshotTranslatorApp:
             text=self.get_string('btn_toggle'),
             command=self.toggle_overlay,
             font=("Arial", 11),
-            bg='#2196F3',
-            fg='white',
+            bg='#333',
+            fg='#888',
             relief=FLAT,
             height=1,
-            pady=12
+            pady=12,
+            state=DISABLED  # Теперь тоже неактивна
         )
         self.btn_toggle.pack(fill=X, ipady=2)
 
-        # === КНОПКА РЕЖИМА РЕДАКТИРОВАНИЯ ===
-        # Создаем кнопку с текстом в зависимости от состояния _edit_mode_enabled
         status_text = "ВКЛЮЧЕН" if self._edit_mode_enabled else "ВЫКЛЮЧЕН"
         self.btn_edit_mode = Button(
             btn_frame,
             text=f"✏️ Редактирование: {status_text} (F5)",
             command=self.toggle_edit_mode,
             font=("Arial", 11),
-            bg='#4CAF50' if self._edit_mode_enabled else '#ff9800',
-            fg='white',
+            bg='#333',
+            fg='#888',
             relief=FLAT,
             height=1,
-            pady=12
+            pady=12,
+            state=DISABLED  # Теперь тоже неактивна
         )
         self.btn_edit_mode.pack(fill=X, pady=(10, 10), ipady=2)
 
@@ -660,6 +701,13 @@ class ScreenshotTranslatorApp:
         self.root.deiconify()
         self.root.lift()
         self.root.focus_force()
+
+        self.update_ui_language()
+        self.app_title = self.get_string('app_title')
+        self.logger.info(f"Заголовок приложения: {self.app_title}")
+        self._setup_app_icon()
+        self.setup_hotkeys()
+        self.root.after(100, self._init_translator_step)
 
     def _cancel_translation(self):
         """Отменяет текущий перевод"""
@@ -1536,39 +1584,23 @@ class ScreenshotTranslatorApp:
         self._restarting = True
         self.logger.info("Перезапуск переводчика с новыми настройками...")
 
-        # Обновляем статус в главном окне
-        self.update_status("● Перезапуск браузера...", '#ff9800')
+        # Блокируем все кнопки как при первом запуске
         self.btn_capture.config(state=DISABLED, bg='#333', fg='#888')
+        self.btn_toggle.config(state=DISABLED, bg='#333', fg='#888')
+        self.btn_clear_all.config(state=DISABLED, bg='#333', fg='#888')
+        self.btn_edit_mode.config(state=DISABLED, bg='#333', fg='#888')
 
-        show_browser = self.settings.get_show_browser()
-        target_lang = self.settings.get_target_language()
-        cmd_id = self.browser_worker.restart_browser(
-            show_browser,
-            target_lang,
-            callback=self._on_restart_complete
-        )
-        self._pending_command_ids[cmd_id] = 'restart'
-        self._check_results()
+        # Используем статус как при первом запуске
+        self.update_status("● " + self.get_string('starting_browser'), '#ff9800')
 
-    def _on_restart_complete(self, result, error):
-        """Обработчик завершения перезапуска"""
-        if error:
-            self.logger.error(f"Ошибка перезапуска: {error}")
-            self._on_restart_error(error)
-        else:
-            self.ready = True
-            self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
-            self.update_status("● " + self.get_string('ready'), '#4CAF50')
-            self.logger.info("✅ Переводчик перезапущен успешно")
-        self._restarting = False
-        self._pending_command_ids = {}
+        # Сбрасываем состояние для перезапуска
+        self._init_done = False
+        self.ready = False
+        self.initializing = False
 
-    def _on_restart_error(self, error_msg):
-        """Обработчик ошибки перезапуска"""
-        self.update_status("● " + self.get_string('error') + ": " + error_msg[:50], '#f44336')
-        self.btn_capture.config(state=DISABLED, bg='#333', fg='#888')
-        self.logger.error(f"❌ Ошибка перезапуска: {error_msg}")
-        self._restarting = False
+        # Используем ТОТ ЖЕ МЕТОД, что и при первом запуске
+        self._init_attempts = 0
+        self._init_translator_step()
 
     def _setup_app_icon(self):
         """Устанавливает профессиональную иконку приложения для отображения в панели задач"""
