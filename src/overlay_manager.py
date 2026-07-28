@@ -23,6 +23,19 @@ class OverlayManager:
         self._esc_hook_active = False
         self.logger.info("OverlayManager инициализирован")
 
+    def update_edit_mode_for_all(self, edit_mode_enabled: bool):
+        """
+        Обновляет состояние режима редактирования для всех существующих оверлеев.
+        """
+        self.logger.info(
+            f"Обновление режима редактирования для всех {len(self.overlays)} оверлеев: {edit_mode_enabled}")
+        for overlay in self.overlays:
+            try:
+                if overlay is not None:
+                    overlay.update_edit_mode(edit_mode_enabled)
+            except Exception as e:
+                self.logger.warning(f"Ошибка обновления режима редактирования для оверлея: {e}")
+
     def create_overlay(self, image_path: Path, window_rect: tuple,
                        target_hwnd: int = None, is_fullscreen: bool = None,
                        show_immediately: bool = True, is_window_screenshot: bool = False) -> Optional[OverlayWindow]:
@@ -213,6 +226,15 @@ class OverlayManager:
                     new_overlay._is_window_screenshot = False
                     new_overlay.logger.info("[DEBUG] Added _is_window_screenshot attribute (fallback)")
 
+                # _edit_mode_enabled - добавляем отдельный флаг для оверлея
+                if not hasattr(new_overlay, '_edit_mode_enabled'):
+                    if hasattr(self.parent, '_edit_mode_enabled'):
+                        new_overlay._edit_mode_enabled = self.parent._edit_mode_enabled
+                    else:
+                        new_overlay._edit_mode_enabled = False
+                    new_overlay.logger.info(
+                        f"[DEBUG] Added _edit_mode_enabled attribute (fallback) = {new_overlay._edit_mode_enabled}")
+
                 # === ПРОВЕРЯЕМ, ЕСТЬ ЛИ УЖЕ ROOT ===
                 if not hasattr(new_overlay, 'root') or new_overlay.root is None:
                     import tkinter as tk
@@ -281,6 +303,11 @@ class OverlayManager:
         # Устанавливаем флаг, является ли это F2-оверлеем (скриншот окна)
         new_overlay._is_window_screenshot = is_window_screenshot
         self.logger.info(f"[DEBUG] Установлен _is_window_screenshot = {is_window_screenshot}")
+
+        # Устанавливаем _edit_mode_enabled для оверлея
+        if hasattr(self.parent, '_edit_mode_enabled'):
+            new_overlay._edit_mode_enabled = self.parent._edit_mode_enabled
+            self.logger.info(f"[DEBUG] Установлен _edit_mode_enabled = {new_overlay._edit_mode_enabled}")
 
         # Отключаем собственный хук ESC у оверлея - используем менеджер
         new_overlay._use_manager_esc = True

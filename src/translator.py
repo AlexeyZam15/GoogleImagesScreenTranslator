@@ -31,7 +31,7 @@ class GoogleTranslateDebug:
         self._worker = None
 
     def start_browser(self):
-        """Запускает браузер с Playwright."""
+        """Запускает браузер с Playwright - без всплывающих окон."""
         import shutil
         import tempfile
         from src.utils import get_safe_temp_dir
@@ -56,9 +56,9 @@ class GoogleTranslateDebug:
 
         if not browser_path:
             error_msg = (
-                "Не найден Яндекс Браузер или Google Chrome.\n"
-                "Пожалуйста, установите один из браузеров или укажите путь вручную.\n"
-                "Рекомендуется установить Яндекс Браузер для лучшей совместимости."
+                "Не найден Яндекс Браузер или Google Chrome. "
+                "Пожалуйста, установите один из браузеров. "
+                "Рекомендуется Яндекс Браузер для лучшей совместимости."
             )
             self.logger.error(error_msg)
             raise Exception(error_msg)
@@ -116,17 +116,14 @@ class GoogleTranslateDebug:
             pages = self._context.pages
             if pages:
                 self.logger.info(f"Найдено {len(pages)} существующих страниц")
-                # Используем первую существующую страницу
                 self._page = pages[0]
                 self.logger.info("Используем существующую страницу")
             else:
-                # Создаем новую страницу с обработкой ошибки
                 try:
                     self._page = self._context.new_page()
                     self.logger.info("Создана новая страница")
                 except Exception as e:
                     self.logger.error(f"Не удалось создать новую страницу: {e}")
-                    # Пробуем создать страницу с другими параметрами
                     try:
                         self._page = self._context.new_page(no_viewport=True)
                         self.logger.info("Создана новая страница (no_viewport)")
@@ -134,7 +131,7 @@ class GoogleTranslateDebug:
                         self.logger.error(f"Не удалось создать страницу даже с no_viewport: {e2}")
                         raise
 
-            # Закрываем лишние страницы, оставляем только одну
+            # Закрываем лишние страницы
             pages = self._context.pages
             if len(pages) > 1:
                 self.logger.info(f"Закрытие {len(pages) - 1} лишних страниц...")
@@ -147,12 +144,14 @@ class GoogleTranslateDebug:
 
             self.logger.info("Открытие Google Translate...")
             try:
-                self.logger.info(f"Загрузка страницы (таймаут 12с): {self.base_url}")
-                self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=12000)
+                # УМЕНЬШЕННЫЙ ТАЙМАУТ: 12с → 8с
+                timeout_ms = 8000
+                self.logger.info(f"Загрузка страницы (таймаут {timeout_ms}мс): {self.base_url}")
+                self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=timeout_ms)
                 self.logger.info(f"✅ Google Translate открыт: {self.base_url}")
             except Exception as e:
                 self.logger.error(f"Ошибка загрузки страницы: {e}")
-                # === ПОЛНОСТЬЮ ЗАКРЫВАЕМ ВСЕ ===
+                # Полностью закрываем всё и выбрасываем исключение
                 try:
                     if self._context:
                         self._context.close()
@@ -177,7 +176,6 @@ class GoogleTranslateDebug:
 
         except Exception as e:
             self.logger.error(f"Ошибка запуска браузера: {e}")
-            # === ПОЛНОСТЬЮ ЗАКРЫВАЕМ ВСЕ ===
             try:
                 if hasattr(self, '_context') and self._context:
                     self._context.close()
@@ -197,6 +195,262 @@ class GoogleTranslateDebug:
             except:
                 pass
             raise
+
+    def reset_page(self):
+        """Сбрасывает страницу Google Translate (перезагружает)"""
+        self.logger.info("[DEBUG] GoogleTranslateDebug.reset_page() - сброс страницы")
+
+        if not self._page:
+            self.logger.warning("[DEBUG] reset_page: страница не инициализирована")
+            return
+
+        try:
+            # УМЕНЬШЕННЫЙ ТАЙМАУТ: 10с → 7с
+            timeout_ms = 7000
+            self.logger.info(f"[DEBUG] reset_page: переход на {self.base_url} (таймаут {timeout_ms}мс)")
+            self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=timeout_ms)
+            self.logger.info("[DEBUG] reset_page: страница сброшена")
+        except Exception as e:
+            self.logger.error(f"[DEBUG] reset_page: ошибка: {e}")
+            try:
+                self._page.reload()
+                self.logger.info("[DEBUG] reset_page: страница перезагружена (fallback)")
+            except Exception as e2:
+                self.logger.error(f"[DEBUG] reset_page: не удалось перезагрузить: {e2}")
+
+    def translate_image(self, image_path: Path, output_dir: Path, worker=None) -> Optional[Path]:
+        """
+        Переводит изображение через Google Translate.
+        Возвращает путь к переведенному изображению или None.
+        """
+        import time
+        total_start = time.time()
+
+        self._worker = worker
+        self._cancel_flag = False
+
+        if not self.is_browser_alive():
+            self.logger.warning("Браузер закрыт, перезапуск...")
+            self.close_browser()
+            self.start_browser()
+            time.sleep(1)
+
+        self.logger.info("=" * 60)
+        self.logger.info("🚀 ЗАПУСК ПЕРЕВОДА ИЗОБРАЖЕНИЯ")
+        self.logger.info("=" * 60)
+
+        try:
+            # ШАГ 1
+            if self._cancel_flag:
+                self.logger.info("[DEBUG] Шаг 1: отменено")
+                raise Exception("Перевод отменен")
+
+            step_start = time.time()
+            self.logger.info("Шаг 1: Проверка готовности страницы")
+            try:
+                self._page.evaluate("1 + 1")
+                self.logger.info(f"  ✓ Страница загружена (+{time.time() - step_start:.3f}с)")
+            except Exception as e:
+                self.logger.warning(f"Страница недоступна, перезагрузка: {e}")
+                try:
+                    self._page.reload()
+                    self.logger.info(f"  ✓ Страница перезагружена (+{time.time() - step_start:.3f}с)")
+                except Exception as e2:
+                    self.logger.error(f"Не удалось перезагрузить страницу: {e2}")
+                    try:
+                        # УМЕНЬШЕННЫЙ ТАЙМАУТ: 10с → 7с
+                        timeout_ms = 7000
+                        self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                        self.logger.info(f"  ✓ Страница открыта заново (+{time.time() - step_start:.3f}с)")
+                    except Exception as e3:
+                        self.logger.error(f"Не удалось открыть страницу: {e3}")
+                        return None
+            self.logger.info(f"  ✓ Шаг 1 выполнен за {time.time() - step_start:.3f}с")
+
+            # ШАГ 2
+            if self._cancel_flag:
+                self.logger.info("[DEBUG] Шаг 2: отменено")
+                raise Exception("Перевод отменен")
+
+            step_start = time.time()
+            self.logger.info("Шаг 2: Ожидание загрузки интерфейса")
+            # УМЕНЬШЕННЫЙ ТАЙМАУТ: 10с → 6с
+            if not self._wait_for_upload_zone(timeout=6000):
+                self._page.reload()
+                if not self._wait_for_upload_zone(timeout=5000):
+                    self.logger.error("Интерфейс не загрузился")
+                    return None
+            self.logger.info(f"  ✓ Шаг 2 выполнен за {time.time() - step_start:.3f}с")
+
+            # ШАГ 3
+            if self._cancel_flag:
+                self.logger.info("[DEBUG] Шаг 3: отменено")
+                raise Exception("Перевод отменен")
+
+            step_start = time.time()
+            self.logger.info("Шаг 3: Копирование изображения в буфер обмена")
+            if not self._copy_image_to_clipboard(image_path):
+                self.logger.error("Не удалось скопировать изображение")
+                return None
+            self.logger.info(f"  ✓ Шаг 3 выполнен за {time.time() - step_start:.3f}с")
+
+            # ШАГ 4
+            if self._cancel_flag:
+                self.logger.info("[DEBUG] Шаг 4: отменено")
+                raise Exception("Перевод отменен")
+
+            step_start = time.time()
+            self.logger.info("Шаг 4: Нажатие кнопки 'Вставить из буфера обмена'")
+            if not self._find_and_click_paste_button():
+                self.logger.error("Не найдена кнопка вставки")
+                return None
+            self.logger.info(f"  ✓ Шаг 4 выполнен за {time.time() - step_start:.3f}с")
+
+            # ШАГ 5 - ОСНОВНОЙ ЦИКЛ ОЖИДАНИЯ С ПРОВЕРКОЙ ОТМЕНЫ
+            if self._cancel_flag:
+                self.logger.info("[DEBUG] Шаг 5: отменено")
+                raise Exception("Перевод отменен")
+
+            step_start = time.time()
+            self.logger.info("Шаг 5: Ожидание перевода")
+
+            # Ожидаем перевод с проверкой флага отмены
+            if not self._wait_for_blob_with_cancel(timeout=20):
+                self.logger.error("Перевод не завершился или был отменен")
+                return None
+            self.logger.info(f"  ✓ Шаг 5 выполнен за {time.time() - step_start:.3f}с")
+
+            # ШАГ 6
+            if self._cancel_flag:
+                self.logger.info("[DEBUG] Шаг 6: отменено")
+                raise Exception("Перевод отменен")
+
+            step_start = time.time()
+            self.logger.info("Шаг 6: Скачивание переведенного изображения")
+            download_button = self._find_download_button()
+            if not download_button:
+                self.logger.error("Не найдена видимая кнопка скачивания")
+                return None
+
+            # Проверяем отмену перед скачиванием
+            if self._cancel_flag:
+                self.logger.info("[DEBUG] Шаг 6: отменено перед скачиванием")
+                raise Exception("Перевод отменен")
+
+            download_button.scroll_into_view_if_needed()
+            if not download_button.is_visible():
+                self.logger.error("Кнопка перестала быть видимой")
+                return None
+
+            with self._page.expect_download(timeout=20000) as download_info:
+                download_button.click()
+                self.logger.info("Нажата кнопка скачивания, ожидание загрузки...")
+
+            # Проверяем отмену после скачивания
+            if self._cancel_flag:
+                self.logger.info("[DEBUG] Шаг 6: отменено после скачивания")
+                raise Exception("Перевод отменен")
+
+            download = download_info.value
+            self.logger.info(f"Скачивание перехвачено: {download.suggested_filename}")
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_path = output_dir / f"translated_{image_path.stem}.png"
+            download.save_as(str(output_path))
+            self.logger.info(f"  ✓ Шаг 6 выполнен за {time.time() - step_start:.3f}с")
+
+            if self._cancel_flag:
+                self.logger.info("[DEBUG] Шаг 7: отменено")
+                raise Exception("Перевод отменен")
+
+            if output_path.exists():
+                size = output_path.stat().st_size
+                total_elapsed = time.time() - total_start
+                self.logger.info(f"✅ Изображение сохранено: {output_path} ({size} байт)")
+                self.logger.info(f"⏱️ ОБЩЕЕ ВРЕМЯ ПЕРЕВОДА: {total_elapsed:.3f} секунд")
+
+                self.logger.info("Шаг 7: Переход на страницу загрузки для следующего перевода...")
+                try:
+                    # УМЕНЬШЕННЫЙ ТАЙМАУТ: 15с → 8с
+                    timeout_ms = 8000
+                    self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                    self.logger.info(f"✅ Переход на страницу загрузки: {self.base_url}")
+                    if self._wait_for_upload_zone(timeout=5000):
+                        self.logger.info("✅ Интерфейс загружен")
+                    else:
+                        self.logger.warning("Интерфейс не загрузился после перехода")
+                except Exception as e:
+                    self.logger.warning(f"Ошибка при переходе на страницу загрузки: {e}")
+                    try:
+                        self._page.reload()
+                        self.logger.info("✅ Страница перезагружена")
+                    except Exception as e2:
+                        self.logger.warning(f"Не удалось перезагрузить страницу: {e2}")
+                return output_path
+            else:
+                self.logger.error("Файл не был сохранен")
+                return None
+
+        except Exception as e:
+            if "отменен" in str(e):
+                self.logger.info(f"⏹️ ПЕРЕВОД ОТМЕНЕН ПОЛЬЗОВАТЕЛЕМ")
+                # Сбрасываем страницу при отмене
+                try:
+                    timeout_ms = 7000
+                    self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                    self.logger.info("✅ Страница сброшена после отмены")
+                except:
+                    pass
+                raise Exception("Перевод отменен пользователем")
+            else:
+                total_elapsed = time.time() - total_start
+                self.logger.error(f"Критическая ошибка (через {total_elapsed:.3f}с): {e}")
+                import traceback
+                traceback.print_exc()
+                return None
+
+    def _wait_for_upload_zone(self, timeout: int = 8000) -> bool:
+        """Ожидает появления зоны загрузки на вкладке 'Изображения'"""
+        self.logger.info("Ожидание загрузки интерфейса...")
+        selectors = [
+            'button[aria-label="Вставить изображение из буфера обмена"]',
+            'button:has-text("Вставить из буфера обмена")',
+            'input[type="file"]',
+            '.gLXQIf',
+            '.T12pLd',
+            'div:has-text("Или выберите файл")',
+        ]
+        start_time = time.time()
+        while (time.time() - start_time) * 1000 < timeout:
+            for selector in selectors:
+                try:
+                    locator = self._page.locator(selector).first
+                    if locator.count() > 0:
+                        if locator.is_visible() or locator.is_attached():
+                            self.logger.info(f"Найден элемент: {selector}")
+                            return True
+                except Exception:
+                    pass
+            time.sleep(0.3)
+        self.logger.warning("Не удалось найти зону загрузки")
+        return False
+
+    def update_interface_language(self, lang_code: str):
+        """Обновляет язык интерфейса в URL и перезагружает страницу"""
+        self.logger.info(f"Обновление языка интерфейса на: {lang_code}")
+        hl_param = "ru" if lang_code == "ru" else "en"
+        self.base_url = f"https://translate.google.com/details?hl={hl_param}&sl=auto&tl={self.target_lang}&op=images"
+        if self._page:
+            try:
+                # УМЕНЬШЕННЫЙ ТАЙМАУТ: 15с → 8с
+                timeout_ms = 8000
+                self.logger.info(f"Переход на URL: {self.base_url} (таймаут {timeout_ms}мс)")
+                self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                self.logger.info(f"✅ Страница обновлена с языком: {hl_param}")
+            except Exception as e:
+                self.logger.error(f"Ошибка обновления страницы: {e}")
+                raise
+        else:
+            self.logger.warning("Страница не инициализирована, URL обновлен для следующего запуска")
 
     def _wait_for_blob_with_cancel(self, timeout: int = 15) -> bool:
         """
@@ -236,27 +490,6 @@ class GoogleTranslateDebug:
         """Отменяет текущий перевод"""
         self._cancel_flag = True
         self.logger.info("[DEBUG] GoogleTranslateDebug.cancel_translation() - флаг отмены установлен")
-
-    def reset_page(self):
-        """Сбрасывает страницу Google Translate (перезагружает)"""
-        self.logger.info("[DEBUG] GoogleTranslateDebug.reset_page() - сброс страницы")
-
-        if not self._page:
-            self.logger.warning("[DEBUG] reset_page: страница не инициализирована")
-            return
-
-        try:
-            # Перезагружаем страницу с переходом на URL загрузки
-            self.logger.info(f"[DEBUG] reset_page: переход на {self.base_url}")
-            self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=10000)
-            self.logger.info("[DEBUG] reset_page: страница сброшена")
-        except Exception as e:
-            self.logger.error(f"[DEBUG] reset_page: ошибка: {e}")
-            try:
-                self._page.reload()
-                self.logger.info("[DEBUG] reset_page: страница перезагружена (fallback)")
-            except Exception as e2:
-                self.logger.error(f"[DEBUG] reset_page: не удалось перезагрузить: {e2}")
 
     def _find_yandex_browser(self) -> Optional[str]:
         """Ищет Яндекс Браузер через реестр Windows"""
@@ -443,22 +676,6 @@ class GoogleTranslateDebug:
         self.logger.error("❌ Не найден ни один Chromium-браузер")
         return None
 
-    def update_interface_language(self, lang_code: str):
-        """Обновляет язык интерфейса в URL и перезагружает страницу"""
-        self.logger.info(f"Обновление языка интерфейса на: {lang_code}")
-        hl_param = "ru" if lang_code == "ru" else "en"
-        self.base_url = f"https://translate.google.com/details?hl={hl_param}&sl=auto&tl={self.target_lang}&op=images"
-        if self._page:
-            try:
-                self.logger.info(f"Переход на URL: {self.base_url}")
-                self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=15000)
-                self.logger.info(f"✅ Страница обновлена с языком: {hl_param}")
-            except Exception as e:
-                self.logger.error(f"Ошибка обновления страницы: {e}")
-                raise
-        else:
-            self.logger.warning("Страница не инициализирована, URL обновлен для следующего запуска")
-
     def _reset_pages_fast(self):
         """Быстрое обнуление вкладок - используем первую существующую"""
         try:
@@ -486,190 +703,6 @@ class GoogleTranslateDebug:
                 self.logger.info("Создана новая вкладка (fallback)")
             except:
                 pass
-
-    def translate_image(self, image_path: Path, output_dir: Path, worker=None) -> Optional[Path]:
-        """
-        Переводит изображение через Google Translate.
-        Возвращает путь к переведенному изображению или None.
-        """
-        import time
-        total_start = time.time()
-
-        self._worker = worker
-        self._cancel_flag = False
-
-        if not self.is_browser_alive():
-            self.logger.warning("Браузер закрыт, перезапуск...")
-            self.close_browser()
-            self.start_browser()
-            time.sleep(1)
-
-        self.logger.info("=" * 60)
-        self.logger.info("🚀 ЗАПУСК ПЕРЕВОДА ИЗОБРАЖЕНИЯ")
-        self.logger.info("=" * 60)
-
-        try:
-            # ШАГ 1
-            if self._cancel_flag:
-                self.logger.info("[DEBUG] Шаг 1: отменено")
-                raise Exception("Перевод отменен")
-
-            step_start = time.time()
-            self.logger.info("Шаг 1: Проверка готовности страницы")
-            try:
-                self._page.evaluate("1 + 1")
-                self.logger.info(f"  ✓ Страница загружена (+{time.time() - step_start:.3f}с)")
-            except Exception as e:
-                self.logger.warning(f"Страница недоступна, перезагрузка: {e}")
-                try:
-                    self._page.reload()
-                    self.logger.info(f"  ✓ Страница перезагружена (+{time.time() - step_start:.3f}с)")
-                except Exception as e2:
-                    self.logger.error(f"Не удалось перезагрузить страницу: {e2}")
-                    try:
-                        self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=10000)
-                        self.logger.info(f"  ✓ Страница открыта заново (+{time.time() - step_start:.3f}с)")
-                    except Exception as e3:
-                        self.logger.error(f"Не удалось открыть страницу: {e3}")
-                        return None
-            self.logger.info(f"  ✓ Шаг 1 выполнен за {time.time() - step_start:.3f}с")
-
-            # ШАГ 2
-            if self._cancel_flag:
-                self.logger.info("[DEBUG] Шаг 2: отменено")
-                raise Exception("Перевод отменен")
-
-            step_start = time.time()
-            self.logger.info("Шаг 2: Ожидание загрузки интерфейса")
-            if not self._wait_for_upload_zone(timeout=10000):
-                self._page.reload()
-                if not self._wait_for_upload_zone(timeout=8000):
-                    self.logger.error("Интерфейс не загрузился")
-                    return None
-            self.logger.info(f"  ✓ Шаг 2 выполнен за {time.time() - step_start:.3f}с")
-
-            # ШАГ 3
-            if self._cancel_flag:
-                self.logger.info("[DEBUG] Шаг 3: отменено")
-                raise Exception("Перевод отменен")
-
-            step_start = time.time()
-            self.logger.info("Шаг 3: Копирование изображения в буфер обмена")
-            if not self._copy_image_to_clipboard(image_path):
-                self.logger.error("Не удалось скопировать изображение")
-                return None
-            self.logger.info(f"  ✓ Шаг 3 выполнен за {time.time() - step_start:.3f}с")
-
-            # ШАГ 4
-            if self._cancel_flag:
-                self.logger.info("[DEBUG] Шаг 4: отменено")
-                raise Exception("Перевод отменен")
-
-            step_start = time.time()
-            self.logger.info("Шаг 4: Нажатие кнопки 'Вставить из буфера обмена'")
-            if not self._find_and_click_paste_button():
-                self.logger.error("Не найдена кнопка вставки")
-                return None
-            self.logger.info(f"  ✓ Шаг 4 выполнен за {time.time() - step_start:.3f}с")
-
-            # ШАГ 5 - ОСНОВНОЙ ЦИКЛ ОЖИДАНИЯ С ПРОВЕРКОЙ ОТМЕНЫ
-            if self._cancel_flag:
-                self.logger.info("[DEBUG] Шаг 5: отменено")
-                raise Exception("Перевод отменен")
-
-            step_start = time.time()
-            self.logger.info("Шаг 5: Ожидание перевода")
-
-            # Ожидаем перевод с проверкой флага отмены
-            if not self._wait_for_blob_with_cancel(timeout=20):
-                self.logger.error("Перевод не завершился или был отменен")
-                return None
-            self.logger.info(f"  ✓ Шаг 5 выполнен за {time.time() - step_start:.3f}с")
-
-            # ШАГ 6
-            if self._cancel_flag:
-                self.logger.info("[DEBUG] Шаг 6: отменено")
-                raise Exception("Перевод отменен")
-
-            step_start = time.time()
-            self.logger.info("Шаг 6: Скачивание переведенного изображения")
-            download_button = self._find_download_button()
-            if not download_button:
-                self.logger.error("Не найдена видимая кнопка скачивания")
-                return None
-
-            # Проверяем отмену перед скачиванием
-            if self._cancel_flag:
-                self.logger.info("[DEBUG] Шаг 6: отменено перед скачиванием")
-                raise Exception("Перевод отменен")
-
-            download_button.scroll_into_view_if_needed()
-            if not download_button.is_visible():
-                self.logger.error("Кнопка перестала быть видимой")
-                return None
-
-            with self._page.expect_download(timeout=20000) as download_info:
-                download_button.click()
-                self.logger.info("Нажата кнопка скачивания, ожидание загрузки...")
-
-            # Проверяем отмену после скачивания
-            if self._cancel_flag:
-                self.logger.info("[DEBUG] Шаг 6: отменено после скачивания")
-                raise Exception("Перевод отменен")
-
-            download = download_info.value
-            self.logger.info(f"Скачивание перехвачено: {download.suggested_filename}")
-            output_dir.mkdir(parents=True, exist_ok=True)
-            output_path = output_dir / f"translated_{image_path.stem}.png"
-            download.save_as(str(output_path))
-            self.logger.info(f"  ✓ Шаг 6 выполнен за {time.time() - step_start:.3f}с")
-
-            if self._cancel_flag:
-                self.logger.info("[DEBUG] Шаг 7: отменено")
-                raise Exception("Перевод отменен")
-
-            if output_path.exists():
-                size = output_path.stat().st_size
-                total_elapsed = time.time() - total_start
-                self.logger.info(f"✅ Изображение сохранено: {output_path} ({size} байт)")
-                self.logger.info(f"⏱️ ОБЩЕЕ ВРЕМЯ ПЕРЕВОДА: {total_elapsed:.3f} секунд")
-
-                self.logger.info("Шаг 7: Переход на страницу загрузки для следующего перевода...")
-                try:
-                    self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=15000)
-                    self.logger.info(f"✅ Переход на страницу загрузки: {self.base_url}")
-                    if self._wait_for_upload_zone(timeout=5000):
-                        self.logger.info("✅ Интерфейс загружен")
-                    else:
-                        self.logger.warning("Интерфейс не загрузился после перехода")
-                except Exception as e:
-                    self.logger.warning(f"Ошибка при переходе на страницу загрузки: {e}")
-                    try:
-                        self._page.reload()
-                        self.logger.info("✅ Страница перезагружена")
-                    except Exception as e2:
-                        self.logger.warning(f"Не удалось перезагрузить страницу: {e2}")
-                return output_path
-            else:
-                self.logger.error("Файл не был сохранен")
-                return None
-
-        except Exception as e:
-            if "отменен" in str(e):
-                self.logger.info(f"⏹️ ПЕРЕВОД ОТМЕНЕН ПОЛЬЗОВАТЕЛЕМ")
-                # Сбрасываем страницу при отмене
-                try:
-                    self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=10000)
-                    self.logger.info("✅ Страница сброшена после отмены")
-                except:
-                    pass
-                raise Exception("Перевод отменен пользователем")
-            else:
-                total_elapsed = time.time() - total_start
-                self.logger.error(f"Критическая ошибка (через {total_elapsed:.3f}с): {e}")
-                import traceback
-                traceback.print_exc()
-                return None
 
     def close_browser(self):
         """Закрывает браузер и все вкладки, удаляет папку профиля"""
@@ -801,32 +834,6 @@ class GoogleTranslateDebug:
         except Exception as e:
             self.logger.debug(f"Не удалось нажать кнопку: {e}")
         self.logger.warning("Не удалось вставить изображение")
-        return False
-
-    def _wait_for_upload_zone(self, timeout: int = 15000) -> bool:
-        """Ожидает появления зоны загрузки на вкладке 'Изображения'"""
-        self.logger.info("Ожидание загрузки интерфейса...")
-        selectors = [
-            'button[aria-label="Вставить изображение из буфера обмена"]',
-            'button:has-text("Вставить из буфера обмена")',
-            'input[type="file"]',
-            '.gLXQIf',
-            '.T12pLd',
-            'div:has-text("Или выберите файл")',
-        ]
-        start_time = time.time()
-        while (time.time() - start_time) * 1000 < timeout:
-            for selector in selectors:
-                try:
-                    locator = self._page.locator(selector).first
-                    if locator.count() > 0:
-                        if locator.is_visible() or locator.is_attached():
-                            self.logger.info(f"Найден элемент: {selector}")
-                            return True
-                except Exception:
-                    pass
-            time.sleep(0.5)
-        self.logger.warning("Не удалось найти зону загрузки")
         return False
 
     def _wait_for_blob(self, timeout: int = 15) -> bool:

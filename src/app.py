@@ -160,10 +160,14 @@ class ScreenshotTranslatorApp:
         status_text = self.get_string('edit_mode_on') if self._edit_mode_enabled else self.get_string('edit_mode_off')
         self.logger.info(f"Режим редактирования переключен: {status_text}")
 
+        # Обновляем состояние режима редактирования для всех существующих оверлеев
+        if hasattr(self, 'overlay_manager') and self.overlay_manager:
+            self.overlay_manager.update_edit_mode_for_all(self._edit_mode_enabled)
+            self.logger.info(f"Обновлен режим редактирования для всех оверлеев: {self._edit_mode_enabled}")
+
         if hasattr(self, 'btn_edit_mode'):
             hotkeys = self.settings.get_all_hotkeys()
             edit_key = hotkeys.get('edit_mode', 'f5').upper()
-            # Кнопка уже разблокирована, просто меняем цвет
             self.btn_edit_mode.config(
                 text=f"✏️ {self.get_string('edit_mode')}: {status_text} ({edit_key})",
                 bg='#4CAF50' if self._edit_mode_enabled else '#ff9800'
@@ -350,12 +354,72 @@ class ScreenshotTranslatorApp:
     def set_settings_menu_enabled(self, enabled: bool):
         """Блокирует или разблокирует пункт меню 'Настройки'."""
         try:
-            if hasattr(self, '_settings_cascade'):
+            if hasattr(self, '_settings_menu') and self._settings_menu is not None:
                 state = NORMAL if enabled else DISABLED
-                self._settings_cascade.config(state=state)
-                self.logger.info(f"[MENU] Меню 'Настройки' {'разблокировано' if enabled else 'заблокировано'}")
+                # Настраиваем состояние через сам объект меню
+                # Для Tkinter нужно использовать menubar.entryconfig()
+                if hasattr(self, '_menubar') and self._menubar is not None:
+                    # Находим индекс пункта "Настройки" и меняем его состояние
+                    for index in range(self._menubar.index('end') + 1):
+                        try:
+                            label = self._menubar.entrycget(index, 'label')
+                            if label == self.get_string('menu_settings'):
+                                self._menubar.entryconfig(index, state=state)
+                                self.logger.info(
+                                    f"[MENU] Меню 'Настройки' {'разблокировано' if enabled else 'заблокировано'}")
+                                break
+                        except:
+                            pass
+                else:
+                    self.logger.warning("[MENU] _menubar не инициализирован")
         except Exception as e:
             self.logger.warning(f"[MENU] Ошибка при блокировке меню: {e}")
+
+    def create_menu(self):
+        """Создает главное меню приложения"""
+        self._menubar = Menu(self.root, bg='#1e1e1e', fg='white')
+        self.root.config(menu=self._menubar)
+
+        # Файл
+        file_menu = Menu(self._menubar, tearoff=0, bg='#1e1e1e', fg='white')
+        self._menubar.add_cascade(label=self.get_string('menu_file'), menu=file_menu)
+        file_menu.add_command(label=self.get_string('menu_open_folder'), command=self.open_app_folder)
+        file_menu.add_separator()
+        file_menu.add_command(label=self.get_string('menu_exit'), command=self.on_close)
+
+        # Настройки
+        settings_menu = Menu(self._menubar, tearoff=0, bg='#1e1e1e', fg='white')
+        self._settings_menu = settings_menu  # Сохраняем сам объект меню
+        self._menubar.add_cascade(
+            label=self.get_string('menu_settings'),
+            menu=settings_menu,
+            state=DISABLED
+        )
+        settings_menu.add_command(
+            label=self.get_string('menu_settings_item'),
+            command=self.open_settings
+        )
+        settings_menu.add_separator()
+        settings_menu.add_command(
+            label=self.get_string('menu_reset_settings'),
+            command=self.reset_settings
+        )
+
+        # Помощь
+        help_menu = Menu(self._menubar, tearoff=0, bg='#1e1e1e', fg='white')
+        self._menubar.add_cascade(label=self.get_string('menu_help'), menu=help_menu)
+        help_menu.add_command(
+            label=self.get_string('menu_help_instruction'),
+            command=self.show_help
+        )
+
+    def update_menu_language(self):
+        """Обновляет язык главного меню"""
+        self.create_menu()  # Просто пересоздаём меню
+
+        # Обновляем состояние после пересоздания
+        if hasattr(self, '_init_done') and self._init_done:
+            self.set_settings_menu_enabled(True)
 
     def set_actions_blocked(self, blocked: bool):
         """Устанавливает флаг блокировки ДЕЙСТВИЙ горячих клавиш."""
@@ -678,38 +742,30 @@ class ScreenshotTranslatorApp:
         self.logger.info("Tkinter горячие клавиши зарегистрированы")
 
     def _on_init_error(self, error_msg):
-        """Обработчик ошибки инициализации."""
+        """Обработчик ошибки инициализации - без всплывающих окон, только логирование."""
         self.initializing = False
-        # НЕ УСТАНАВЛИВАЕМ _init_done = True, чтобы повторная попытка могла сработать
-        # self._init_done = True  # <-- УДАЛЯЕМ
 
-        if "Не найден" in error_msg and ("браузер" in error_msg or "Chrome" in error_msg):
-            self._handle_browser_not_found(error_msg)
-        else:
-            self.update_status("● " + self.get_string('error') + ": " + error_msg[:50], '#f44336')
-            self.btn_capture.config(state=DISABLED, bg='#333', fg='#888')
-            self.btn_toggle.config(state=DISABLED, bg='#333', fg='#888')
-            self.btn_clear_all.config(state=DISABLED, bg='#333', fg='#888')
-            self.btn_edit_mode.config(state=DISABLED, bg='#333', fg='#888')
+        # Логируем ошибку
+        self.logger.error(f"❌ Ошибка инициализации: {error_msg}")
 
-            # Блокируем кнопку настроек (⚙️)
-            if hasattr(self, 'settings_btn'):
-                self.settings_btn.config(state=DISABLED, bg='#3c3c3c', fg='#666666')
-                self.logger.info("Кнопка настроек заблокирована (ошибка инициализации)")
+        # Обновляем статус в интерфейсе
+        self.update_status("● " + self.get_string('error') + ": " + error_msg[:50], '#f44336')
 
-            # Блокируем меню "Настройки"
-            self.set_settings_menu_enabled(False)
+        # Блокируем кнопки
+        self.btn_capture.config(state=DISABLED, bg='#333', fg='#888')
+        self.btn_toggle.config(state=DISABLED, bg='#333', fg='#888')
+        self.btn_clear_all.config(state=DISABLED, bg='#333', fg='#888')
+        self.btn_edit_mode.config(state=DISABLED, bg='#333', fg='#888')
 
-            self.logger.error(f"❌ Ошибка инициализации: {error_msg}")
-            try:
-                import tkinter.messagebox as messagebox
-                messagebox.showerror(
-                    "Ошибка инициализации",
-                    f"Не удалось запустить браузер:\n\n{error_msg[:200]}\n\n"
-                    "Программа попытается перезапустить браузер автоматически."
-                )
-            except:
-                pass
+        if hasattr(self, 'settings_btn'):
+            self.settings_btn.config(state=DISABLED, bg='#3c3c3c', fg='#666666')
+            self.logger.info("Кнопка настроек заблокирована (ошибка инициализации)")
+
+        self.set_settings_menu_enabled(False)
+
+        # Автоматически планируем повторную попытку
+        self.logger.info(f"Планируем повторную попытку инициализации через {self._init_retry_delay}мс...")
+        self.root.after(self._init_retry_delay, self._init_translator_step)
 
     def _init_translator_step(self):
         """Инициализация переводчика в фоновом режиме с автоматическим повторением."""
@@ -727,22 +783,14 @@ class ScreenshotTranslatorApp:
 
         if self._init_attempts > self._max_init_attempts:
             self.logger.error(f"❌ Инициализация не удалась после {self._max_init_attempts} попыток")
-            self.update_status("● Ошибка инициализации (превышено число попыток)", '#f44336')
+            self.update_status("● Ошибка инициализации (превышено число попыток, перезапуск...)", '#f44336')
             self.btn_capture.config(state=DISABLED, bg='#333', fg='#888')
-            import tkinter.messagebox as messagebox
-            messagebox.showerror(
-                "Ошибка инициализации",
-                f"Не удалось запустить браузер после {self._max_init_attempts} попыток.\n\n"
-                "Пожалуйста, проверьте:\n"
-                "1. Подключение к интернету\n"
-                "2. Доступность Google Translate\n"
-                "3. Путь к браузеру в настройках\n\n"
-                "Нажмите 'OK' для повторной попытки."
-            )
+            # Сбрасываем счётчик и продолжаем попытки в фоне
             self._init_attempts = 0
-            # Сбрасываем флаг, чтобы можно было начать заново
             self._init_done = False
-            self.root.after(3000, self._init_translator_step)
+            self.logger.info("Сброс счётчика попыток, продолжаем попытки в фоновом режиме...")
+            # Увеличиваем задержку перед следующей попыткой
+            self.root.after(5000, self._init_translator_step)
             return
 
         self.initializing = True
@@ -757,6 +805,46 @@ class ScreenshotTranslatorApp:
             callback=self._on_init_complete
         )
         self._pending_command_ids[cmd_id] = 'init'
+
+    def _handle_browser_not_found(self, error_msg: str):
+        """Обрабатывает ситуацию, когда браузер не найден - без всплывающих окон."""
+        self.logger.error(f"Браузер не найден: {error_msg}")
+        self.update_status("● Браузер не найден, поиск...", '#f44336')
+        self.btn_capture.config(state=DISABLED, bg='#333', fg='#888')
+
+        if hasattr(self, 'settings_btn'):
+            self.settings_btn.config(state=DISABLED, bg='#3c3c3c', fg='#666666')
+            self.logger.info("Кнопка настроек заблокирована (браузер не найден)")
+
+        self.set_settings_menu_enabled(False)
+
+        # Пробуем найти браузер автоматически через translator
+        try:
+            from src.translator import GoogleTranslateDebug
+            translator = GoogleTranslateDebug(
+                headless=not self.settings.get_show_browser(),
+                target_lang=self.settings.get_target_language(),
+                settings=self.settings
+            )
+            found_path = translator._find_any_browser()
+            if found_path:
+                self.logger.info(f"✅ Автоматически найден браузер: {found_path}")
+                self.settings.set_browser_path(found_path)
+                self.update_status("● Браузер найден, повторная инициализация...", '#ff9800')
+                # Перезапускаем инициализацию
+                self._init_done = False
+                self.ready = False
+                self.initializing = False
+                self._init_attempts = 0
+                self.root.after(1000, self._init_translator_step)
+            else:
+                self.logger.warning("❌ Браузер не найден автоматически")
+                self.update_status("● Браузер не найден, установите Яндекс Браузер или Chrome", '#f44336')
+                # Продолжаем попытки с увеличенной задержкой
+                self.root.after(5000, self._init_translator_step)
+        except Exception as e:
+            self.logger.error(f"Ошибка при поиске браузера: {e}")
+            self.root.after(5000, self._init_translator_step)
 
     def _on_init_complete(self, result, error):
         """Обработчик завершения инициализации."""
@@ -1210,14 +1298,19 @@ class ScreenshotTranslatorApp:
                         except Exception as e:
                             self.logger.warning(f"[DEBUG] Не удалось проверить активное окно: {e}")
 
-                    # ДЛЯ F2 (СКРИНШОТ ОКНА) ПЕРЕДАЁМ is_window_screenshot=True
+                    # === ОПРЕДЕЛЯЕМ ТИП ОВЕРЛЕЯ ===
+                    # Если есть area_rect - это F3 (область), иначе F2 (скриншот окна)
+                    is_window_screenshot = (area_rect is None)
+                    self.logger.info(
+                        f"[DEBUG] is_window_screenshot = {is_window_screenshot} (area_rect={area_rect is not None})")
+
                     self.overlay_manager.create_overlay(
                         image_path=result,
                         window_rect=area_window_rect,
                         target_hwnd=target_hwnd,
                         is_fullscreen=is_fullscreen,
                         show_immediately=is_target_active,
-                        is_window_screenshot=True  # <-- ВАЖНО: F2-оверлей
+                        is_window_screenshot=is_window_screenshot  # <-- ИСПРАВЛЕНО
                     )
                     self.logger.info("create_overlay выполнен")
                     if not is_target_active:
@@ -1662,39 +1755,6 @@ class ScreenshotTranslatorApp:
         if self._pending_command_ids:
             self.root.after(100, self._check_results)
 
-    def _handle_browser_not_found(self, error_msg: str):
-        """Обрабатывает ситуацию, когда браузер не найден"""
-        self.logger.error(f"Браузер не найден: {error_msg}")
-        self.update_status("● Браузер не найден", '#f44336')
-        self.btn_capture.config(state=DISABLED, bg='#333', fg='#888')
-
-        # Блокируем кнопку настроек (⚙️)
-        if hasattr(self, 'settings_btn'):
-            self.settings_btn.config(state=DISABLED, bg='#3c3c3c', fg='#666666')
-            self.logger.info("Кнопка настроек заблокирована (браузер не найден)")
-
-        # === БЛОКИРУЕМ ПУНКТ МЕНЮ "НАСТРОЙКИ" ===
-        self.set_settings_menu_enabled(False)
-
-        result = messagebox.askquestion(
-            "Браузер не найден",
-            "Не удалось найти Яндекс Браузер или Google Chrome.\n\n"
-            "Для работы программы необходим один из этих браузеров.\n\n"
-            "Вы можете:\n"
-            "1. Установить Яндекс Браузер или Google Chrome\n"
-            "2. Указать путь к уже установленному браузеру вручную\n\n"
-            "Хотите указать путь к браузеру вручную?",
-            icon='warning'
-        )
-        if result == 'yes':
-            self._show_browser_path_dialog()
-        else:
-            messagebox.showinfo(
-                "Информация",
-                "Пожалуйста, установите Яндекс Браузер или Google Chrome\n"
-                "и перезапустите программу."
-            )
-
     def _show_browser_path_dialog(self):
         """Показывает диалог для ручного указания пути к браузеру"""
         import tkinter.filedialog as filedialog
@@ -1972,45 +2032,6 @@ class ScreenshotTranslatorApp:
         self.update_menu_language()
         self.update_hotkey_buttons()  # <-- ДОБАВЛЯЕМ
 
-    def update_menu_language(self):
-        """Обновляет язык главного меню"""
-        self.root.config(menu=Menu())
-        menubar = Menu(self.root, bg='#1e1e1e', fg='white')
-        self.root.config(menu=menubar)
-
-        # Файл
-        file_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white')
-        menubar.add_cascade(label=self.get_string('menu_file'), menu=file_menu)
-        file_menu.add_command(label=self.get_string('menu_open_folder'), command=self.open_app_folder)
-        file_menu.add_separator()
-        file_menu.add_command(label=self.get_string('menu_exit'), command=self.on_close)
-
-        # Настройки
-        settings_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white')
-        self._settings_cascade = menubar.add_cascade(
-            label=self.get_string('menu_settings'),
-            menu=settings_menu,
-            state=DISABLED
-        )
-        settings_menu.add_command(
-            label=self.get_string('menu_settings_item'),
-            command=self.open_settings
-        )
-        settings_menu.add_separator()
-        settings_menu.add_command(
-            label=self.get_string('menu_reset_settings'),
-            command=self.reset_settings
-        )
-
-        # Помощь - ТОЛЬКО ИНСТРУКЦИЯ
-        help_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white')
-        menubar.add_cascade(label=self.get_string('menu_help'), menu=help_menu)
-        help_menu.add_command(
-            label=self.get_string('menu_help_instruction'),
-            command=self.show_help
-        )
-        # Пункт "О программе" УДАЛЁН
-
     def open_app_folder(self):
         """Открывает папку приложения в проводнике"""
         try:
@@ -2025,10 +2046,6 @@ class ScreenshotTranslatorApp:
         except Exception as e:
             self.logger.error(f"Ошибка открытия папки: {e}")
             messagebox.showerror("Ошибка", f"Не удалось открыть папку:\n{e}")
-
-    def create_menu(self):
-        """Создает главное меню приложения"""
-        self.update_menu_language()
 
     def open_settings(self):
         """Открывает окно настроек"""
