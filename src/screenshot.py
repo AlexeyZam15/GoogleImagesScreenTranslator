@@ -8,11 +8,15 @@ from typing import Optional, Tuple
 from PIL import Image
 import win32gui
 import win32con
-import win32ui
 import win32api
+import win32ui  # <-- ДОБАВЛЯЕМ ИМПОРТ
+import ctypes
 import dxcam
 import cv2
 import numpy as np
+
+# Определяем user32 для работы с Windows API
+user32 = ctypes.windll.user32
 
 
 class ScreenshotCapturer:
@@ -83,8 +87,12 @@ class ScreenshotCapturer:
         return target_hwnd
 
     def is_window_fullscreen(self, hwnd: int) -> bool:
-        """Проверяет, находится ли окно в полноэкранном режиме"""
+        """
+        Проверяет, находится ли окно в ИСКЛЮЧИТЕЛЬНОМ полноэкранном режиме (EXCLUSIVE FULLSCREEN).
+        Возвращает True только для настоящего полноэкранного режима, а не для borderless.
+        """
         try:
+            # Получаем размеры и позицию окна
             rect = win32gui.GetWindowRect(hwnd)
             x1, y1, x2, y2 = rect
             win_width = x2 - x1
@@ -93,13 +101,60 @@ class ScreenshotCapturer:
             screen_width = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
             screen_height = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
 
-            is_fullscreen = (win_width >= screen_width - 10 and
-                             win_height >= screen_height - 10)
+            # Получаем стили окна
+            style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
 
-            if is_fullscreen:
-                self.logger.info(f"Окно {hwnd} определено как полноэкранное")
+            has_caption = (style & win32con.WS_CAPTION) == win32con.WS_CAPTION
+            has_sysmenu = (style & win32con.WS_SYSMENU) == win32con.WS_SYSMENU
+            has_border = (style & win32con.WS_BORDER) == win32con.WS_BORDER
+            has_thickframe = (style & win32con.WS_THICKFRAME) == win32con.WS_THICKFRAME
+            has_popup = (style & win32con.WS_POPUP) == win32con.WS_POPUP
+            has_minimizebox = (style & win32con.WS_MINIMIZEBOX) == win32con.WS_MINIMIZEBOX
+            has_maximizebox = (style & win32con.WS_MAXIMIZEBOX) == win32con.WS_MAXIMIZEBOX
 
-            return is_fullscreen
+            # ПОДРОБНЫЙ ВЫВОД ДЛЯ ОТЛАДКИ
+            self.logger.info("=" * 70)
+            self.logger.info(f"  АНАЛИЗ ОКНА HWND={hwnd}")
+            self.logger.info("-" * 70)
+            self.logger.info(f"    Размер окна: {win_width}x{win_height}")
+            self.logger.info(f"    Размер экрана: {screen_width}x{screen_height}")
+            self.logger.info(f"    Позиция: ({x1}, {y1})")
+            self.logger.info("-" * 70)
+            self.logger.info(f"    WS_CAPTION: {has_caption}")
+            self.logger.info(f"    WS_SYSMENU: {has_sysmenu}")
+            self.logger.info(f"    WS_BORDER: {has_border}")
+            self.logger.info(f"    WS_THICKFRAME: {has_thickframe}")
+            self.logger.info(f"    WS_POPUP: {has_popup}")
+            self.logger.info(f"    WS_MINIMIZEBOX: {has_minimizebox}")
+            self.logger.info(f"    WS_MAXIMIZEBOX: {has_maximizebox}")
+            self.logger.info("-" * 70)
+
+            # Проверка 1: окно должно занимать весь экран (с допуском)
+            if not (win_width >= screen_width - 10 and win_height >= screen_height - 10):
+                self.logger.info(f"❌ Окно {hwnd} НЕ полноэкранное (размеры меньше экрана)")
+                return False
+
+            # Проверка 2: окно должно быть в позиции (0,0) или близко к ней
+            if not (abs(x1) <= 10 and abs(y1) <= 10):
+                self.logger.info(f"❌ Окно {hwnd} НЕ полноэкранное (позиция: {x1}, {y1})")
+                return False
+
+            # Проверка 3: отсутствие элементов окна (заголовок, рамка, системное меню)
+            has_window_elements = has_caption or has_sysmenu or has_border or has_thickframe
+            if has_window_elements:
+                self.logger.info(f"❌ Окно {hwnd} НЕ полноэкранное (есть элементы окна)")
+                return False
+
+            # Проверка 4: КЛЮЧЕВОЕ ОТЛИЧИЕ - для EXCLUSIVE FULLSCREEN WS_POPUP должен быть False
+            # BORDERLESS FULLSCREEN имеет WS_POPUP = True
+            if has_popup:
+                self.logger.info(f"❌ Окно {hwnd} НЕ является EXCLUSIVE FULLSCREEN (это BORDERLESS, WS_POPUP=True)")
+                return False
+
+            # Все проверки пройдены - это EXCLUSIVE FULLSCREEN
+            self.logger.info(f"✅ Окно {hwnd} определено как EXCLUSIVE FULLSCREEN (WS_POPUP=False)")
+            return True
+
         except Exception as e:
             self.logger.warning(f"Ошибка проверки полноэкранного режима: {e}")
             return False
