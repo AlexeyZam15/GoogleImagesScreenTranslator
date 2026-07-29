@@ -143,6 +143,11 @@ class ScreenshotTranslatorApp:
         self._selection_window = None
         self._pressed_keys = set()
 
+        # === НОВАЯ ОЧЕРЕДЬ ПЕРЕВОДОВ ===
+        self.translation_queue = []
+        self.is_processing_queue = False
+        # ================================
+
         self.create_gui()
         self.update_ui_language()
         self.app_title = self.get_string('app_title')
@@ -151,6 +156,332 @@ class ScreenshotTranslatorApp:
         self.setup_hotkeys()
         self.update_hotkey_buttons()
         self.root.after(100, self._init_translator_step)
+
+    def capture_area(self):
+        """Захват области экрана (F3) - добавляет задачу в очередь."""
+        self.logger.info("[DEBUG] capture_area() вызван")
+
+        # УБИРАЕМ БЛОКИРОВКУ self.translating
+        if not self.ready or self.initializing:
+            self.logger.warning("[DEBUG] capture_area пропущен: не готов или инициализируется")
+            return
+
+        # Блокируем только кнопку, чтобы предотвратить спам, но не блокируем логику
+        # Кнопка будет разблокирована в _process_area_selection, когда задача будет добавлена в очередь
+        self.btn_capture.config(state=DISABLED, bg='#333')
+
+        try:
+            self.root.iconify()
+            self.logger.info("[DEBUG] Главное окно свернуто")
+        except Exception as e:
+            self.logger.warning(f"[DEBUG] Не удалось свернуть окно: {e}")
+
+        self.root.after(500, self._capture_window_for_area)
+
+    def _process_area_selection(self, x1, y1, x2, y2, screenshot_path):
+        """Обрабатывает выделенную область - добавляет задачу в очередь."""
+        self.logger.info(f"[DEBUG] _process_area_selection: ({x1},{y1})-({x2},{y2})")
+
+        self._capture_mode = False
+        self._selection_window = None
+        self._selection_window_on_escape = None
+
+        # Разблокируем кнопку, так как область выбрана и задача будет добавлена в очередь
+        self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+
+        self.logger.info(
+            f"[DEBUG] _process_area_selection: текущее количество оверлеев: {len(self.overlay_manager.overlays) if self.overlay_manager else 0}")
+
+        self._area_rect = (x1, y1, x2, y2)
+
+        def process_task():
+            try:
+                self.update_status("● Вырезание области...", '#ff9800')
+
+                from PIL import Image
+
+                full_img = Image.open(screenshot_path)
+                cropped = full_img.crop((x1, y1, x2, y2))
+
+                if not cropped:
+                    self.logger.error("[DEBUG] Не удалось вырезать область")
+                    self.update_status(self.get_string('capture_error'), '#f44336')
+                    self.root.deiconify()
+                    return
+
+                self.logger.info(f"[DEBUG] Область вырезана: {cropped.size}")
+
+                path = self.temp_dir / f"area_{int(time.time())}.png"
+                cropped.save(path)
+                self.logger.info(f"[DEBUG] Область сохранена: {path}")
+
+                try:
+                    os.remove(screenshot_path)
+                except:
+                    pass
+
+                target_hwnd = getattr(self, '_area_target_hwnd', None)
+                is_fullscreen = getattr(self, '_area_is_fullscreen', False)
+
+                if target_hwnd:
+                    self.logger.info(
+                        f"[DEBUG] Для оверлея будет использован HWND: {target_hwnd}, полноэкранный: {is_fullscreen}")
+                    self.screenshot._last_hwnd = target_hwnd
+                    self.screenshot._is_fullscreen = is_fullscreen
+
+                self._area_rect_for_overlay = (x1, y1, x2, y2)
+
+                # === ДОБАВЛЯЕМ ЗАДАЧУ В ОЧЕРЕДЬ ВМЕСТО ПРЯМОГО ВЫЗОВА _do_translate ===
+                task = {
+                    'type': 'area',
+                    'image_path': path,
+                    'area_rect': (x1, y1, x2, y2),
+                    'target_hwnd': target_hwnd,
+                    'is_fullscreen': is_fullscreen
+                }
+                self.translation_queue.append(task)
+                self.logger.info(f"[QUEUE] Задача добавлена в очередь. Размер очереди: {len(self.translation_queue)}")
+
+                # Запускаем обработку очереди, если она не запущена
+                if not self.is_processing_queue:
+                    self._process_next_in_queue()
+                # ============================
+
+            except Exception as e:
+                self.logger.error(f"Ошибка обработки области: {e}")
+                self.update_status(self.get_string('error'), '#f44336')
+
+        threading.Thread(target=process_task, daemon=True).start()
+
+    def process(self):
+        """Обработка скриншота (F2) - удаляет старые оверлеи и добавляет задачу в очередь."""
+        if self.translating or not self.ready or self.initializing:
+            return
+
+        if self.overlay_manager and self.overlay_manager.overlays:
+            count = len(self.overlay_manager.overlays)
+            self.logger.info(f"[DEBUG] F2: удаляем {count} старых оверлеев перед созданием нового")
+            self.overlay_manager.close_all()
+            self.logger.info(f"[DEBUG] Старые оверлеи удалены")
+
+        self.btn_capture.config(state=DISABLED, bg='#333')
+        self.translating = True
+
+        try:
+            import win32gui
+            current_hwnd = win32gui.GetForegroundWindow()
+            if current_hwnd:
+                self.screenshot._last_hwnd = current_hwnd
+                self.screenshot._is_fullscreen = self.screenshot.is_window_fullscreen(current_hwnd)
+                self.logger.info(
+                    f"[DEBUG] Сохранен HWND активного окна для скриншота: {current_hwnd}, полноэкранный: {self.screenshot._is_fullscreen}")
+        except Exception as e:
+            self.logger.warning(f"[DEBUG] Не удалось сохранить HWND активного окна: {e}")
+
+        def capture_task():
+            """Захват скриншота в отдельном потоке"""
+            try:
+                self.update_status(self.get_string('capturing'), '#ff9800')
+                img = self.screenshot.capture_active_window()
+
+                if not img:
+                    self.update_status(self.get_string('capture_error'), '#f44336')
+                    self.translating = False
+                    self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+                    return
+
+                self.root.after(0, self._show_translation_overlay)
+
+                path = self.temp_dir / f"scr_{int(time.time())}.png"
+                img.save(path)
+
+                # === ДОБАВЛЯЕМ ЗАДАЧУ В ОЧЕРЕДЬ ===
+                task = {
+                    'type': 'screenshot',
+                    'image_path': path,
+                    'area_rect': None
+                }
+                self.translation_queue.append(task)
+                self.logger.info(
+                    f"[QUEUE] Задача скриншота добавлена в очередь. Размер очереди: {len(self.translation_queue)}")
+
+                self.translating = False  # Освобождаем флаг для следующего F2
+
+                # Запускаем обработку очереди, если она не запущена
+                if not self.is_processing_queue:
+                    self._process_next_in_queue()
+                # ============================
+
+            except Exception as e:
+                self.logger.error(f"Ошибка захвата: {e}")
+                self.root.after(0, lambda: self._on_translate_error(str(e)))
+
+        threading.Thread(target=capture_task, daemon=True).start()
+
+    def _process_next_in_queue(self):
+        """Обрабатывает следующую задачу в очереди переводов."""
+        if self.is_processing_queue:
+            self.logger.info("[QUEUE] Обработка очереди уже выполняется")
+            return
+
+        if not self.translation_queue:
+            self.logger.info("[QUEUE] Очередь пуста")
+            self.is_processing_queue = False
+            # Разблокируем кнопку, если она заблокирована
+            self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+            return
+
+        self.is_processing_queue = True
+        self.logger.info(f"[QUEUE] Начинаем обработку задачи. Осталось: {len(self.translation_queue)}")
+
+        task = self.translation_queue.pop(0)
+        self.logger.info(f"[QUEUE] Обработка задачи типа: {task.get('type')}")
+
+        # Показываем индикатор перевода
+        self.root.after(0, self._show_translation_overlay)
+
+        if task.get('type') == 'screenshot':
+            # Для скриншота окна
+            self._pending_area_rect = None
+            self._do_translate(task['image_path'])
+        else:
+            # Для области
+            self._pending_area_rect = task.get('area_rect')
+            self._do_translate(task['image_path'], area_rect=task.get('area_rect'))
+
+    def _on_translate_finished(self, result, error):
+        """Обработчик завершения перевода - запускает следующую задачу из очереди."""
+        self.logger.info(f"_on_translate_finished вызван: result={result}, error={error}")
+
+        self._translation_in_progress = False
+
+        try:
+            if error and "отменен" in str(error):
+                self.logger.info("[DEBUG] _on_translate_finished: перевод был отменен")
+                self.translating = False
+                self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+                self._pending_command_ids = {}
+                self._pending_area_rect = None
+                # Переходим к следующей задаче
+                self.is_processing_queue = False
+                self._process_next_in_queue()
+                return
+
+            if error:
+                self.logger.error(f"Ошибка перевода: {error}")
+                self._on_translate_error(error)
+                return
+
+            if result:
+                self.logger.info(f"Результат перевода получен: {result}")
+                if isinstance(result, Path) and result.exists():
+                    self.logger.info(f"Файл перевода существует: {result}, размер: {result.stat().st_size} байт")
+                else:
+                    self.logger.warning(f"Результат не является файлом или не существует: {result}")
+
+                if self.translation_overlay:
+                    self.logger.info("Закрываем окно прогресса ДО показа основного оверлея")
+                    self.translation_overlay.finish()
+                    time.sleep(0.3)
+                    self.translation_overlay = None
+
+                self.logger.info(f"Попытка показать оверлей с результатом")
+                self.logger.info(f"self.overlay_manager = {self.overlay_manager}")
+
+                if self.overlay_manager:
+                    window_rect = self.screenshot.get_last_window_rect()
+                    target_hwnd = self.screenshot.get_last_hwnd()
+                    is_fullscreen = self.screenshot.is_last_window_fullscreen()
+                    self.logger.info(
+                        f"window_rect = {window_rect}, target_hwnd = {target_hwnd}, is_fullscreen = {is_fullscreen}")
+
+                    area_rect = getattr(self, '_pending_area_rect', None)
+                    if area_rect:
+                        self.logger.info(f"[DEBUG] Используем область для оверлея: {area_rect}")
+                        x1, y1, x2, y2 = area_rect
+                        area_window_rect = (x1, y1, x2, y2)
+                    else:
+                        area_window_rect = window_rect
+                        self.logger.info(f"[DEBUG] Используем стандартный window_rect: {window_rect}")
+
+                    is_target_active = False
+                    if target_hwnd:
+                        try:
+                            import win32gui
+                            active_hwnd = win32gui.GetForegroundWindow()
+                            is_target_active = (active_hwnd == target_hwnd)
+                            self.logger.info(
+                                f"[DEBUG] Активное окно: {active_hwnd}, целевое: {target_hwnd}, is_target_active={is_target_active}")
+                        except Exception as e:
+                            self.logger.warning(f"[DEBUG] Не удалось проверить активное окно: {e}")
+
+                    is_window_screenshot = (area_rect is None)
+                    self.logger.info(
+                        f"[DEBUG] is_window_screenshot = {is_window_screenshot} (area_rect={area_rect is not None})")
+
+                    self.overlay_manager.create_overlay(
+                        image_path=result,
+                        window_rect=area_window_rect,
+                        target_hwnd=target_hwnd,
+                        is_fullscreen=is_fullscreen,
+                        show_immediately=is_target_active,
+                        is_window_screenshot=is_window_screenshot
+                    )
+                    self.logger.info("create_overlay выполнен")
+                    if not is_target_active:
+                        self.logger.info("[DEBUG] Целевое окно не активно, оверлей сохранен но скрыт")
+                        self.update_status(f"● Перевод готов (вернитесь в игру)", '#ff9800')
+                    else:
+                        self.logger.info("[DEBUG] Целевое окно активно, оверлей показан")
+
+                    self.root.update_idletasks()
+                    self.root.update()
+                    self.logger.info("Результат перевода показан")
+                else:
+                    self.logger.error("self.overlay_manager is None! Менеджер не создан.")
+
+                self.update_status(self.get_string('ready'), '#4CAF50')
+            else:
+                self.logger.warning("Результат перевода пустой (None)")
+                self.update_status(self.get_string('translate_error'), '#f44336')
+
+        except Exception as e:
+            self.logger.error(f"Ошибка показа результата: {e}")
+            import traceback
+            traceback.print_exc()
+            self.update_status(self.get_string('error'), '#f44336')
+        finally:
+            self.translating = False
+            self._hide_translation_overlay()
+            self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+            self._pending_command_ids = {}
+            self._pending_area_rect = None
+
+            # === ПЕРЕХОДИМ К СЛЕДУЮЩЕЙ ЗАДАЧЕ В ОЧЕРЕДИ ===
+            self.is_processing_queue = False
+            self._process_next_in_queue()
+            # =============================================
+
+    def _do_translate(self, image_path: Path, area_rect=None):
+        """Выполняет перевод в фоновом режиме через BrowserWorker."""
+        self.logger.info(f"[DEBUG] _do_translate: image_path={image_path}, area_rect={area_rect}")
+
+        self._translation_in_progress = True
+
+        if self.overlay_manager:
+            self.overlay_manager._enable_esc_hook()
+            self.logger.info("[DEBUG] _do_translate: глобальный хук ESC включен")
+
+        self._pending_area_rect = area_rect
+
+        out = self.temp_dir / "translated"
+        cmd_id = self.browser_worker.translate_image(
+            image_path,
+            out,
+            callback=self._on_translate_finished
+        )
+        self._pending_command_ids[cmd_id] = 'translate'
+        self._check_results()
 
     def toggle_edit_mode(self):
         """Переключает режим редактирования оверлеев (F5)."""
@@ -1187,181 +1518,6 @@ class ScreenshotTranslatorApp:
         self.overlay_manager.close_all()
         self.logger.info(f"Удалено {count} оверлеев (F4)")
 
-    def process(self):
-        """Обработка скриншота (F2)"""
-        if self.translating or not self.ready or self.initializing:
-            return
-
-        if self.overlay_manager and self.overlay_manager.overlays:
-            count = len(self.overlay_manager.overlays)
-            self.logger.info(f"[DEBUG] F2: удаляем {count} старых оверлеев перед созданием нового")
-            self.overlay_manager.close_all()
-            self.logger.info(f"[DEBUG] Старые оверлеи удалены")
-
-        self.btn_capture.config(state=DISABLED, bg='#333')
-        self.translating = True
-
-        try:
-            import win32gui
-            current_hwnd = win32gui.GetForegroundWindow()
-            if current_hwnd:
-                self.screenshot._last_hwnd = current_hwnd
-                self.screenshot._is_fullscreen = self.screenshot.is_window_fullscreen(current_hwnd)
-                self.logger.info(
-                    f"[DEBUG] Сохранен HWND активного окна для скриншота: {current_hwnd}, полноэкранный: {self.screenshot._is_fullscreen}")
-        except Exception as e:
-            self.logger.warning(f"[DEBUG] Не удалось сохранить HWND активного окна: {e}")
-
-        def capture_task():
-            """Захват скриншота в отдельном потоке"""
-            try:
-                self.update_status(self.get_string('capturing'), '#ff9800')
-                img = self.screenshot.capture_active_window()
-
-                if not img:
-                    self.update_status(self.get_string('capture_error'), '#f44336')
-                    self.translating = False
-                    self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
-                    return
-
-                self.root.after(0, self._show_translation_overlay)
-
-                path = self.temp_dir / f"scr_{int(time.time())}.png"
-                img.save(path)
-                self.root.after(0, lambda: self._do_translate(path))
-
-            except Exception as e:
-                self.logger.error(f"Ошибка захвата: {e}")
-                self.root.after(0, lambda: self._on_translate_error(str(e)))
-
-        threading.Thread(target=capture_task, daemon=True).start()
-
-    def _on_translate_finished(self, result, error):
-        """Обработчик завершения перевода"""
-        self.logger.info(f"_on_translate_finished вызван: result={result}, error={error}")
-
-        self._translation_in_progress = False
-
-        try:
-            if error and "отменен" in str(error):
-                self.logger.info("[DEBUG] _on_translate_finished: перевод был отменен")
-                self.translating = False
-                self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
-                self._pending_command_ids = {}
-                self._pending_area_rect = None
-                return
-
-            if error:
-                self.logger.error(f"Ошибка перевода: {error}")
-                self._on_translate_error(error)
-                return
-
-            if result:
-                self.logger.info(f"Результат перевода получен: {result}")
-                if isinstance(result, Path) and result.exists():
-                    self.logger.info(f"Файл перевода существует: {result}, размер: {result.stat().st_size} байт")
-                else:
-                    self.logger.warning(f"Результат не является файлом или не существует: {result}")
-
-                if self.translation_overlay:
-                    self.logger.info("Закрываем окно прогресса ДО показа основного оверлея")
-                    self.translation_overlay.finish()
-                    time.sleep(0.3)
-                    self.translation_overlay = None
-
-                self.logger.info(f"Попытка показать оверлей с результатом")
-                self.logger.info(f"self.overlay_manager = {self.overlay_manager}")
-
-                if self.overlay_manager:
-                    window_rect = self.screenshot.get_last_window_rect()
-                    target_hwnd = self.screenshot.get_last_hwnd()
-                    is_fullscreen = self.screenshot.is_last_window_fullscreen()
-                    self.logger.info(
-                        f"window_rect = {window_rect}, target_hwnd = {target_hwnd}, is_fullscreen = {is_fullscreen}")
-
-                    area_rect = getattr(self, '_pending_area_rect', None)
-                    if area_rect:
-                        self.logger.info(f"[DEBUG] Используем область для оверлея: {area_rect}")
-                        x1, y1, x2, y2 = area_rect
-                        area_window_rect = (x1, y1, x2, y2)
-                    else:
-                        area_window_rect = window_rect
-                        self.logger.info(f"[DEBUG] Используем стандартный window_rect: {window_rect}")
-
-                    is_target_active = False
-                    if target_hwnd:
-                        try:
-                            import win32gui
-                            active_hwnd = win32gui.GetForegroundWindow()
-                            is_target_active = (active_hwnd == target_hwnd)
-                            self.logger.info(
-                                f"[DEBUG] Активное окно: {active_hwnd}, целевое: {target_hwnd}, is_target_active={is_target_active}")
-                        except Exception as e:
-                            self.logger.warning(f"[DEBUG] Не удалось проверить активное окно: {e}")
-
-                    # === ОПРЕДЕЛЯЕМ ТИП ОВЕРЛЕЯ ===
-                    # Если есть area_rect - это F3 (область), иначе F2 (скриншот окна)
-                    is_window_screenshot = (area_rect is None)
-                    self.logger.info(
-                        f"[DEBUG] is_window_screenshot = {is_window_screenshot} (area_rect={area_rect is not None})")
-
-                    self.overlay_manager.create_overlay(
-                        image_path=result,
-                        window_rect=area_window_rect,
-                        target_hwnd=target_hwnd,
-                        is_fullscreen=is_fullscreen,
-                        show_immediately=is_target_active,
-                        is_window_screenshot=is_window_screenshot  # <-- ИСПРАВЛЕНО
-                    )
-                    self.logger.info("create_overlay выполнен")
-                    if not is_target_active:
-                        self.logger.info("[DEBUG] Целевое окно не активно, оверлей сохранен но скрыт")
-                        self.update_status(f"● Перевод готов (вернитесь в игру)", '#ff9800')
-                    else:
-                        self.logger.info("[DEBUG] Целевое окно активно, оверлей показан")
-
-                    self.root.update_idletasks()
-                    self.root.update()
-                    self.logger.info("Результат перевода показан")
-                else:
-                    self.logger.error("self.overlay_manager is None! Менеджер не создан.")
-
-                self.update_status(self.get_string('ready'), '#4CAF50')
-            else:
-                self.logger.warning("Результат перевода пустой (None)")
-                self.update_status(self.get_string('translate_error'), '#f44336')
-
-        except Exception as e:
-            self.logger.error(f"Ошибка показа результата: {e}")
-            import traceback
-            traceback.print_exc()
-            self.update_status(self.get_string('error'), '#f44336')
-        finally:
-            self.translating = False
-            self._hide_translation_overlay()
-            self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
-            self._pending_command_ids = {}
-            self._pending_area_rect = None
-
-    def capture_area(self):
-        """Захват области экрана (F3) - делает скриншот всего экрана"""
-        self.logger.info("[DEBUG] capture_area() вызван")
-
-        if self.translating or not self.ready or self.initializing:
-            self.logger.warning("[DEBUG] capture_area пропущен: занят или не готов")
-            return
-
-        self.btn_capture.config(state=DISABLED, bg='#333')
-        self.translating = True
-
-        try:
-            self.root.iconify()
-            self.logger.info("[DEBUG] Главное окно свернуто")
-        except Exception as e:
-            self.logger.warning(f"[DEBUG] Не удалось свернуть окно: {e}")
-
-        self.root.after(500, self._capture_window_for_area)
-
     def _capture_window_for_area(self):
         """Захватывает скриншот всего экрана и показывает для выделения области"""
         self.logger.info("[DEBUG] _capture_window_for_area() - начало")
@@ -1586,68 +1742,6 @@ class ScreenshotTranslatorApp:
                 pass
 
         selection_window.protocol("WM_DELETE_WINDOW", on_close)
-
-    def _process_area_selection(self, x1, y1, x2, y2, screenshot_path):
-        """Обрабатывает выделенную область - вырезает и отправляет на перевод"""
-        self.logger.info(f"[DEBUG] _process_area_selection: ({x1},{y1})-({x2},{y2})")
-
-        self._capture_mode = False
-        self._selection_window = None
-        self._selection_window_on_escape = None
-
-        self.logger.info(
-            f"[DEBUG] _process_area_selection: текущее количество оверлеев: {len(self.overlay_manager.overlays) if self.overlay_manager else 0}")
-
-        self._area_rect = (x1, y1, x2, y2)
-
-        def process_task():
-            try:
-                self.update_status("● Вырезание области...", '#ff9800')
-
-                from PIL import Image
-
-                full_img = Image.open(screenshot_path)
-                cropped = full_img.crop((x1, y1, x2, y2))
-
-                if not cropped:
-                    self.logger.error("[DEBUG] Не удалось вырезать область")
-                    self.update_status(self.get_string('capture_error'), '#f44336')
-                    self.translating = False
-                    self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
-                    self.root.deiconify()
-                    return
-
-                self.logger.info(f"[DEBUG] Область вырезана: {cropped.size}")
-
-                self.root.after(0, self._show_translation_overlay)
-
-                path = self.temp_dir / f"area_{int(time.time())}.png"
-                cropped.save(path)
-                self.logger.info(f"[DEBUG] Область сохранена: {path}")
-
-                try:
-                    os.remove(screenshot_path)
-                except:
-                    pass
-
-                target_hwnd = getattr(self, '_area_target_hwnd', None)
-                is_fullscreen = getattr(self, '_area_is_fullscreen', False)
-
-                if target_hwnd:
-                    self.logger.info(
-                        f"[DEBUG] Для оверлея будет использован HWND: {target_hwnd}, полноэкранный: {is_fullscreen}")
-                    self.screenshot._last_hwnd = target_hwnd
-                    self.screenshot._is_fullscreen = is_fullscreen
-
-                self._area_rect_for_overlay = (x1, y1, x2, y2)
-
-                self.root.after(0, lambda: self._do_translate(path, area_rect=(x1, y1, x2, y2)))
-
-            except Exception as e:
-                self.logger.error(f"Ошибка обработки области: {e}")
-                self.root.after(0, lambda: self._on_translate_error(str(e)))
-
-        threading.Thread(target=process_task, daemon=True).start()
 
     def toggle_overlay(self):
         """Переключает видимость всех оверлеев (F1)."""
@@ -2194,27 +2288,6 @@ class ScreenshotTranslatorApp:
     def update_status(self, text, color='white'):
         """Обновляет статус в интерфейсе"""
         self.root.after(0, lambda: self.status.config(text=text, fg=color))
-
-    def _do_translate(self, image_path: Path, area_rect=None):
-        """Выполняет перевод в фоновом режиме через BrowserWorker"""
-        self.logger.info(f"[DEBUG] _do_translate: image_path={image_path}, area_rect={area_rect}")
-
-        self._translation_in_progress = True
-
-        if self.overlay_manager:
-            self.overlay_manager._enable_esc_hook()
-            self.logger.info("[DEBUG] _do_translate: глобальный хук ESC включен")
-
-        self._pending_area_rect = area_rect
-
-        out = self.temp_dir / "translated"
-        cmd_id = self.browser_worker.translate_image(
-            image_path,
-            out,
-            callback=self._on_translate_finished
-        )
-        self._pending_command_ids[cmd_id] = 'translate'
-        self._check_results()
 
     def _on_translate_error(self, error_msg):
         """Обработчик ошибки перевода"""
