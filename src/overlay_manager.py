@@ -26,6 +26,301 @@ class OverlayManager:
         self._create_context_menu()
         self.logger.info("OverlayManager инициализирован")
 
+    def remove_overlay(self, overlay: OverlayWindow, force: bool = False):
+        """Удаляет конкретный оверлей из списка и закрывает его."""
+
+        # !!! ЕСЛИ force=True - УДАЛЯЕМ ВСЕГДА (для F2)
+        if not force:
+            # Проверяем режим редактирования только если не принудительное удаление
+            if not self.parent.is_edit_mode_enabled():
+                self.logger.info("[DEBUG] remove_overlay: режим редактирования ВЫКЛЮЧЕН - удаление запрещено")
+                return
+
+        self.logger.info(f"Удаление оверлея из списка (всего: {len(self.overlays)})")
+        if overlay in self.overlays:
+            self.overlays.remove(overlay)
+            self.logger.info(f"Оверлей удален из списка. Осталось: {len(self.overlays)}")
+            try:
+                overlay.close()
+            except Exception as e:
+                self.logger.error(f"Ошибка при закрытии оверлея: {e}")
+        else:
+            self.logger.warning("Оверлей не найден в списке")
+
+    def create_overlay(self, image_path: Path, window_rect: tuple,
+                       target_hwnd: int = None, is_fullscreen: bool = None,
+                       show_immediately: bool = True, is_window_screenshot: bool = False) -> Optional[OverlayWindow]:
+        """
+        Создает новый оверлей на основе переданных данных.
+
+        Args:
+            image_path: Путь к изображению для отображения
+            window_rect: Координаты окна (x1, y1, x2, y2)
+            target_hwnd: HWND целевого окна
+            is_fullscreen: Флаг полноэкранного режима
+            show_immediately: Показывать сразу или сохранить для отложенного показа
+            is_window_screenshot: True для F2 (скриншот окна), False для F3 (область)
+        """
+        self.logger.info(
+            f"Создание нового оверлея: image_path={image_path}, is_window_screenshot={is_window_screenshot}")
+
+        auto_hide_enabled = False
+        if hasattr(self.parent, 'settings') and self.parent.settings:
+            auto_hide_enabled = self.parent.settings.get_auto_hide_overlay()
+
+        self.logger.info(f"[DEBUG] OverlayWindow class object: {OverlayWindow}")
+        self.logger.info(f"[DEBUG] OverlayWindow module: {OverlayWindow.__module__}")
+
+        new_overlay = None
+        try:
+            self.logger.info("[DEBUG] Attempting to create OverlayWindow with arguments...")
+            new_overlay = OverlayWindow(
+                parent=self.parent.root,
+                app_title=self.parent.app_title if hasattr(self.parent, 'app_title') else "Перевод скриншотов",
+                auto_hide_enabled=auto_hide_enabled
+            )
+            self.logger.info("[DEBUG] OverlayWindow created successfully with arguments")
+        except TypeError as e:
+            self.logger.warning(f"[DEBUG] OverlayWindow does not accept arguments: {e}")
+            self.logger.info("[DEBUG] Attempting to create OverlayWindow without arguments...")
+            try:
+                new_overlay = OverlayWindow()
+                self.logger.info("[DEBUG] OverlayWindow created without arguments (fallback)")
+
+                import logging
+                from pathlib import Path
+
+                if not hasattr(new_overlay, 'logger'):
+                    new_overlay.logger = logging.getLogger(__name__)
+                    new_overlay.logger.info("[DEBUG] Added logger attribute to OverlayWindow (fallback)")
+
+                if not hasattr(new_overlay, 'temp_dir'):
+                    from src.utils import ensure_app_temp_dir
+                    new_overlay.temp_dir = ensure_app_temp_dir()
+                    new_overlay.logger.info("[DEBUG] Added temp_dir attribute (fallback)")
+
+                if not hasattr(new_overlay, 'auto_hide_enabled'):
+                    new_overlay.auto_hide_enabled = auto_hide_enabled
+                    new_overlay.logger.info("[DEBUG] Added auto_hide_enabled attribute (fallback)")
+
+                if not hasattr(new_overlay, '_app_title'):
+                    new_overlay._app_title = self.parent.app_title if hasattr(self.parent,
+                                                                              'app_title') else "Перевод скриншотов"
+                    new_overlay.logger.info("[DEBUG] Added _app_title attribute (fallback)")
+
+                if not hasattr(new_overlay, '_use_manager_esc'):
+                    new_overlay._use_manager_esc = True
+                    new_overlay.logger.info("[DEBUG] Added _use_manager_esc attribute (fallback)")
+
+                if not hasattr(new_overlay, '_overlay_manager'):
+                    new_overlay._overlay_manager = self
+                    new_overlay.logger.info("[DEBUG] Added _overlay_manager attribute (fallback)")
+
+                if not hasattr(new_overlay, '_images'):
+                    new_overlay._images = []
+                    new_overlay.logger.info("[DEBUG] Added _images attribute (fallback)")
+
+                if not hasattr(new_overlay, 'tk_image'):
+                    new_overlay.tk_image = None
+                    new_overlay.logger.info("[DEBUG] Added tk_image attribute (fallback)")
+
+                if not hasattr(new_overlay, '_last_image_path'):
+                    new_overlay._last_image_path = None
+                    new_overlay.logger.info("[DEBUG] Added _last_image_path attribute (fallback)")
+
+                if not hasattr(new_overlay, '_last_window_rect'):
+                    new_overlay._last_window_rect = None
+                    new_overlay.logger.info("[DEBUG] Added _last_window_rect attribute (fallback)")
+
+                if not hasattr(new_overlay, '_target_hwnd'):
+                    new_overlay._target_hwnd = None
+                    new_overlay.logger.info("[DEBUG] Added _target_hwnd attribute (fallback)")
+
+                if not hasattr(new_overlay, '_is_fullscreen_target'):
+                    new_overlay._is_fullscreen_target = False
+                    new_overlay.logger.info("[DEBUG] Added _is_fullscreen_target attribute (fallback)")
+
+                if not hasattr(new_overlay, '_is_visible_by_user'):
+                    new_overlay._is_visible_by_user = False
+                    new_overlay.logger.info("[DEBUG] Added _is_visible_by_user attribute (fallback)")
+
+                if not hasattr(new_overlay, '_saved_position'):
+                    new_overlay._saved_position = None
+                    new_overlay.logger.info("[DEBUG] Added _saved_position attribute (fallback)")
+
+                if not hasattr(new_overlay, '_show_time'):
+                    new_overlay._show_time = 0
+                    new_overlay.logger.info("[DEBUG] Added _show_time attribute (fallback)")
+
+                if not hasattr(new_overlay, '_monitor_stable_time'):
+                    new_overlay._monitor_stable_time = 0
+                    new_overlay.logger.info("[DEBUG] Added _monitor_stable_time attribute (fallback)")
+
+                if not hasattr(new_overlay, '_monitor_initialized'):
+                    new_overlay._monitor_initialized = False
+                    new_overlay.logger.info("[DEBUG] Added _monitor_initialized attribute (fallback)")
+
+                if not hasattr(new_overlay, '_last_active_hwnd'):
+                    new_overlay._last_active_hwnd = None
+                    new_overlay.logger.info("[DEBUG] Added _last_active_hwnd attribute (fallback)")
+
+                if not hasattr(new_overlay, '_monitor_timer'):
+                    new_overlay._monitor_timer = None
+                    new_overlay.logger.info("[DEBUG] Added _monitor_timer attribute (fallback)")
+
+                if not hasattr(new_overlay, '_is_dragging'):
+                    new_overlay._is_dragging = False
+                    new_overlay.logger.info("[DEBUG] Added _is_dragging attribute (fallback)")
+
+                if not hasattr(new_overlay, '_drag_stop_timer'):
+                    new_overlay._drag_stop_timer = None
+                    new_overlay.logger.info("[DEBUG] Added _drag_stop_timer attribute (fallback)")
+
+                if not hasattr(new_overlay, '_drag_data'):
+                    new_overlay._drag_data = {"x": 0, "y": 0}
+                    new_overlay.logger.info("[DEBUG] Added _drag_data attribute (fallback)")
+
+                if not hasattr(new_overlay, '_image_loaded'):
+                    new_overlay._image_loaded = False
+                    new_overlay.logger.info("[DEBUG] Added _image_loaded attribute (fallback)")
+
+                if not hasattr(new_overlay, '_fullscreen_restore_needed'):
+                    new_overlay._fullscreen_restore_needed = False
+                    new_overlay.logger.info("[DEBUG] Added _fullscreen_restore_needed attribute (fallback)")
+
+                if not hasattr(new_overlay, '_esc_hook_active'):
+                    new_overlay._esc_hook_active = False
+                    new_overlay.logger.info("[DEBUG] Added _esc_hook_active attribute (fallback)")
+
+                if not hasattr(new_overlay, '_original_wndproc'):
+                    new_overlay._original_wndproc = 0
+                    new_overlay.logger.info("[DEBUG] Added _original_wndproc attribute (fallback)")
+
+                if not hasattr(new_overlay, 'visible'):
+                    new_overlay.visible = False
+                    new_overlay.logger.info("[DEBUG] Added visible attribute (fallback)")
+
+                if not hasattr(new_overlay, '_hidden_by_mouse'):
+                    new_overlay._hidden_by_mouse = False
+                    new_overlay.logger.info("[DEBUG] Added _hidden_by_mouse attribute (fallback)")
+
+                if not hasattr(new_overlay, '_is_window_screenshot'):
+                    new_overlay._is_window_screenshot = False
+                    new_overlay.logger.info("[DEBUG] Added _is_window_screenshot attribute (fallback)")
+
+                if not hasattr(new_overlay, '_edit_mode_enabled'):
+                    new_overlay._edit_mode_enabled = False
+                    new_overlay.logger.info("[DEBUG] Added _edit_mode_enabled attribute (fallback) = False")
+
+                if not hasattr(new_overlay, '_mouse_over'):
+                    new_overlay._mouse_over = False
+                    new_overlay.logger.info("[DEBUG] Added _mouse_over attribute (fallback)")
+
+                if not hasattr(new_overlay, '_close_button_id'):
+                    new_overlay._close_button_id = None
+                    new_overlay.logger.info("[DEBUG] Added _close_button_id attribute (fallback)")
+
+                if not hasattr(new_overlay, '_close_button_visible'):
+                    new_overlay._close_button_visible = False
+                    new_overlay.logger.info("[DEBUG] Added _close_button_visible attribute (fallback)")
+
+                if not hasattr(new_overlay, '_context_menu'):
+                    import tkinter as tk
+                    new_overlay._context_menu = tk.Menu(new_overlay.root, tearoff=0, bg='#2d2d2d', fg='white',
+                                                        activebackground='#4CAF50', activeforeground='white')
+                    new_overlay._context_menu.add_command(label="🗑️ Удалить", command=new_overlay._remove_overlay)
+                    new_overlay.logger.info("[DEBUG] Added _context_menu attribute (fallback)")
+
+                if not hasattr(new_overlay, 'root') or new_overlay.root is None:
+                    import tkinter as tk
+                    try:
+                        if self.parent and hasattr(self.parent, 'root'):
+                            new_overlay.root = tk.Toplevel(self.parent.root)
+                            new_overlay.logger.info("[DEBUG] Created root Toplevel (fallback)")
+                        else:
+                            new_overlay.root = tk.Toplevel()
+                            new_overlay.logger.info("[DEBUG] Created root Toplevel without parent (fallback)")
+                        new_overlay.root.overrideredirect(True)
+                        new_overlay.root.attributes('-topmost', True)
+                        new_overlay.root.configure(bg='#000000')
+                        new_overlay.root.withdraw()
+                    except Exception as e:
+                        new_overlay.logger.warning(f"[DEBUG] Could not create root: {e}")
+
+                if not hasattr(new_overlay, 'canvas') or new_overlay.canvas is None:
+                    if hasattr(new_overlay, 'root') and new_overlay.root:
+                        import tkinter as tk
+                        new_overlay.canvas = tk.Canvas(new_overlay.root, bg='#000000', highlightthickness=0)
+                        new_overlay.canvas.pack(fill=tk.BOTH, expand=True)
+                        new_overlay.logger.info("[DEBUG] Created canvas (fallback)")
+                    else:
+                        new_overlay.logger.warning("[DEBUG] Cannot create canvas - root is None")
+
+                if hasattr(new_overlay, 'canvas') and new_overlay.canvas:
+                    try:
+                        new_overlay.canvas.bind('<ButtonPress-1>', new_overlay._start_drag)
+                        new_overlay.canvas.bind('<B1-Motion>', new_overlay._on_drag)
+                        new_overlay.canvas.bind('<ButtonRelease-1>', new_overlay._stop_drag)
+                        new_overlay.canvas.bind('<Button-3>', new_overlay._on_right_click)
+                        new_overlay.canvas.bind('<Enter>', new_overlay._on_mouse_enter)
+                        new_overlay.canvas.bind('<Leave>', new_overlay._on_mouse_leave)
+                        new_overlay.logger.info("[DEBUG] Bound drag events to canvas (fallback)")
+                    except Exception as e:
+                        new_overlay.logger.warning(f"[DEBUG] Could not bind canvas events: {e}")
+
+                if hasattr(new_overlay, 'root') and new_overlay.root:
+                    try:
+                        new_overlay.root.bind('<ButtonPress-1>', new_overlay._start_drag)
+                        new_overlay.root.bind('<B1-Motion>', new_overlay._on_drag)
+                        new_overlay.root.bind('<ButtonRelease-1>', new_overlay._stop_drag)
+                        new_overlay.root.bind('<Button-3>', new_overlay._on_right_click)
+                        new_overlay.root.bind('<Enter>', new_overlay._on_mouse_enter)
+                        new_overlay.root.bind('<Leave>', new_overlay._on_mouse_leave)
+                        new_overlay.logger.info("[DEBUG] Bound drag events to root (fallback)")
+                    except Exception as e:
+                        new_overlay.logger.warning(f"[DEBUG] Could not bind root events: {e}")
+
+                new_overlay.logger.info("[DEBUG] Fallback initialization complete")
+
+            except Exception as e2:
+                self.logger.error(f"[DEBUG] Failed to create OverlayWindow: {e2}")
+                return None
+        except Exception as e:
+            self.logger.error(f"[DEBUG] Unexpected error creating OverlayWindow: {e}")
+            return None
+
+        if new_overlay is None:
+            self.logger.error("[DEBUG] new_overlay is None after creation attempts")
+            return None
+
+        new_overlay._is_window_screenshot = is_window_screenshot
+        self.logger.info(f"[DEBUG] Установлен _is_window_screenshot = {is_window_screenshot}")
+
+        # !!! ПРОСТОЕ РЕШЕНИЕ: для F2 всегда включаем режим редактирования
+        if is_window_screenshot:
+            new_overlay._edit_mode_enabled = True
+            self.logger.info(f"[DEBUG] F2-оверлей: _edit_mode_enabled = True (принудительно)")
+        else:
+            if hasattr(self.parent, '_edit_mode_enabled'):
+                new_overlay._edit_mode_enabled = self.parent._edit_mode_enabled
+                self.logger.info(f"[DEBUG] F3-оверлей: _edit_mode_enabled = {new_overlay._edit_mode_enabled}")
+            else:
+                new_overlay._edit_mode_enabled = False
+                self.logger.info(f"[DEBUG] F3-оверлей: _edit_mode_enabled = False (по умолчанию)")
+
+        new_overlay._use_manager_esc = True
+
+        new_overlay._overlay_manager = self
+        new_overlay.show_for_window(
+            image_path, window_rect, target_hwnd, is_fullscreen, show_immediately
+        )
+
+        self._enable_esc_hook()
+
+        self.overlays.append(new_overlay)
+        self.logger.info(f"Оверлей создан. Всего активных оверлеев: {len(self.overlays)}")
+        return new_overlay
+
     def _global_esc_handler(self, event):
         """Глобальный обработчик ESC - отменяет перевод или скрывает/удаляет оверлей под мышью."""
         self.logger.info("[DEBUG] ESC нажат - проверка состояния перевода")
@@ -213,276 +508,6 @@ class OverlayManager:
         except Exception as e:
             self.logger.error(f"[DEBUG] Ошибка при удалении оверлея: {e}")
 
-    def create_overlay(self, image_path: Path, window_rect: tuple,
-                       target_hwnd: int = None, is_fullscreen: bool = None,
-                       show_immediately: bool = True, is_window_screenshot: bool = False) -> Optional[OverlayWindow]:
-        """
-        Создает новый оверлей на основе переданных данных.
-
-        Args:
-            image_path: Путь к изображению для отображения
-            window_rect: Координаты окна (x1, y1, x2, y2)
-            target_hwnd: HWND целевого окна
-            is_fullscreen: Флаг полноэкранного режима
-            show_immediately: Показывать сразу или сохранить для отложенного показа
-            is_window_screenshot: True для F2 (скриншот окна), False для F3 (область)
-        """
-        self.logger.info(
-            f"Создание нового оверлея: image_path={image_path}, is_window_screenshot={is_window_screenshot}")
-
-        auto_hide_enabled = False
-        if hasattr(self.parent, 'settings') and self.parent.settings:
-            auto_hide_enabled = self.parent.settings.get_auto_hide_overlay()
-
-        self.logger.info(f"[DEBUG] OverlayWindow class object: {OverlayWindow}")
-        self.logger.info(f"[DEBUG] OverlayWindow module: {OverlayWindow.__module__}")
-
-        new_overlay = None
-        try:
-            self.logger.info("[DEBUG] Attempting to create OverlayWindow with arguments...")
-            new_overlay = OverlayWindow(
-                parent=self.parent.root,
-                app_title=self.parent.app_title if hasattr(self.parent, 'app_title') else "Перевод скриншотов",
-                auto_hide_enabled=auto_hide_enabled
-            )
-            self.logger.info("[DEBUG] OverlayWindow created successfully with arguments")
-        except TypeError as e:
-            self.logger.warning(f"[DEBUG] OverlayWindow does not accept arguments: {e}")
-            self.logger.info("[DEBUG] Attempting to create OverlayWindow without arguments...")
-            try:
-                new_overlay = OverlayWindow()
-                self.logger.info("[DEBUG] OverlayWindow created without arguments (fallback)")
-
-                import logging
-                from pathlib import Path
-
-                if not hasattr(new_overlay, 'logger'):
-                    new_overlay.logger = logging.getLogger(__name__)
-                    new_overlay.logger.info("[DEBUG] Added logger attribute to OverlayWindow (fallback)")
-
-                if not hasattr(new_overlay, 'temp_dir'):
-                    from src.utils import ensure_app_temp_dir
-                    new_overlay.temp_dir = ensure_app_temp_dir()
-                    new_overlay.logger.info("[DEBUG] Added temp_dir attribute (fallback)")
-
-                if not hasattr(new_overlay, 'auto_hide_enabled'):
-                    new_overlay.auto_hide_enabled = auto_hide_enabled
-                    new_overlay.logger.info("[DEBUG] Added auto_hide_enabled attribute (fallback)")
-
-                if not hasattr(new_overlay, '_app_title'):
-                    new_overlay._app_title = self.parent.app_title if hasattr(self.parent,
-                                                                              'app_title') else "Перевод скриншотов"
-                    new_overlay.logger.info("[DEBUG] Added _app_title attribute (fallback)")
-
-                if not hasattr(new_overlay, '_use_manager_esc'):
-                    new_overlay._use_manager_esc = True
-                    new_overlay.logger.info("[DEBUG] Added _use_manager_esc attribute (fallback)")
-
-                if not hasattr(new_overlay, '_overlay_manager'):
-                    new_overlay._overlay_manager = self
-                    new_overlay.logger.info("[DEBUG] Added _overlay_manager attribute (fallback)")
-
-                if not hasattr(new_overlay, '_images'):
-                    new_overlay._images = []
-                    new_overlay.logger.info("[DEBUG] Added _images attribute (fallback)")
-
-                if not hasattr(new_overlay, 'tk_image'):
-                    new_overlay.tk_image = None
-                    new_overlay.logger.info("[DEBUG] Added tk_image attribute (fallback)")
-
-                if not hasattr(new_overlay, '_last_image_path'):
-                    new_overlay._last_image_path = None
-                    new_overlay.logger.info("[DEBUG] Added _last_image_path attribute (fallback)")
-
-                if not hasattr(new_overlay, '_last_window_rect'):
-                    new_overlay._last_window_rect = None
-                    new_overlay.logger.info("[DEBUG] Added _last_window_rect attribute (fallback)")
-
-                if not hasattr(new_overlay, '_target_hwnd'):
-                    new_overlay._target_hwnd = None
-                    new_overlay.logger.info("[DEBUG] Added _target_hwnd attribute (fallback)")
-
-                if not hasattr(new_overlay, '_is_fullscreen_target'):
-                    new_overlay._is_fullscreen_target = False
-                    new_overlay.logger.info("[DEBUG] Added _is_fullscreen_target attribute (fallback)")
-
-                if not hasattr(new_overlay, '_is_visible_by_user'):
-                    new_overlay._is_visible_by_user = False
-                    new_overlay.logger.info("[DEBUG] Added _is_visible_by_user attribute (fallback)")
-
-                if not hasattr(new_overlay, '_saved_position'):
-                    new_overlay._saved_position = None
-                    new_overlay.logger.info("[DEBUG] Added _saved_position attribute (fallback)")
-
-                if not hasattr(new_overlay, '_show_time'):
-                    new_overlay._show_time = 0
-                    new_overlay.logger.info("[DEBUG] Added _show_time attribute (fallback)")
-
-                if not hasattr(new_overlay, '_monitor_stable_time'):
-                    new_overlay._monitor_stable_time = 0
-                    new_overlay.logger.info("[DEBUG] Added _monitor_stable_time attribute (fallback)")
-
-                if not hasattr(new_overlay, '_monitor_initialized'):
-                    new_overlay._monitor_initialized = False
-                    new_overlay.logger.info("[DEBUG] Added _monitor_initialized attribute (fallback)")
-
-                if not hasattr(new_overlay, '_last_active_hwnd'):
-                    new_overlay._last_active_hwnd = None
-                    new_overlay.logger.info("[DEBUG] Added _last_active_hwnd attribute (fallback)")
-
-                if not hasattr(new_overlay, '_monitor_timer'):
-                    new_overlay._monitor_timer = None
-                    new_overlay.logger.info("[DEBUG] Added _monitor_timer attribute (fallback)")
-
-                if not hasattr(new_overlay, '_is_dragging'):
-                    new_overlay._is_dragging = False
-                    new_overlay.logger.info("[DEBUG] Added _is_dragging attribute (fallback)")
-
-                if not hasattr(new_overlay, '_drag_stop_timer'):
-                    new_overlay._drag_stop_timer = None
-                    new_overlay.logger.info("[DEBUG] Added _drag_stop_timer attribute (fallback)")
-
-                if not hasattr(new_overlay, '_drag_data'):
-                    new_overlay._drag_data = {"x": 0, "y": 0}
-                    new_overlay.logger.info("[DEBUG] Added _drag_data attribute (fallback)")
-
-                if not hasattr(new_overlay, '_image_loaded'):
-                    new_overlay._image_loaded = False
-                    new_overlay.logger.info("[DEBUG] Added _image_loaded attribute (fallback)")
-
-                if not hasattr(new_overlay, '_fullscreen_restore_needed'):
-                    new_overlay._fullscreen_restore_needed = False
-                    new_overlay.logger.info("[DEBUG] Added _fullscreen_restore_needed attribute (fallback)")
-
-                if not hasattr(new_overlay, '_esc_hook_active'):
-                    new_overlay._esc_hook_active = False
-                    new_overlay.logger.info("[DEBUG] Added _esc_hook_active attribute (fallback)")
-
-                if not hasattr(new_overlay, '_original_wndproc'):
-                    new_overlay._original_wndproc = 0
-                    new_overlay.logger.info("[DEBUG] Added _original_wndproc attribute (fallback)")
-
-                if not hasattr(new_overlay, 'visible'):
-                    new_overlay.visible = False
-                    new_overlay.logger.info("[DEBUG] Added visible attribute (fallback)")
-
-                if not hasattr(new_overlay, '_hidden_by_mouse'):
-                    new_overlay._hidden_by_mouse = False
-                    new_overlay.logger.info("[DEBUG] Added _hidden_by_mouse attribute (fallback)")
-
-                if not hasattr(new_overlay, '_is_window_screenshot'):
-                    new_overlay._is_window_screenshot = False
-                    new_overlay.logger.info("[DEBUG] Added _is_window_screenshot attribute (fallback)")
-
-                if not hasattr(new_overlay, '_edit_mode_enabled'):
-                    if hasattr(self.parent, '_edit_mode_enabled'):
-                        new_overlay._edit_mode_enabled = self.parent._edit_mode_enabled
-                    else:
-                        new_overlay._edit_mode_enabled = False
-                    new_overlay.logger.info(
-                        f"[DEBUG] Added _edit_mode_enabled attribute (fallback) = {new_overlay._edit_mode_enabled}")
-
-                if not hasattr(new_overlay, '_mouse_over'):
-                    new_overlay._mouse_over = False
-                    new_overlay.logger.info("[DEBUG] Added _mouse_over attribute (fallback)")
-
-                if not hasattr(new_overlay, '_close_button_id'):
-                    new_overlay._close_button_id = None
-                    new_overlay.logger.info("[DEBUG] Added _close_button_id attribute (fallback)")
-
-                if not hasattr(new_overlay, '_close_button_visible'):
-                    new_overlay._close_button_visible = False
-                    new_overlay.logger.info("[DEBUG] Added _close_button_visible attribute (fallback)")
-
-                if not hasattr(new_overlay, '_context_menu'):
-                    import tkinter as tk
-                    new_overlay._context_menu = tk.Menu(new_overlay.root, tearoff=0, bg='#2d2d2d', fg='white',
-                                                        activebackground='#4CAF50', activeforeground='white')
-                    new_overlay._context_menu.add_command(label="🗑️ Удалить", command=new_overlay._remove_overlay)
-                    new_overlay.logger.info("[DEBUG] Added _context_menu attribute (fallback)")
-
-                if not hasattr(new_overlay, 'root') or new_overlay.root is None:
-                    import tkinter as tk
-                    try:
-                        if self.parent and hasattr(self.parent, 'root'):
-                            new_overlay.root = tk.Toplevel(self.parent.root)
-                            new_overlay.logger.info("[DEBUG] Created root Toplevel (fallback)")
-                        else:
-                            new_overlay.root = tk.Toplevel()
-                            new_overlay.logger.info("[DEBUG] Created root Toplevel without parent (fallback)")
-                        new_overlay.root.overrideredirect(True)
-                        new_overlay.root.attributes('-topmost', True)
-                        new_overlay.root.configure(bg='#000000')
-                        new_overlay.root.withdraw()
-                    except Exception as e:
-                        new_overlay.logger.warning(f"[DEBUG] Could not create root: {e}")
-
-                if not hasattr(new_overlay, 'canvas') or new_overlay.canvas is None:
-                    if hasattr(new_overlay, 'root') and new_overlay.root:
-                        import tkinter as tk
-                        new_overlay.canvas = tk.Canvas(new_overlay.root, bg='#000000', highlightthickness=0)
-                        new_overlay.canvas.pack(fill=tk.BOTH, expand=True)
-                        new_overlay.logger.info("[DEBUG] Created canvas (fallback)")
-                    else:
-                        new_overlay.logger.warning("[DEBUG] Cannot create canvas - root is None")
-
-                if hasattr(new_overlay, 'canvas') and new_overlay.canvas:
-                    try:
-                        new_overlay.canvas.bind('<ButtonPress-1>', new_overlay._start_drag)
-                        new_overlay.canvas.bind('<B1-Motion>', new_overlay._on_drag)
-                        new_overlay.canvas.bind('<ButtonRelease-1>', new_overlay._stop_drag)
-                        new_overlay.canvas.bind('<Button-3>', new_overlay._on_right_click)
-                        new_overlay.canvas.bind('<Enter>', new_overlay._on_mouse_enter)
-                        new_overlay.canvas.bind('<Leave>', new_overlay._on_mouse_leave)
-                        new_overlay.logger.info("[DEBUG] Bound drag events to canvas (fallback)")
-                    except Exception as e:
-                        new_overlay.logger.warning(f"[DEBUG] Could not bind canvas events: {e}")
-
-                if hasattr(new_overlay, 'root') and new_overlay.root:
-                    try:
-                        new_overlay.root.bind('<ButtonPress-1>', new_overlay._start_drag)
-                        new_overlay.root.bind('<B1-Motion>', new_overlay._on_drag)
-                        new_overlay.root.bind('<ButtonRelease-1>', new_overlay._stop_drag)
-                        new_overlay.root.bind('<Button-3>', new_overlay._on_right_click)
-                        new_overlay.root.bind('<Enter>', new_overlay._on_mouse_enter)
-                        new_overlay.root.bind('<Leave>', new_overlay._on_mouse_leave)
-                        new_overlay.logger.info("[DEBUG] Bound drag events to root (fallback)")
-                    except Exception as e:
-                        new_overlay.logger.warning(f"[DEBUG] Could not bind root events: {e}")
-
-                new_overlay.logger.info("[DEBUG] Fallback initialization complete")
-
-            except Exception as e2:
-                self.logger.error(f"[DEBUG] Failed to create OverlayWindow: {e2}")
-                return None
-        except Exception as e:
-            self.logger.error(f"[DEBUG] Unexpected error creating OverlayWindow: {e}")
-            return None
-
-        if new_overlay is None:
-            self.logger.error("[DEBUG] new_overlay is None after creation attempts")
-            return None
-
-        new_overlay._is_window_screenshot = is_window_screenshot
-        self.logger.info(f"[DEBUG] Установлен _is_window_screenshot = {is_window_screenshot}")
-
-        if hasattr(self.parent, '_edit_mode_enabled'):
-            new_overlay._edit_mode_enabled = self.parent._edit_mode_enabled
-            self.logger.info(f"[DEBUG] Установлен _edit_mode_enabled = {new_overlay._edit_mode_enabled}")
-
-        new_overlay._use_manager_esc = True
-
-        new_overlay._overlay_manager = self
-        new_overlay.show_for_window(
-            image_path, window_rect, target_hwnd, is_fullscreen, show_immediately
-        )
-
-        self._enable_esc_hook()
-
-        self.overlays.append(new_overlay)
-        self.logger.info(f"Оверлей создан. Всего активных оверлеев: {len(self.overlays)}")
-        return new_overlay
-
     def update_edit_mode_for_all(self, edit_mode_enabled: bool):
         """
         Обновляет состояние режима редактирования для всех существующих оверлеев.
@@ -525,27 +550,6 @@ class OverlayManager:
 
         self.logger.info(f"Все {len(self.overlays)} оверлеев {'показаны' if new_state else 'скрыты'}")
         return new_state
-
-    def remove_overlay(self, overlay: OverlayWindow):
-        """Удаляет конкретный оверлей из списка и закрывает его (только в режиме редактирования)."""
-        # Проверяем режим редактирования
-        if not self.parent.is_edit_mode_enabled():
-            self.logger.info("[DEBUG] remove_overlay: режим редактирования ВЫКЛЮЧЕН - удаление запрещено")
-            # Убираем статус
-            # if hasattr(self.parent, 'update_status'):
-            #     self.parent.update_status("● Режим редактирования выключен (F5 для включения)", '#ff9800')
-            return
-
-        self.logger.info(f"Удаление оверлея из списка (всего: {len(self.overlays)})")
-        if overlay in self.overlays:
-            self.overlays.remove(overlay)
-            self.logger.info(f"Оверлей удален из списка. Осталось: {len(self.overlays)}")
-            try:
-                overlay.close()
-            except Exception as e:
-                self.logger.error(f"Ошибка при закрытии оверлея: {e}")
-        else:
-            self.logger.warning("Оверлей не найден в списке")
 
     def _find_overlay_under_cursor(self) -> Optional[OverlayWindow]:
         """Находит оверлей, под которым находится курсор мыши."""
