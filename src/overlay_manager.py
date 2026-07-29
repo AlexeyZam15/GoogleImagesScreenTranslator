@@ -29,11 +29,25 @@ class OverlayManager:
     def remove_overlay(self, overlay: OverlayWindow, force: bool = False):
         """Удаляет конкретный оверлей из списка и закрывает его."""
 
-        # !!! ЕСЛИ force=True - УДАЛЯЕМ ВСЕГДА (для F2)
-        if not force:
-            # Проверяем режим редактирования только если не принудительное удаление
+        # !!! F2-ОВЕРЛЕЙ ВСЕГДА МОЖНО УДАЛЯТЬ, НЕЗАВИСИМО ОТ РЕЖИМА РЕДАКТИРОВАНИЯ
+        # Проверяем, является ли оверлей F2-оверлеем
+        is_f2_overlay = False
+        if hasattr(overlay, '_is_window_screenshot') and overlay._is_window_screenshot:
+            is_f2_overlay = True
+
+        # Если не F2 - проверяем режим редактирования
+        if not force and not is_f2_overlay:
             if not self.parent.is_edit_mode_enabled():
                 self.logger.info("[DEBUG] remove_overlay: режим редактирования ВЫКЛЮЧЕН - удаление запрещено")
+                # !!! ВОССТАНАВЛИВАЕМ КАНВАС, ЕСЛИ ОН БЫЛ ОЧИЩЕН
+                try:
+                    if overlay and overlay.canvas and overlay.canvas.winfo_exists():
+                        # Показываем изображение обратно, если оно было
+                        if overlay._last_image_path and overlay._last_window_rect:
+                            overlay._load_and_show_image(overlay._last_image_path, overlay._last_window_rect)
+                            self.logger.info("[DEBUG] Canvas восстановлен после отмены удаления")
+                except Exception as e:
+                    self.logger.warning(f"[DEBUG] Не удалось восстановить Canvas: {e}")
                 return
 
         self.logger.info(f"Удаление оверлея из списка (всего: {len(self.overlays)})")

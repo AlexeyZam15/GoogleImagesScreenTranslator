@@ -235,6 +235,13 @@ class ScreenshotTranslatorApp:
             import win32gui
             from PIL import ImageGrab
 
+            # !!! СКРЫВАЕМ ОВЕРЛЕЙ ИНДИКАТОРА ПЕРЕВОДА ПЕРЕД ЗАХВАТОМ
+            if self.translation_overlay and self.translation_overlay.is_visible():
+                self.logger.info("[DEBUG] _capture_window_for_area: скрываем индикатор перевода перед захватом")
+                self.translation_overlay.hide()
+                # Даём время на скрытие окна
+                time.sleep(0.1)
+
             current_hwnd = win32gui.GetForegroundWindow()
             if current_hwnd:
                 self.screenshot._last_hwnd = current_hwnd

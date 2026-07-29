@@ -85,6 +85,59 @@ class OverlayWindow:
 
         self.logger.info("OverlayWindow инициализирован")
 
+    def _remove_overlay(self):
+        """Удаляет этот оверлей через OverlayManager."""
+        self.logger.info("[DEBUG] _remove_overlay вызван")
+
+        # Проверяем, что оверлей еще существует
+        if not self.visible:
+            self.logger.info("[DEBUG] _remove_overlay: оверлей не виден, пропускаем")
+            return
+
+        # !!! НЕ ОЧИЩАЕМ CANVAS ДО ВЫЗОВА remove_overlay
+        # Очистка будет выполнена в overlay.close() после успешного удаления
+        # Если удаление будет запрещено - Canvas останется целым
+
+        # Проверяем, является ли оверлей F2-оверлеем
+        is_f2_overlay = False
+        if hasattr(self, '_is_window_screenshot') and self._is_window_screenshot:
+            is_f2_overlay = True
+            self.logger.info("[DEBUG] _remove_overlay: F2-оверлей, удаление разрешено")
+
+        if not is_f2_overlay:
+            # Для F3-оверлея проверяем режим редактирования
+            if not self.parent.is_edit_mode_enabled():
+                self.logger.info("[DEBUG] _remove_overlay: режим редактирования ВЫКЛЮЧЕН - удаление запрещено")
+                return
+
+        # Закрываем контекстное меню, если оно открыто
+        try:
+            if hasattr(self, '_overlay_manager') and self._overlay_manager:
+                if hasattr(self._overlay_manager, '_context_menu') and self._overlay_manager._context_menu:
+                    try:
+                        self._overlay_manager._context_menu.unpost()
+                        self._overlay_manager._context_menu.update_idletasks()
+                        self.logger.info("[DEBUG] Контекстное меню закрыто перед удалением")
+                    except Exception as e:
+                        self.logger.warning(f"[DEBUG] Не удалось закрыть контекстное меню: {e}")
+        except Exception as e:
+            self.logger.warning(f"[DEBUG] Ошибка при закрытии контекстного меню: {e}")
+
+        # Сбрасываем флаг контекстного меню
+        self._context_menu_visible = False
+
+        # Скрываем кнопку закрытия
+        self._hide_close_button()
+
+        # Удаляем через менеджер
+        if hasattr(self, '_overlay_manager') and self._overlay_manager:
+            self.logger.info(
+                f"[DEBUG] Удаление оверлея через OverlayManager (всего оверлеев: {len(self._overlay_manager.overlays)})")
+            self._overlay_manager.remove_overlay(self)
+        else:
+            self.logger.warning("[DEBUG] _remove_overlay: менеджер не найден, закрываем самостоятельно")
+            self.close()
+
     def _check_and_update_visibility(self):
         """Унифицированная проверка активного окна."""
         # Если контекстное меню открыто - НЕ СКРЫВАЕМ оверлей
@@ -123,19 +176,6 @@ class OverlayWindow:
 
             if active_hwnd == 0:
                 self.logger.info("[DEBUG] _check_and_update_visibility: активное окно = 0, пропускаем")
-                return
-
-            # === ДЛЯ F2-ОВЕРЛЕЯ - НЕ СКРЫВАЕМ ===
-            is_f2_overlay = False
-            if hasattr(self, '_is_window_screenshot') and self._is_window_screenshot:
-                is_f2_overlay = True
-
-            if is_f2_overlay:
-                self.logger.info("[DEBUG] _check_and_update_visibility: F2-оверлей, не скрываем при переключении окон")
-                if not self.visible and self._is_visible_by_user:
-                    self.logger.info("[DEBUG] _check_and_update_visibility: F2-оверлей скрыт, показываем")
-                    if hasattr(self, '_overlay_manager') and self._overlay_manager:
-                        self._overlay_manager.show_all_sync()
                 return
 
             # Проверяем окно выделения области
@@ -186,7 +226,7 @@ class OverlayWindow:
             except:
                 pass
 
-            # === ОПРЕДЕЛЯЕМ, ЯВЛЯЕТСЯ ЛИ АКТИВНОЕ ОКНО НАШИМ ===
+            # Определяем, является ли активное окно нашим
             app_hwnd = None
             try:
                 if hasattr(self.root, 'master'):
@@ -215,44 +255,58 @@ class OverlayWindow:
             self.logger.info(
                 f"[DEBUG] _check_and_update_visibility: is_our_window={is_our_window}, visible={self.visible}")
 
-            # === ЕСЛИ ПЕРЕКЛЮЧИЛИСЬ НА ДРУГОЕ ОКНО ===
+            # === БАЗОВАЯ ЛОГИКА: АВТОСКРЫТИЕ/АВТОПОКАЗ ПРИ ПЕРЕКЛЮЧЕНИИ ОКОН ===
+            # Работает для ВСЕХ оверлеев, НЕЗАВИСИМО от режима редактирования
+
             if not is_our_window:
+                # Переключились на другое окно → СКРЫВАЕМ
                 if self.visible:
                     self.logger.info("[DEBUG] _check_and_update_visibility: переключились на другое окно - СКРЫВАЕМ")
                     self._hide_internal()
-                # !!! ВАЖНО: ВЫХОДИМ, НЕ ПРОВЕРЯЕМ КУРСОР
                 self.logger.info("[DEBUG] _check_and_update_visibility: выходим, оверлей должен остаться скрытым")
                 return
 
-            # === МЫ НА ЦЕЛЕВОМ ОКНЕ - ПРОВЕРЯЕМ КУРСОР ===
-            # Проверяем, находится ли курсор внутри области оверлея
-            is_cursor_inside = False
-            if self._last_window_rect:
-                x1, y1, x2, y2 = self._last_window_rect
-                if x1 <= cursor_x <= x2 and y1 <= cursor_y <= y2:
-                    is_cursor_inside = True
-                    self.logger.info("[DEBUG] _check_and_update_visibility: курсор внутри области оверлея")
+            # === МЫ НА ЦЕЛЕВОМ ОКНЕ ===
+            # Вернулись на целевое окно → ПОКАЗЫВАЕМ (если скрыт и должен быть виден)
+            if not self.visible and self._is_visible_by_user:
+                self.logger.info("[DEBUG] _check_and_update_visibility: вернулись на целевое окно - ПОКАЗЫВАЕМ")
+                self._show_internal()
+                # После показа обновляем позицию курсора
+                cursor_pos = win32api.GetCursorPos()
+                cursor_x, cursor_y = cursor_pos
 
-            # Логика скрытия/показа при наведении мыши (только когда на целевом окне)
-            if is_cursor_inside and self.visible:
-                is_edit_mode = False
-                if hasattr(self, '_edit_mode_enabled'):
-                    is_edit_mode = self._edit_mode_enabled
-                if not is_edit_mode:
+            # === ПРОВЕРКА КУРСОРА (только если НЕ в режиме редактирования) ===
+            is_edit_mode = False
+            if hasattr(self, '_edit_mode_enabled'):
+                is_edit_mode = self._edit_mode_enabled
+
+            if not is_edit_mode:
+                is_cursor_inside = False
+                if self._last_window_rect:
+                    x1, y1, x2, y2 = self._last_window_rect
+                    if x1 <= cursor_x <= x2 and y1 <= cursor_y <= y2:
+                        is_cursor_inside = True
+                        self.logger.info("[DEBUG] _check_and_update_visibility: курсор внутри области оверлея")
+
+                # Если курсор внутри и оверлей виден - скрываем
+                if is_cursor_inside and self.visible:
                     self.logger.info("[DEBUG] _check_and_update_visibility: курсор внутри, скрываем оверлей")
                     self._hidden_by_mouse = True
                     self._hide_internal()
                     return
 
-            if not is_cursor_inside and not self.visible and self._is_visible_by_user:
-                is_edit_mode = False
-                if hasattr(self, '_edit_mode_enabled'):
-                    is_edit_mode = self._edit_mode_enabled
-                if not is_edit_mode:
+                # Если курсор вне и оверлей скрыт - показываем
+                if not is_cursor_inside and not self.visible and self._is_visible_by_user:
                     self.logger.info("[DEBUG] _check_and_update_visibility: курсор вне области, показываем оверлей")
                     self._hidden_by_mouse = False
                     self._show_internal()
                     return
+            else:
+                # В режиме редактирования - сбрасываем флаг скрытия мышью, если был
+                if self._hidden_by_mouse:
+                    self.logger.info(
+                        "[DEBUG] _check_and_update_visibility: режим редактирования, сбрасываем _hidden_by_mouse")
+                    self._hidden_by_mouse = False
 
             self.logger.info(f"[DEBUG] _check_and_update_visibility: состояние не изменилось, ничего не делаем")
 
@@ -428,7 +482,7 @@ class OverlayWindow:
         self._drag_data["y"] = 0
         self.logger.info("[DEBUG] Конец перетаскивания, флаг _is_dragging=False")
 
-        # !!! ПОСЛЕ ЗАВЕРШЕНИЯ ПЕРЕТАСКИВАНИЯ ПОКАЗЫВАЕМ КРЕСТИК
+        # После завершения перетаскивания показываем крестик
         if self._edit_mode_enabled and self.visible and self._image_loaded:
             self._show_close_button()
             self.logger.debug("[DEBUG] _stop_drag: крестик показан после перетаскивания")
@@ -453,27 +507,11 @@ class OverlayWindow:
             except Exception as e:
                 self.logger.info(f"[DEBUG] Ошибка при возврате фокуса: {e}")
 
-        def reset_dragging_flag():
-            if hasattr(self, '_overlay_manager') and self._overlay_manager:
-                try:
-                    import win32gui
-                    active_hwnd = win32gui.GetForegroundWindow()
-                    if active_hwnd == self._target_hwnd:
-                        self._overlay_manager.set_dragging(False)
-                        self.logger.info("[DEBUG] Глобальный флаг перетаскивания сброшен (фокус на целевом окне)")
-                    else:
-                        self.logger.info(
-                            f"[DEBUG] Фокус на {active_hwnd}, а не на целевом {self._target_hwnd}, пробуем снова"
-                        )
-                        if self.root and self.root.winfo_exists():
-                            self.root.after(200, reset_dragging_flag)
-                except Exception as e:
-                    self.logger.warning(f"[DEBUG] Ошибка при проверке фокуса: {e}")
-                    self._overlay_manager.set_dragging(False)
-
+        # !!! УБИРАЕМ БЕСКОНЕЧНЫЙ ЦИКЛ reset_dragging_flag
+        # Вместо этого просто сбрасываем флаг и доверяем монитору видимости
         if hasattr(self, '_overlay_manager') and self._overlay_manager:
-            if self.root and self.root.winfo_exists():
-                self.root.after(300, reset_dragging_flag)
+            self._overlay_manager.set_dragging(False)
+            self.logger.info("[DEBUG] Глобальный флаг перетаскивания сброшен")
 
         if self.root and self.root.winfo_exists():
             if self._drag_stop_timer:
@@ -576,72 +614,6 @@ class OverlayWindow:
 
         if self.root and self.root.winfo_exists():
             self.root.after(50, check_menu_closed)
-
-    def _remove_overlay(self):
-        """Удаляет этот оверлей через OverlayManager."""
-        self.logger.info("[DEBUG] _remove_overlay вызван")
-
-        # Проверяем, что оверлей еще существует
-        if not self.visible:
-            self.logger.info("[DEBUG] _remove_overlay: оверлей не виден, пропускаем")
-            return
-
-        if self._is_window_screenshot:
-            self.logger.info("[DEBUG] _remove_overlay: F2-оверлей, удаление разрешено")
-        else:
-            is_edit_mode = False
-            if hasattr(self, '_edit_mode_enabled'):
-                is_edit_mode = self._edit_mode_enabled
-            elif hasattr(self, '_overlay_manager') and self._overlay_manager:
-                try:
-                    parent = self._overlay_manager.parent
-                    if parent and hasattr(parent, 'is_edit_mode_enabled'):
-                        is_edit_mode = parent.is_edit_mode_enabled()
-                    elif parent and hasattr(parent, '_edit_mode_enabled'):
-                        is_edit_mode = parent._edit_mode_enabled
-                except:
-                    pass
-
-            if not is_edit_mode:
-                self.logger.info("[DEBUG] _remove_overlay: режим редактирования ВЫКЛЮЧЕН - удаление запрещено")
-                return
-
-        # Закрываем контекстное меню, если оно открыто
-        try:
-            if hasattr(self, '_overlay_manager') and self._overlay_manager:
-                if hasattr(self._overlay_manager, '_context_menu') and self._overlay_manager._context_menu:
-                    try:
-                        self._overlay_manager._context_menu.unpost()
-                        self._overlay_manager._context_menu.update_idletasks()
-                        self.logger.info("[DEBUG] Контекстное меню закрыто перед удалением")
-                    except Exception as e:
-                        self.logger.warning(f"[DEBUG] Не удалось закрыть контекстное меню: {e}")
-        except Exception as e:
-            self.logger.warning(f"[DEBUG] Ошибка при закрытии контекстного меню: {e}")
-
-        # Сбрасываем флаг контекстного меню
-        self._context_menu_visible = False
-
-        # Скрываем кнопку закрытия
-        self._hide_close_button()
-
-        # Очищаем Canvas от всех элементов
-        try:
-            if self.canvas and self.canvas.winfo_exists():
-                self.canvas.delete("all")
-                self.canvas.update_idletasks()
-                self.logger.info("[DEBUG] Canvas очищен перед удалением оверлея")
-        except Exception as e:
-            self.logger.warning(f"[DEBUG] Не удалось очистить Canvas: {e}")
-
-        # Удаляем через менеджер
-        if hasattr(self, '_overlay_manager') and self._overlay_manager:
-            self.logger.info(
-                f"[DEBUG] Удаление оверлея через OverlayManager (всего оверлеев: {len(self._overlay_manager.overlays)})")
-            self._overlay_manager.remove_overlay(self)
-        else:
-            self.logger.warning("[DEBUG] _remove_overlay: менеджер не найден, закрываем самостоятельно")
-            self.close()
 
     def close(self):
         self.logger.info("close() вызван")
