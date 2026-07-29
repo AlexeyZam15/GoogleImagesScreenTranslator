@@ -161,13 +161,10 @@ class ScreenshotTranslatorApp:
         """Захват области экрана (F3) - добавляет задачу в очередь."""
         self.logger.info("[DEBUG] capture_area() вызван")
 
-        # УБИРАЕМ БЛОКИРОВКУ self.translating
         if not self.ready or self.initializing:
             self.logger.warning("[DEBUG] capture_area пропущен: не готов или инициализируется")
             return
 
-        # Блокируем только кнопку, чтобы предотвратить спам, но не блокируем логику
-        # Кнопка будет разблокирована в _process_area_selection, когда задача будет добавлена в очередь
         self.btn_capture.config(state=DISABLED, bg='#333')
 
         try:
@@ -178,6 +175,75 @@ class ScreenshotTranslatorApp:
 
         self.root.after(500, self._capture_window_for_area)
 
+    def _capture_window_for_area(self):
+        """Захватывает скриншот всего экрана и показывает для выделения области"""
+        self.logger.info("[DEBUG] _capture_window_for_area() - начало")
+
+        try:
+            import win32gui
+            from PIL import ImageGrab
+
+            current_hwnd = win32gui.GetForegroundWindow()
+            if current_hwnd:
+                self.screenshot._last_hwnd = current_hwnd
+                self.screenshot._is_fullscreen = self.screenshot.is_window_fullscreen(current_hwnd)
+                self.logger.info(
+                    f"[DEBUG] Сохранен HWND активного окна: {current_hwnd}, полноэкранный: {self.screenshot._is_fullscreen}")
+                self._area_target_hwnd = current_hwnd
+                self._area_is_fullscreen = self.screenshot._is_fullscreen
+            else:
+                self._area_target_hwnd = None
+                self._area_is_fullscreen = False
+
+            if self._area_is_fullscreen and self.settings.get_auto_windowed_fullscreen():
+                self.logger.info("[DEBUG] Обнаружен НАСТОЯЩИЙ полноэкранный режим, преобразуем в windowed fullscreen")
+                try:
+                    from src.window_utils import send_alt_enter_to_window
+                    result = send_alt_enter_to_window(current_hwnd)
+                    if result:
+                        self.logger.info("[DEBUG] Преобразование окна в windowed fullscreen УСПЕШНО")
+                        self.screenshot._is_fullscreen = False
+                        self._area_is_fullscreen = False
+                        time.sleep(0.3)
+                    else:
+                        self.logger.warning("[DEBUG] Преобразование окна не удалось")
+                except Exception as e:
+                    self.logger.error(f"[DEBUG] Ошибка при преобразовании в оконный полноэкранный режим: {e}")
+            else:
+                if self._area_is_fullscreen:
+                    self.logger.info("[DEBUG] Автоматический оконный полноэкранный режим отключен")
+                else:
+                    self.logger.info("[DEBUG] Окно уже в оконном режиме (windowed fullscreen или обычное)")
+
+            self.logger.info("[DEBUG] Захват всего экрана для выбора области...")
+            img = ImageGrab.grab()
+            self.logger.info(f"[DEBUG] Скриншот всего экрана: {img.size}")
+
+            if not img:
+                self.logger.error("[DEBUG] Не удалось захватить скриншот экрана")
+                self.update_status(self.get_string('capture_error'), '#f44336')
+                self.translating = False
+                self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+                self.root.deiconify()
+                return
+
+            screenshot_path = self.temp_dir / f"area_screenshot_{int(time.time())}.png"
+            img.save(screenshot_path)
+            self.logger.info(f"[DEBUG] Скриншот сохранен: {screenshot_path}")
+
+            # !!! НЕ СКРЫВАЕМ ОВЕРЛЕИ ВРУЧНУЮ
+            # Оверлеи скроются автоматически через мониторинг, когда окно выделения получит фокус
+            # Убираем вызов self.overlay_manager.hide_all_overlays()
+
+            self._show_area_selection_window(screenshot_path)
+
+        except Exception as e:
+            self.logger.error(f"[DEBUG] Ошибка захвата экрана: {e}")
+            self.update_status(self.get_string('capture_error'), '#f44336')
+            self.translating = False
+            self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+            self.root.deiconify()
+
     def _process_area_selection(self, x1, y1, x2, y2, screenshot_path):
         """Обрабатывает выделенную область - добавляет задачу в очередь."""
         self.logger.info(f"[DEBUG] _process_area_selection: ({x1},{y1})-({x2},{y2})")
@@ -186,7 +252,11 @@ class ScreenshotTranslatorApp:
         self._selection_window = None
         self._selection_window_on_escape = None
 
-        # Разблокируем кнопку, так как область выбрана и задача будет добавлена в очередь
+        # !!! НЕ ВОССТАНАВЛИВАЕМ ОВЕРЛЕИ ВРУЧНУЮ
+        # Оверлеи восстановятся автоматически через мониторинг,
+        # когда фокус вернётся на целевое окно
+        # Убираем вызов self.overlay_manager.show_all_sync()
+
         self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
 
         self.logger.info(
@@ -231,7 +301,6 @@ class ScreenshotTranslatorApp:
 
                 self._area_rect_for_overlay = (x1, y1, x2, y2)
 
-                # === ДОБАВЛЯЕМ ЗАДАЧУ В ОЧЕРЕДЬ ВМЕСТО ПРЯМОГО ВЫЗОВА _do_translate ===
                 task = {
                     'type': 'area',
                     'image_path': path,
@@ -242,16 +311,182 @@ class ScreenshotTranslatorApp:
                 self.translation_queue.append(task)
                 self.logger.info(f"[QUEUE] Задача добавлена в очередь. Размер очереди: {len(self.translation_queue)}")
 
-                # Запускаем обработку очереди, если она не запущена
                 if not self.is_processing_queue:
                     self._process_next_in_queue()
-                # ============================
 
             except Exception as e:
                 self.logger.error(f"Ошибка обработки области: {e}")
                 self.update_status(self.get_string('error'), '#f44336')
 
         threading.Thread(target=process_task, daemon=True).start()
+
+    def _show_area_selection_window(self, screenshot_path):
+        """Показывает полноэкранное окно с изображением для выделения области"""
+        self.logger.info("[DEBUG] _show_area_selection_window()")
+
+        from PIL import Image, ImageTk
+        import tkinter as tk
+        from tkinter import messagebox
+
+        img = Image.open(screenshot_path)
+        img_width, img_height = img.size
+
+        selection_window = tk.Toplevel()
+        selection_window.attributes('-fullscreen', True)
+        selection_window.attributes('-topmost', True)
+        selection_window.configure(bg='black')
+        selection_window.focus_force()
+
+        canvas = tk.Canvas(selection_window, cursor="cross", bg='black', highlightthickness=0)
+        canvas.pack(fill=tk.BOTH, expand=True)
+
+        screen_width = selection_window.winfo_screenwidth()
+        screen_height = selection_window.winfo_screenheight()
+
+        scale = min(screen_width / img_width, screen_height / img_height)
+        display_w = int(img_width * scale)
+        display_h = int(img_height * scale)
+
+        resized = img.resize((display_w, display_h), Image.Resampling.LANCZOS)
+        photo = ImageTk.PhotoImage(resized)
+
+        img_x = (screen_width - display_w) // 2
+        img_y = (screen_height - display_h) // 2
+
+        canvas.create_image(img_x, img_y, anchor=tk.NW, image=photo)
+        canvas.image = photo
+
+        selection_data = {
+            'img': img,
+            'screenshot_path': screenshot_path,
+            'scale_x': img_width / display_w,
+            'scale_y': img_height / display_h,
+            'img_x': img_x,
+            'img_y': img_y,
+            'start_x': None,
+            'start_y': None,
+            'rect': None
+        }
+
+        canvas.create_text(
+            screen_width // 2,
+            50,
+            text="Выделите область для перевода (ESC для отмены)",
+            fill="white",
+            font=("Arial", 16, "bold")
+        )
+
+        def on_mouse_down(event):
+            selection_data['start_x'] = event.x
+            selection_data['start_y'] = event.y
+            if selection_data['rect']:
+                canvas.delete(selection_data['rect'])
+
+        def on_mouse_drag(event):
+            if selection_data['start_x'] is not None:
+                if selection_data['rect']:
+                    canvas.delete(selection_data['rect'])
+                selection_data['rect'] = canvas.create_rectangle(
+                    selection_data['start_x'],
+                    selection_data['start_y'],
+                    event.x,
+                    event.y,
+                    outline='red',
+                    width=2,
+                    fill='blue',
+                    stipple='gray50'
+                )
+
+        def on_mouse_up(event):
+            if selection_data['start_x'] is not None:
+                x1, y1 = min(selection_data['start_x'], event.x), min(selection_data['start_y'], event.y)
+                x2, y2 = max(selection_data['start_x'], event.x), max(selection_data['start_y'], event.y)
+
+                min_size = 10
+                if x2 - x1 > min_size and y2 - y1 > min_size:
+                    orig_x1 = int((x1 - selection_data['img_x']) * selection_data['scale_x'])
+                    orig_y1 = int((y1 - selection_data['img_y']) * selection_data['scale_y'])
+                    orig_x2 = int((x2 - selection_data['img_x']) * selection_data['scale_x'])
+                    orig_y2 = int((y2 - selection_data['img_y']) * selection_data['scale_y'])
+
+                    orig_x1 = max(0, min(orig_x1, img_width))
+                    orig_y1 = max(0, min(orig_y1, img_height))
+                    orig_x2 = max(0, min(orig_x2, img_width))
+                    orig_y2 = max(0, min(orig_y2, img_height))
+
+                    self.logger.info(f"[DEBUG] Выделена область: ({orig_x1},{orig_y1})-({orig_x2},{orig_y2})")
+
+                    selection_window.destroy()
+                    self._capture_mode = False
+                    self._selection_window = None
+
+                    self._process_area_selection(orig_x1, orig_y1, orig_x2, orig_y2, screenshot_path)
+                else:
+                    messagebox.showwarning(
+                        "Ошибка",
+                        f"Выделите область размером больше {min_size}x{min_size} пикселей"
+                    )
+
+        def on_escape(event):
+            self.logger.info("[DEBUG] ESC - отмена выделения")
+            self._capture_mode = False
+            self._selection_window = None
+            self.translating = False
+            self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+            self.root.deiconify()
+            self.update_status("● Отменено", '#ff9800')
+
+            # !!! НЕ ВОССТАНАВЛИВАЕМ ОВЕРЛЕИ ВРУЧНУЮ
+            # Оверлеи восстановятся автоматически через мониторинг
+
+            try:
+                selection_window.destroy()
+            except:
+                pass
+
+        self._selection_window_on_escape = on_escape
+
+        canvas.bind("<ButtonPress-1>", on_mouse_down)
+        canvas.bind("<B1-Motion>", on_mouse_drag)
+        canvas.bind("<ButtonRelease-1>", on_mouse_up)
+        selection_window.bind("<Escape>", on_escape)
+        canvas.bind("<Escape>", on_escape)
+
+        def on_escape_bind_all(event):
+            if self._capture_mode and self._selection_window is not None:
+                self.logger.info("[DEBUG] ESC через bind_all - отмена выделения")
+                on_escape(event)
+                return "break"
+            return None
+
+        self._selection_window_bind_id = selection_window.bind_all("<Escape>", on_escape_bind_all)
+
+        self._capture_mode = True
+        self._selection_window = selection_window
+
+        def on_close():
+            self._capture_mode = False
+            self._selection_window = None
+            self._selection_window_on_escape = None
+
+            # !!! НЕ ВОССТАНАВЛИВАЕМ ОВЕРЛЕИ ВРУЧНУЮ
+            # Оверлеи восстановятся автоматически через мониторинг
+
+            if hasattr(self, '_selection_window_bind_id'):
+                try:
+                    selection_window.unbind_all("<Escape>", self._selection_window_bind_id)
+                except:
+                    pass
+                self._selection_window_bind_id = None
+            self.translating = False
+            self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+            self.root.deiconify()
+            try:
+                selection_window.destroy()
+            except:
+                pass
+
+        selection_window.protocol("WM_DELETE_WINDOW", on_close)
 
     def process(self):
         """Обработка скриншота (F2) - удаляет старые оверлеи и добавляет задачу в очередь."""
@@ -1517,231 +1752,6 @@ class ScreenshotTranslatorApp:
 
         self.overlay_manager.close_all()
         self.logger.info(f"Удалено {count} оверлеев (F4)")
-
-    def _capture_window_for_area(self):
-        """Захватывает скриншот всего экрана и показывает для выделения области"""
-        self.logger.info("[DEBUG] _capture_window_for_area() - начало")
-
-        try:
-            import win32gui
-            from PIL import ImageGrab
-
-            current_hwnd = win32gui.GetForegroundWindow()
-            if current_hwnd:
-                self.screenshot._last_hwnd = current_hwnd
-                self.screenshot._is_fullscreen = self.screenshot.is_window_fullscreen(current_hwnd)
-                self.logger.info(
-                    f"[DEBUG] Сохранен HWND активного окна: {current_hwnd}, полноэкранный: {self.screenshot._is_fullscreen}")
-                self._area_target_hwnd = current_hwnd
-                self._area_is_fullscreen = self.screenshot._is_fullscreen
-            else:
-                self._area_target_hwnd = None
-                self._area_is_fullscreen = False
-
-            if self._area_is_fullscreen and self.settings.get_auto_windowed_fullscreen():
-                self.logger.info("[DEBUG] Обнаружен НАСТОЯЩИЙ полноэкранный режим, преобразуем в windowed fullscreen")
-                try:
-                    from src.window_utils import send_alt_enter_to_window
-                    result = send_alt_enter_to_window(current_hwnd)
-                    if result:
-                        self.logger.info("[DEBUG] Преобразование окна в windowed fullscreen УСПЕШНО")
-                        self.screenshot._is_fullscreen = False
-                        self._area_is_fullscreen = False
-                        time.sleep(0.3)
-                    else:
-                        self.logger.warning("[DEBUG] Преобразование окна не удалось")
-                except Exception as e:
-                    self.logger.error(f"[DEBUG] Ошибка при преобразовании в оконный полноэкранный режим: {e}")
-            else:
-                if self._area_is_fullscreen:
-                    self.logger.info("[DEBUG] Автоматический оконный полноэкранный режим отключен")
-                else:
-                    self.logger.info("[DEBUG] Окно уже в оконном режиме (windowed fullscreen или обычное)")
-
-            self.logger.info("[DEBUG] Захват всего экрана для выбора области...")
-            img = ImageGrab.grab()
-            self.logger.info(f"[DEBUG] Скриншот всего экрана: {img.size}")
-
-            if not img:
-                self.logger.error("[DEBUG] Не удалось захватить скриншот экрана")
-                self.update_status(self.get_string('capture_error'), '#f44336')
-                self.translating = False
-                self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
-                self.root.deiconify()
-                return
-
-            screenshot_path = self.temp_dir / f"area_screenshot_{int(time.time())}.png"
-            img.save(screenshot_path)
-            self.logger.info(f"[DEBUG] Скриншот сохранен: {screenshot_path}")
-
-            self._show_area_selection_window(screenshot_path)
-
-        except Exception as e:
-            self.logger.error(f"[DEBUG] Ошибка захвата экрана: {e}")
-            self.update_status(self.get_string('capture_error'), '#f44336')
-            self.translating = False
-            self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
-            self.root.deiconify()
-
-    def _show_area_selection_window(self, screenshot_path):
-        """Показывает полноэкранное окно с изображением для выделения области"""
-        self.logger.info("[DEBUG] _show_area_selection_window()")
-
-        from PIL import Image, ImageTk
-        import tkinter as tk
-        from tkinter import messagebox
-
-        img = Image.open(screenshot_path)
-        img_width, img_height = img.size
-
-        selection_window = tk.Toplevel()
-        selection_window.attributes('-fullscreen', True)
-        selection_window.attributes('-topmost', True)
-        selection_window.configure(bg='black')
-        selection_window.focus_force()
-
-        canvas = tk.Canvas(selection_window, cursor="cross", bg='black', highlightthickness=0)
-        canvas.pack(fill=tk.BOTH, expand=True)
-
-        screen_width = selection_window.winfo_screenwidth()
-        screen_height = selection_window.winfo_screenheight()
-
-        scale = min(screen_width / img_width, screen_height / img_height)
-        display_w = int(img_width * scale)
-        display_h = int(img_height * scale)
-
-        resized = img.resize((display_w, display_h), Image.Resampling.LANCZOS)
-        photo = ImageTk.PhotoImage(resized)
-
-        img_x = (screen_width - display_w) // 2
-        img_y = (screen_height - display_h) // 2
-
-        canvas.create_image(img_x, img_y, anchor=tk.NW, image=photo)
-        canvas.image = photo
-
-        selection_data = {
-            'img': img,
-            'screenshot_path': screenshot_path,
-            'scale_x': img_width / display_w,
-            'scale_y': img_height / display_h,
-            'img_x': img_x,
-            'img_y': img_y,
-            'start_x': None,
-            'start_y': None,
-            'rect': None
-        }
-
-        canvas.create_text(
-            screen_width // 2,
-            50,
-            text="Выделите область для перевода (ESC для отмены)",
-            fill="white",
-            font=("Arial", 16, "bold")
-        )
-
-        def on_mouse_down(event):
-            selection_data['start_x'] = event.x
-            selection_data['start_y'] = event.y
-            if selection_data['rect']:
-                canvas.delete(selection_data['rect'])
-
-        def on_mouse_drag(event):
-            if selection_data['start_x'] is not None:
-                if selection_data['rect']:
-                    canvas.delete(selection_data['rect'])
-                selection_data['rect'] = canvas.create_rectangle(
-                    selection_data['start_x'],
-                    selection_data['start_y'],
-                    event.x,
-                    event.y,
-                    outline='red',
-                    width=2,
-                    fill='blue',
-                    stipple='gray50'
-                )
-
-        def on_mouse_up(event):
-            if selection_data['start_x'] is not None:
-                x1, y1 = min(selection_data['start_x'], event.x), min(selection_data['start_y'], event.y)
-                x2, y2 = max(selection_data['start_x'], event.x), max(selection_data['start_y'], event.y)
-
-                min_size = 10
-                if x2 - x1 > min_size and y2 - y1 > min_size:
-                    orig_x1 = int((x1 - selection_data['img_x']) * selection_data['scale_x'])
-                    orig_y1 = int((y1 - selection_data['img_y']) * selection_data['scale_y'])
-                    orig_x2 = int((x2 - selection_data['img_x']) * selection_data['scale_x'])
-                    orig_y2 = int((y2 - selection_data['img_y']) * selection_data['scale_y'])
-
-                    orig_x1 = max(0, min(orig_x1, img_width))
-                    orig_y1 = max(0, min(orig_y1, img_height))
-                    orig_x2 = max(0, min(orig_x2, img_width))
-                    orig_y2 = max(0, min(orig_y2, img_height))
-
-                    self.logger.info(f"[DEBUG] Выделена область: ({orig_x1},{orig_y1})-({orig_x2},{orig_y2})")
-
-                    selection_window.destroy()
-                    self._capture_mode = False
-                    self._selection_window = None
-
-                    self._process_area_selection(orig_x1, orig_y1, orig_x2, orig_y2, screenshot_path)
-                else:
-                    messagebox.showwarning(
-                        "Ошибка",
-                        f"Выделите область размером больше {min_size}x{min_size} пикселей"
-                    )
-
-        def on_escape(event):
-            self.logger.info("[DEBUG] ESC - отмена выделения")
-            self._capture_mode = False
-            self._selection_window = None
-            self.translating = False
-            self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
-            self.root.deiconify()
-            self.update_status("● Отменено", '#ff9800')
-            try:
-                selection_window.destroy()
-            except:
-                pass
-
-        self._selection_window_on_escape = on_escape
-
-        canvas.bind("<ButtonPress-1>", on_mouse_down)
-        canvas.bind("<B1-Motion>", on_mouse_drag)
-        canvas.bind("<ButtonRelease-1>", on_mouse_up)
-        selection_window.bind("<Escape>", on_escape)
-        canvas.bind("<Escape>", on_escape)
-
-        def on_escape_bind_all(event):
-            if self._capture_mode and self._selection_window is not None:
-                self.logger.info("[DEBUG] ESC через bind_all - отмена выделения")
-                on_escape(event)
-                return "break"
-            return None
-
-        self._selection_window_bind_id = selection_window.bind_all("<Escape>", on_escape_bind_all)
-
-        self._capture_mode = True
-        self._selection_window = selection_window
-
-        def on_close():
-            self._capture_mode = False
-            self._selection_window = None
-            self._selection_window_on_escape = None
-            if hasattr(self, '_selection_window_bind_id'):
-                try:
-                    selection_window.unbind_all("<Escape>", self._selection_window_bind_id)
-                except:
-                    pass
-                self._selection_window_bind_id = None
-            self.translating = False
-            self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
-            self.root.deiconify()
-            try:
-                selection_window.destroy()
-            except:
-                pass
-
-        selection_window.protocol("WM_DELETE_WINDOW", on_close)
 
     def toggle_overlay(self):
         """Переключает видимость всех оверлеев (F1)."""

@@ -85,6 +85,188 @@ class OverlayWindow:
 
         self.logger.info("OverlayWindow инициализирован")
 
+    def _check_and_update_visibility(self):
+        """Унифицированная проверка активного окна."""
+        # Если контекстное меню открыто - НЕ СКРЫВАЕМ оверлей
+        if self._context_menu_visible:
+            self.logger.info("[DEBUG] _check_and_update_visibility: контекстное меню открыто, оверлей НЕ скрываем")
+            if self._is_visible_by_user and not self.visible and not self._hidden_by_mouse:
+                self.logger.info("[DEBUG] _check_and_update_visibility: восстанавливаем видимость оверлея")
+                self._show_internal()
+            return
+
+        if not self.auto_hide_enabled or not self._is_visible_by_user:
+            self.logger.debug(
+                f"[DEBUG] _check_and_update_visibility: пропускаем (auto_hide={self.auto_hide_enabled}, is_visible_by_user={self._is_visible_by_user})")
+            return
+
+        if hasattr(self, '_overlay_manager') and self._overlay_manager:
+            if self._overlay_manager.is_dragging():
+                self.logger.debug("[DEBUG] _check_and_update_visibility: идет перетаскивание, пропускаем")
+                return
+
+        if time.time() < self._monitor_stable_time:
+            self.logger.debug(
+                f"[DEBUG] _check_and_update_visibility: монитор стабилизируется ({time.time() - self._monitor_stable_time:.2f}с)")
+            return
+
+        try:
+            import win32gui
+            import win32api
+
+            active_hwnd = win32gui.GetForegroundWindow()
+            cursor_pos = win32api.GetCursorPos()
+            cursor_x, cursor_y = cursor_pos
+
+            self.logger.info(
+                f"[DEBUG] _check_and_update_visibility: active_hwnd={active_hwnd}, target_hwnd={self._target_hwnd}, visible={self.visible}, cursor=({cursor_x},{cursor_y})")
+
+            if active_hwnd == 0:
+                self.logger.info("[DEBUG] _check_and_update_visibility: активное окно = 0, пропускаем")
+                return
+
+            # Проверяем, находится ли курсор внутри области оверлея
+            is_cursor_inside = False
+            if self._last_window_rect:
+                x1, y1, x2, y2 = self._last_window_rect
+                if x1 <= cursor_x <= x2 and y1 <= cursor_y <= y2:
+                    is_cursor_inside = True
+                    self.logger.info("[DEBUG] _check_and_update_visibility: курсор внутри области оверлея")
+
+            if is_cursor_inside and self.visible:
+                is_edit_mode = False
+                if hasattr(self, '_edit_mode_enabled'):
+                    is_edit_mode = self._edit_mode_enabled
+                if not is_edit_mode:
+                    self.logger.info("[DEBUG] _check_and_update_visibility: курсор внутри, скрываем оверлей")
+                    self._hidden_by_mouse = True
+                    self._hide_internal()
+                    return
+
+            if not is_cursor_inside and not self.visible and self._is_visible_by_user:
+                is_edit_mode = False
+                if hasattr(self, '_edit_mode_enabled'):
+                    is_edit_mode = self._edit_mode_enabled
+                if not is_edit_mode:
+                    self.logger.info("[DEBUG] _check_and_update_visibility: курсор вне области, показываем оверлей")
+                    self._hidden_by_mouse = False
+                    self._show_internal()
+                    return
+
+            try:
+                class_name = win32gui.GetClassName(active_hwnd)
+                if class_name in ['MultitaskingViewFrame', 'ForegroundStaging']:
+                    self.logger.info(f"[DEBUG] _check_and_update_visibility: системное окно {class_name}, пропускаем")
+                    return
+            except:
+                pass
+
+            if active_hwnd == self._last_active_hwnd:
+                self.logger.debug(f"[DEBUG] _check_and_update_visibility: активное окно не изменилось: {active_hwnd}")
+                return
+
+            self._last_active_hwnd = active_hwnd
+            self.logger.info(f"[DEBUG] _check_and_update_visibility: активное окно изменилось на HWND={active_hwnd}")
+
+            if self._is_window_screenshot:
+                self.logger.info("[DEBUG] _check_and_update_visibility: F2-оверлей, не скрываем при переключении окон")
+                if not self.visible and self._is_visible_by_user:
+                    self.logger.info("[DEBUG] _check_and_update_visibility: F2-оверлей скрыт, показываем")
+                    if hasattr(self, '_overlay_manager') and self._overlay_manager:
+                        self._overlay_manager.show_all_sync()
+                return
+
+            # !!! ПРОВЕРЯЕМ, ЯВЛЯЕТСЯ ЛИ АКТИВНОЕ ОКНО ОКНОМ ВЫДЕЛЕНИЯ ОБЛАСТИ
+            is_selection_window = False
+
+            # Проверяем через флаг _capture_mode в родителе
+            if hasattr(self, '_overlay_manager') and self._overlay_manager:
+                parent = self._overlay_manager.parent
+                if hasattr(parent, '_capture_mode') and parent._capture_mode:
+                    is_selection_window = True
+                    self.logger.info("[DEBUG] Обнаружено окно выделения области по флагу _capture_mode")
+
+            # Проверяем через HWND селектора
+            if not is_selection_window:
+                if hasattr(self, '_overlay_manager') and self._overlay_manager:
+                    parent = self._overlay_manager.parent
+                    if hasattr(parent, '_area_selector') and parent._area_selector:
+                        try:
+                            selector_root = parent._area_selector.root
+                            if selector_root and selector_root.winfo_exists():
+                                selector_hwnd = int(selector_root.winfo_id())
+                                if selector_hwnd == active_hwnd:
+                                    is_selection_window = True
+                                    self.logger.info("[DEBUG] Обнаружено окно выделения области по HWND")
+                        except Exception as e:
+                            self.logger.debug(f"[DEBUG] Ошибка проверки HWND селектора: {e}")
+
+            # Проверяем через текст окна
+            if not is_selection_window:
+                try:
+                    window_text = win32gui.GetWindowText(active_hwnd)
+                    if window_text and "Выделите область" in window_text:
+                        is_selection_window = True
+                        self.logger.info("[DEBUG] Обнаружено окно выделения области по тексту")
+                except:
+                    pass
+
+            # ЕСЛИ ЭТО ОКНО ВЫДЕЛЕНИЯ ОБЛАСТИ - СКРЫВАЕМ ОВЕРЛЕЙ
+            if is_selection_window:
+                self.logger.info("[DEBUG] Активное окно является окном выделения области - СКРЫВАЕМ оверлей")
+                if self.visible:
+                    self._hide_internal()
+                    self.logger.info("[DEBUG] Оверлей скрыт из-за окна выделения области")
+                return
+
+            app_hwnd = None
+            try:
+                if hasattr(self.root, 'master'):
+                    master = self.root.master
+                    if master and master.winfo_exists():
+                        app_hwnd = int(master.winfo_id())
+            except:
+                pass
+
+            is_our_window = False
+
+            if hasattr(self, '_overlay_manager') and self._overlay_manager:
+                for overlay in self._overlay_manager.overlays:
+                    if overlay is not None:
+                        target_hwnd = overlay.get_target_hwnd()
+                        if target_hwnd is not None and active_hwnd == target_hwnd:
+                            is_our_window = True
+                            break
+
+            if not is_our_window:
+                is_our_window = (
+                        active_hwnd == self._target_hwnd or
+                        (app_hwnd is not None and active_hwnd == app_hwnd)
+                )
+
+            self.logger.info(
+                f"[DEBUG] _check_and_update_visibility: is_our_window={is_our_window}, visible={self.visible}, _is_visible_by_user={self._is_visible_by_user}")
+
+            if not is_our_window and self.visible:
+                self.logger.info(
+                    "[DEBUG] _check_and_update_visibility: переключились на другое окно - СКРЫВАЕМ оверлей")
+                self._hide_internal()
+            elif is_our_window and not self.visible and self._is_visible_by_user:
+                if not self._hidden_by_mouse:
+                    self.logger.info(
+                        "[DEBUG] _check_and_update_visibility: переключились на наше окно - ПОКАЗЫВАЕМ оверлей")
+                    if hasattr(self, '_overlay_manager') and self._overlay_manager:
+                        self._overlay_manager.show_all_sync()
+                else:
+                    self.logger.info("[DEBUG] _check_and_update_visibility: оверлей скрыт мышью, не показываем")
+            else:
+                self.logger.info(f"[DEBUG] _check_and_update_visibility: состояние не изменилось, ничего не делаем")
+
+        except Exception as e:
+            self.logger.warning(f"Ошибка в _check_and_update_visibility: {e}")
+            import traceback
+            self.logger.warning(traceback.format_exc())
+
     def _on_right_click(self, event):
         """Обработчик правой кнопки мыши - показывает контекстное меню через менеджер."""
         self.logger.info("[DEBUG] _on_right_click вызван")
@@ -128,10 +310,15 @@ class OverlayWindow:
         self._context_menu_visible = True
         self.logger.info("[DEBUG] _on_right_click: установлен флаг _context_menu_visible = True")
 
-        self._stop_visibility_monitor()
+        # !!! ИСПРАВЛЕНИЕ: НЕ ОСТАНАВЛИВАЕМ МОНИТОР ВИДИМОСТИ
+        # Монитор должен продолжать работать, чтобы оверлей автоскрывался как обычно
+        # self._stop_visibility_monitor()  # <-- УБРАНО!
 
         self._overlay_manager.show_context_menu(self, event.x_root, event.y_root)
         self.logger.info("[DEBUG] Контекстное меню показано через менеджер")
+
+        # Запускаем монитор закрытия меню
+        self._start_menu_close_monitor()
 
         if self.root and self.root.winfo_exists():
             self.root.after(500, self._reset_right_click_flag)
@@ -140,6 +327,39 @@ class OverlayWindow:
         """Сбрасывает флаг обработки правого клика."""
         self._right_click_processing = False
         self.logger.info("[DEBUG] _reset_right_click_flag: флаг _right_click_processing сброшен")
+
+    def _start_menu_close_monitor(self):
+        """Запускает мониторинг закрытия контекстного меню."""
+
+        def check_menu_closed():
+            if not self._context_menu_visible:
+                return
+
+            try:
+                import win32gui
+
+                active_hwnd = win32gui.GetForegroundWindow()
+
+                # Если активное окно - целевое, значит меню закрыто
+                if active_hwnd == self._target_hwnd or active_hwnd == 0:
+                    self._context_menu_visible = False
+                    self.logger.info("[DEBUG] Контекстное меню закрыто (фокус вернулся на целевое окно)")
+
+                    # !!! ИСПРАВЛЕНИЕ: НЕ ПЕРЕЗАПУСКАЕМ МОНИТОР, ОН УЖЕ РАБОТАЕТ
+                    # Монитор видимости продолжает работать непрерывно
+                    # Убираем вызов _start_visibility_monitor() чтобы не создавать дублирующиеся таймеры
+                    return
+
+                # Иначе проверяем через 100мс
+                if self.root and self.root.winfo_exists():
+                    self.root.after(100, check_menu_closed)
+
+            except Exception as e:
+                self.logger.warning(f"[DEBUG] Ошибка в мониторе меню: {e}")
+                self._context_menu_visible = False
+
+        if self.root and self.root.winfo_exists():
+            self.root.after(50, check_menu_closed)
 
     def _remove_overlay(self):
         """Удаляет этот оверлей через OverlayManager."""
@@ -548,217 +768,6 @@ class OverlayWindow:
             self.logger.warning(f"[DEBUG] Не удалось скрыть кнопку закрытия: {e}")
             self._close_button_visible = False
             self._close_button_id = None
-
-    def _start_menu_close_monitor(self):
-        """Запускает мониторинг закрытия контекстного меню."""
-
-        def check_menu_closed():
-            if not self._context_menu_visible:
-                return
-
-            try:
-                # Проверяем, видимо ли ещё меню
-                # Если меню закрыто, фокус вернётся к целевому окну
-                import win32gui
-                import win32con
-
-                active_hwnd = win32gui.GetForegroundWindow()
-
-                # Если активное окно - целевое, значит меню закрыто
-                if active_hwnd == self._target_hwnd or active_hwnd == 0:
-                    self._context_menu_visible = False
-                    self.logger.info("[DEBUG] Контекстное меню закрыто (фокус вернулся на целевое окно)")
-
-                    # Запускаем монитор видимости снова
-                    if self.auto_hide_enabled and self._is_visible_by_user:
-                        self._start_visibility_monitor()
-                    return
-
-                # Иначе проверяем через 100мс
-                if self.root and self.root.winfo_exists():
-                    self.root.after(100, check_menu_closed)
-
-            except Exception as e:
-                self.logger.warning(f"[DEBUG] Ошибка в мониторе меню: {e}")
-                self._context_menu_visible = False
-                if self.auto_hide_enabled and self._is_visible_by_user:
-                    self._start_visibility_monitor()
-
-        if self.root and self.root.winfo_exists():
-            self.root.after(50, check_menu_closed)
-
-    def _check_and_update_visibility(self):
-        """Унифицированная проверка активного окна."""
-        # Если контекстное меню открыто - пропускаем проверку
-        if self._context_menu_visible:
-            self.logger.info("[DEBUG] _check_and_update_visibility: контекстное меню открыто, пропускаем")
-            return
-
-        if not self.auto_hide_enabled or not self._is_visible_by_user:
-            self.logger.debug(
-                f"[DEBUG] _check_and_update_visibility: пропускаем (auto_hide={self.auto_hide_enabled}, is_visible_by_user={self._is_visible_by_user})")
-            return
-
-        if hasattr(self, '_overlay_manager') and self._overlay_manager:
-            if self._overlay_manager.is_dragging():
-                self.logger.debug("[DEBUG] _check_and_update_visibility: идет перетаскивание, пропускаем")
-                return
-
-        if time.time() < self._monitor_stable_time:
-            self.logger.debug(
-                f"[DEBUG] _check_and_update_visibility: монитор стабилизируется ({time.time() - self._monitor_stable_time:.2f}с)")
-            return
-
-        try:
-            import win32gui
-            import win32api
-
-            active_hwnd = win32gui.GetForegroundWindow()
-            cursor_pos = win32api.GetCursorPos()
-            cursor_x, cursor_y = cursor_pos
-
-            self.logger.info(
-                f"[DEBUG] _check_and_update_visibility: active_hwnd={active_hwnd}, target_hwnd={self._target_hwnd}, visible={self.visible}, cursor=({cursor_x},{cursor_y})")
-
-            if active_hwnd == 0:
-                self.logger.info("[DEBUG] _check_and_update_visibility: активное окно = 0, пропускаем")
-                return
-
-            # Проверяем, находится ли курсор внутри области оверлея
-            is_cursor_inside = False
-            if self._last_window_rect:
-                x1, y1, x2, y2 = self._last_window_rect
-                if x1 <= cursor_x <= x2 and y1 <= cursor_y <= y2:
-                    is_cursor_inside = True
-                    self.logger.info("[DEBUG] _check_and_update_visibility: курсор внутри области оверлея")
-
-            if is_cursor_inside and self.visible:
-                is_edit_mode = False
-                if hasattr(self, '_edit_mode_enabled'):
-                    is_edit_mode = self._edit_mode_enabled
-                if not is_edit_mode:
-                    self.logger.info("[DEBUG] _check_and_update_visibility: курсор внутри, скрываем оверлей")
-                    self._hidden_by_mouse = True
-                    self._hide_internal()
-                    return
-
-            if not is_cursor_inside and not self.visible and self._is_visible_by_user:
-                is_edit_mode = False
-                if hasattr(self, '_edit_mode_enabled'):
-                    is_edit_mode = self._edit_mode_enabled
-                if not is_edit_mode:
-                    self.logger.info("[DEBUG] _check_and_update_visibility: курсор вне области, показываем оверлей")
-                    self._hidden_by_mouse = False
-                    self._show_internal()
-                    return
-
-            try:
-                class_name = win32gui.GetClassName(active_hwnd)
-                if class_name in ['MultitaskingViewFrame', 'ForegroundStaging']:
-                    self.logger.info(f"[DEBUG] _check_and_update_visibility: системное окно {class_name}, пропускаем")
-                    return
-            except:
-                pass
-
-            if active_hwnd == self._last_active_hwnd:
-                self.logger.debug(f"[DEBUG] _check_and_update_visibility: активное окно не изменилось: {active_hwnd}")
-                return
-
-            self._last_active_hwnd = active_hwnd
-            self.logger.info(f"[DEBUG] _check_and_update_visibility: активное окно изменилось на HWND={active_hwnd}")
-
-            if self._is_window_screenshot:
-                self.logger.info("[DEBUG] _check_and_update_visibility: F2-оверлей, не скрываем при переключении окон")
-                if not self.visible and self._is_visible_by_user:
-                    self.logger.info("[DEBUG] _check_and_update_visibility: F2-оверлей скрыт, показываем")
-                    if hasattr(self, '_overlay_manager') and self._overlay_manager:
-                        self._overlay_manager.show_all_sync()
-                return
-
-            is_selection_window = False
-
-            if hasattr(self, '_overlay_manager') and self._overlay_manager:
-                parent = self._overlay_manager.parent
-                if hasattr(parent, '_capture_mode') and parent._capture_mode:
-                    is_selection_window = True
-                    self.logger.info("[DEBUG] Обнаружено окно выделения области по флагу _capture_mode")
-
-            if not is_selection_window:
-                if hasattr(self, '_overlay_manager') and self._overlay_manager:
-                    parent = self._overlay_manager.parent
-                    if hasattr(parent, '_area_selector') and parent._area_selector:
-                        try:
-                            selector_root = parent._area_selector.root
-                            if selector_root and selector_root.winfo_exists():
-                                selector_hwnd = int(selector_root.winfo_id())
-                                if selector_hwnd == active_hwnd:
-                                    is_selection_window = True
-                                    self.logger.info("[DEBUG] Обнаружено окно выделения области по HWND")
-                        except Exception as e:
-                            self.logger.debug(f"[DEBUG] Ошибка проверки HWND селектора: {e}")
-
-            if not is_selection_window:
-                try:
-                    window_text = win32gui.GetWindowText(active_hwnd)
-                    if window_text and "Выделите область" in window_text:
-                        is_selection_window = True
-                        self.logger.info("[DEBUG] Обнаружено окно выделения области по тексту")
-                except:
-                    pass
-
-            if is_selection_window:
-                self.logger.info("[DEBUG] Активное окно является окном выделения области - НЕ СКРЫВАЕМ оверлей")
-                if self.visible and self._is_visible_by_user:
-                    self._ensure_topmost()
-                return
-
-            app_hwnd = None
-            try:
-                if hasattr(self.root, 'master'):
-                    master = self.root.master
-                    if master and master.winfo_exists():
-                        app_hwnd = int(master.winfo_id())
-            except:
-                pass
-
-            is_our_window = False
-
-            if hasattr(self, '_overlay_manager') and self._overlay_manager:
-                for overlay in self._overlay_manager.overlays:
-                    if overlay is not None:
-                        target_hwnd = overlay.get_target_hwnd()
-                        if target_hwnd is not None and active_hwnd == target_hwnd:
-                            is_our_window = True
-                            break
-
-            if not is_our_window:
-                is_our_window = (
-                        active_hwnd == self._target_hwnd or
-                        (app_hwnd is not None and active_hwnd == app_hwnd)
-                )
-
-            self.logger.info(
-                f"[DEBUG] _check_and_update_visibility: is_our_window={is_our_window}, visible={self.visible}, _is_visible_by_user={self._is_visible_by_user}")
-
-            if not is_our_window and self.visible:
-                self.logger.info(
-                    "[DEBUG] _check_and_update_visibility: переключились на другое окно - СКРЫВАЕМ оверлей")
-                self._hide_internal()
-            elif is_our_window and not self.visible and self._is_visible_by_user:
-                if not self._hidden_by_mouse:
-                    self.logger.info(
-                        "[DEBUG] _check_and_update_visibility: переключились на наше окно - ПОКАЗЫВАЕМ оверлей")
-                    if hasattr(self, '_overlay_manager') and self._overlay_manager:
-                        self._overlay_manager.show_all_sync()
-                else:
-                    self.logger.info("[DEBUG] _check_and_update_visibility: оверлей скрыт мышью, не показываем")
-            else:
-                self.logger.info(f"[DEBUG] _check_and_update_visibility: состояние не изменилось, ничего не делаем")
-
-        except Exception as e:
-            self.logger.warning(f"Ошибка в _check_and_update_visibility: {e}")
-            import traceback
-            self.logger.warning(traceback.format_exc())
 
     def _start_menu_monitor(self):
         """Запускает мониторинг контекстного меню."""
