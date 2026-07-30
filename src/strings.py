@@ -10,6 +10,7 @@ def get_russian_main_strings():
     return {
         'app_title': "Перевод скриншотов",
         'ready': "● Готов",
+        'ready_notification': "✅ Переводчик готов",
         'starting': "● Запуск...",
         'starting_browser': "● Запуск браузера...",
         'capturing': "● Захват...",
@@ -22,8 +23,8 @@ def get_russian_main_strings():
         'shown': "показан",
         'hidden': "скрыт",
         'overlay_remove_hint': "Наведите на оверлей и нажмите ESC для удаления",
-        'edit_mode_on': "ВКЛЮЧЕН",  # <-- ДОБАВЛЯЕМ
-        'edit_mode_off': "ВЫКЛЮЧЕН",  # <-- ДОБАВЛЯЕМ
+        'edit_mode_on': "ВКЛЮЧЕН",
+        'edit_mode_off': "ВЫКЛЮЧЕН",
     }
 
 
@@ -32,6 +33,7 @@ def get_english_main_strings():
     return {
         'app_title': "Screen Translator",
         'ready': "● Ready",
+        'ready_notification': "✅ Translator Ready",
         'starting': "● Starting...",
         'starting_browser': "● Starting browser...",
         'capturing': "● Capturing...",
@@ -44,8 +46,130 @@ def get_english_main_strings():
         'shown': "shown",
         'hidden': "hidden",
         'overlay_remove_hint': "Hover over overlay and press ESC to remove",
-        'edit_mode_on': "ON",  # <-- ДОБАВЛЯЕМ
-        'edit_mode_off': "OFF",  # <-- ДОБАВЛЯЕМ
+        'edit_mode_on': "ON",
+        'edit_mode_off': "OFF",
+    }
+
+
+def get_russian_settings_window_strings():
+    """Возвращает русские строки для окна настроек."""
+    return {
+        'settings_browser_section': "🌐 Браузер",
+        'settings_browser_path': "Путь к браузеру:",
+        'settings_browser_path_hint': "Оставьте пустым для автоматического поиска",
+        'settings_browser_browse': "Обзор...",
+        'settings_browser_using': "✅ Используется: {}",
+        'settings_browser_not_specified': "⚠️ Браузер не указан (будет выполнен автоматический поиск)",
+        'settings_browser_path_label': "Путь: {}",
+        'settings_save': "💾 Сохранить",
+        'settings_cancel': "❌ Отмена",
+        'settings_ui': "🎨 Интерфейс",
+        'auto_windowed_fullscreen': "Фулскрин → оконный фулскрин при F3",
+        'auto_replace_translated': "🔄 Автозамена переведённых областей",
+        'auto_replace_translated_tooltip': "Автоматически показывать перевод при обнаружении той же области на экране",
+        'edit_mode': "✏️ Режим редактирования",
+        'edit_mode_tooltip': "Разрешить перемещение и удаление оверлеев",
+        'settings_monitor': "🔍 Мониторинг",
+        'settings_confidence': "Порог уверенности для поиска областей:",
+        'settings_monitor_delay': "Задержка между сканированиями:",
+        'settings_scan_fullscreen': "Сканировать весь экран (а не только активное окно)",
+        'settings_scan_fullscreen_tooltip': "Если выключено — сканируется только активное окно",
+        'settings_hotkeys': "⌨️ Горячие клавиши",
+        'settings_hotkeys_action_screenshot': "Скриншот окна",
+        'settings_hotkeys_action_area': "Выделение области",
+        'settings_hotkeys_action_toggle_overlay': "Показать/скрыть оверлей",
+        'settings_hotkeys_action_clear_all': "Удалить все оверлеи",
+        'settings_hotkeys_action_edit_mode': "Режим редактирования",
+        'settings_hotkeys_action_auto_replace': "Автозамена (F6)",
+        'settings_hotkeys_press_key': "Нажмите клавишу...",
+        'settings_hotkeys_click_to_change': "Нажмите для изменения",
+        'settings_language': "🌐 Язык",
+        'settings_language_label': "Выберите язык:",
+        'settings_reset': "↺ Сбросить",
+        'settings_reset_confirm': "Сбросить все настройки к стандартным?",
+        'settings_reset_done': "Настройки сброшены к стандартным",
+        'settings_saved': "Настройки сохранены",
+        'settings_title': "Настройки программы",
+        'show_translation_indicator': "Показывать индикатор перевода",
+        'target_language': "Целевой язык перевода:",
+        'browser_not_found': "Браузер не найден",
+        'browser_not_found_msg': "Не удалось найти Яндекс Браузер или Google Chrome.\n\nДля работы программы необходим один из этих браузеров.",
+        'auto_hide_overlay': "Автоскрытие оверлея при переключении окон",
+        'browser_find_title': "Выберите браузер",
+        'browser_find_header': "Выберите браузер для использования:",
+        'browser_find_recommend': "💡 Рекомендуется использовать Яндекс Браузер для лучшей совместимости",
+        'browser_find_hint': "Кликните по браузеру для выбора, затем нажмите 'Выбрать'",
+        'browser_find_select': "✅ Выбрать",
+        'browser_find_cancel': "❌ Отмена",
+        'browser_find_path_label': "Выберите браузер из списка",
+        'browser_find_selected': "✅ Выбран: {}",
+        'browser_find_path_prefix': "📁 {}",
+        'browser_find_not_found': "Браузеры не найдены.",
+        'browser_find_install_hint': "Убедитесь, что установлен один из браузеров:\n• Google Chrome\n• Yandex Browser (Яндекс Браузер)",
+        'browser_find_not_found_recommend': "💡 Рекомендуется использовать Яндекс Браузер для лучшей совместимости.",
+        'browser_find_warning_title': "Внимание",
+        'browser_find_warning_message': "Выберите браузер из списка",
+    }
+
+
+def get_english_settings_window_strings():
+    """Возвращает английские строки для окна настроек."""
+    return {
+        'settings_browser_section': "🌐 Browser",
+        'settings_browser_path': "Browser path:",
+        'settings_browser_path_hint': "Leave empty for automatic search",
+        'settings_browser_browse': "Browse...",
+        'settings_browser_using': "✅ Using: {}",
+        'settings_browser_not_specified': "⚠️ Browser not specified (automatic search will be performed)",
+        'settings_browser_path_label': "Path: {}",
+        'settings_save': "💾 Save",
+        'settings_cancel': "❌ Cancel",
+        'settings_ui': "🎨 Interface",
+        'auto_windowed_fullscreen': "Fullscreen → windowed fullscreen on F3",
+        'auto_replace_translated': "🔄 Auto-replace translated areas",
+        'auto_replace_translated_tooltip': "Automatically show translation when the same area appears on screen",
+        'edit_mode': "✏️ Edit mode",
+        'edit_mode_tooltip': "Allow moving and removing overlays",
+        'settings_monitor': "🔍 Monitoring",
+        'settings_confidence': "Confidence threshold for area detection:",
+        'settings_monitor_delay': "Scan interval:",
+        'settings_scan_fullscreen': "Scan entire screen (not just active window)",
+        'settings_scan_fullscreen_tooltip': "If disabled, only the active window is scanned",
+        'settings_hotkeys': "⌨️ Hotkeys",
+        'settings_hotkeys_action_screenshot': "Screenshot",
+        'settings_hotkeys_action_area': "Area selection",
+        'settings_hotkeys_action_toggle_overlay': "Show/Hide overlay",
+        'settings_hotkeys_action_clear_all': "Clear all overlays",
+        'settings_hotkeys_action_edit_mode': "Edit mode",
+        'settings_hotkeys_action_auto_replace': "Auto-replace (F6)",
+        'settings_hotkeys_press_key': "Press a key...",
+        'settings_hotkeys_click_to_change': "Click to change",
+        'settings_language': "🌐 Language",
+        'settings_language_label': "Select language:",
+        'settings_reset': "↺ Reset",
+        'settings_reset_confirm': "Reset all settings to defaults?",
+        'settings_reset_done': "Settings reset to defaults",
+        'settings_saved': "Settings saved",
+        'settings_title': "Program Settings",
+        'show_translation_indicator': "Show translation indicator",
+        'target_language': "Target translation language:",
+        'browser_not_found': "Browser not found",
+        'browser_not_found_msg': "Could not find Yandex Browser or Google Chrome.\n\nOne of these browsers is required for the program to work.",
+        'auto_hide_overlay': "Auto-hide overlay when switching windows",
+        'browser_find_title': "Select Browser",
+        'browser_find_header': "Select browser to use:",
+        'browser_find_recommend': "💡 Yandex Browser is recommended for best compatibility",
+        'browser_find_hint': "Click on a browser to select it, then click 'Select'",
+        'browser_find_select': "✅ Select",
+        'browser_find_cancel': "❌ Cancel",
+        'browser_find_path_label': "Select a browser from the list",
+        'browser_find_selected': "✅ Selected: {}",
+        'browser_find_path_prefix': "📁 {}",
+        'browser_find_not_found': "Browsers not found.",
+        'browser_find_install_hint': "Make sure one of the following browsers is installed:\n• Google Chrome\n• Yandex Browser",
+        'browser_find_not_found_recommend': "💡 Yandex Browser is recommended for best compatibility.",
+        'browser_find_warning_title': "Warning",
+        'browser_find_warning_message': "Select a browser from the list",
     }
 
 
@@ -56,7 +180,7 @@ def get_russian_button_strings():
         'btn_area': "Выбрать область",
         'btn_toggle': "Показать/скрыть",
         'btn_clear_all': "Очистить все",
-        'hotkeys_info': "F2 - скриншот окна | F3 - область | F1 - оверлей | F4 - удалить все | ESC - удалить оверлей под мышью",
+        'hotkeys_info': "F2 - скриншот окна | F3 - область | F1 - оверлей | F4 - удалить все | F5 - редактирование | F6 - автозамена | ESC - удалить оверлей под мышью",
         'edit_mode': "Редактирование",
         'clear_all': "Очистить все",
     }
@@ -69,11 +193,10 @@ def get_english_button_strings():
         'btn_area': "Select area",
         'btn_toggle': "Show/Hide",
         'btn_clear_all': "Clear all",
-        'hotkeys_info': "F2 - window screenshot | F3 - area | F1 - overlay | F4 - clear all | ESC - remove overlay under cursor",
+        'hotkeys_info': "F2 - window screenshot | F3 - area | F1 - overlay | F4 - clear all | F5 - edit mode | F6 - auto-replace | ESC - remove overlay under cursor",
         'edit_mode': "Edit mode",
         'clear_all': "Clear all",
     }
-
 
 
 def get_russian_settings_strings():
@@ -121,90 +244,6 @@ def get_english_menu_strings():
         'menu_shortcuts': "Shortcuts",
         'menu_about': "About",
         'menu_open_folder': "📁 Open App Folder",
-    }
-
-
-def get_russian_settings_window_strings():
-    """Возвращает русские строки для окна настроек."""
-    return {
-        'settings_browser_section': "🌐 Браузер",
-        'settings_browser_path': "Путь к браузеру:",
-        'settings_browser_path_hint': "Оставьте пустым для автоматического поиска",
-        'settings_browser_browse': "Обзор...",
-        'settings_browser_using': "✅ Используется: {}",
-        'settings_browser_not_specified': "⚠️ Браузер не указан (будет выполнен автоматический поиск)",
-        'settings_browser_path_label': "Путь: {}",
-        'settings_save': "💾 Сохранить",
-        'settings_cancel': "❌ Отмена",
-        'settings_ui': "🎨 Интерфейс",
-        'auto_windowed_fullscreen': "Фулскрин → оконный фулскрин при F3",
-        'edit_mode': "✏️ Режим редактирования",
-        'edit_mode_tooltip': "Разрешить перемещение и удаление оверлеев",
-        'settings_hotkeys': "⌨️ Горячие клавиши",
-        'settings_hotkeys_action_screenshot': "Скриншот окна",
-        'settings_hotkeys_action_area': "Выделение области",
-        'settings_hotkeys_action_toggle_overlay': "Показать/скрыть оверлей",
-        'settings_hotkeys_action_clear_all': "Удалить все оверлеи",
-        'settings_hotkeys_action_edit_mode': "Режим редактирования",
-        'settings_hotkeys_press_key': "Нажмите клавишу...",
-        'settings_hotkeys_click_to_change': "Нажмите для изменения",
-        # НОВЫЕ СТРОКИ ДЛЯ ПОИСКА БРАУЗЕРОВ
-        'browser_find_title': "Выберите браузер",
-        'browser_find_header': "Выберите браузер для использования:",
-        'browser_find_recommend': "💡 Рекомендуется использовать Яндекс Браузер для лучшей совместимости",
-        'browser_find_hint': "Кликните по браузеру для выбора, затем нажмите 'Выбрать'",
-        'browser_find_select': "✅ Выбрать",
-        'browser_find_cancel': "❌ Отмена",
-        'browser_find_path_label': "Выберите браузер из списка",
-        'browser_find_selected': "✅ Выбран: {}",
-        'browser_find_path_prefix': "📁 {}",
-        'browser_find_not_found': "Браузеры не найдены.",
-        'browser_find_install_hint': "Убедитесь, что установлен один из браузеров:\n• Google Chrome\n• Yandex Browser (Яндекс Браузер)",
-        'browser_find_not_found_recommend': "💡 Рекомендуется использовать Яндекс Браузер для лучшей совместимости.",
-        'browser_find_warning_title': "Внимание",
-        'browser_find_warning_message': "Выберите браузер из списка",
-    }
-
-
-def get_english_settings_window_strings():
-    """Возвращает английские строки для окна настроек."""
-    return {
-        'settings_browser_section': "🌐 Browser",
-        'settings_browser_path': "Browser path:",
-        'settings_browser_path_hint': "Leave empty for automatic search",
-        'settings_browser_browse': "Browse...",
-        'settings_browser_using': "✅ Using: {}",
-        'settings_browser_not_specified': "⚠️ Browser not specified (automatic search will be performed)",
-        'settings_browser_path_label': "Path: {}",
-        'settings_save': "💾 Save",
-        'settings_cancel': "❌ Cancel",
-        'settings_ui': "🎨 Interface",
-        'auto_windowed_fullscreen': "Fullscreen → windowed fullscreen on F3",
-        'edit_mode': "✏️ Edit mode",
-        'edit_mode_tooltip': "Allow moving and removing overlays",
-        'settings_hotkeys': "⌨️ Hotkeys",
-        'settings_hotkeys_action_screenshot': "Screenshot",
-        'settings_hotkeys_action_area': "Area selection",
-        'settings_hotkeys_action_toggle_overlay': "Show/Hide overlay",
-        'settings_hotkeys_action_clear_all': "Clear all overlays",
-        'settings_hotkeys_action_edit_mode': "Edit mode",
-        'settings_hotkeys_press_key': "Press a key...",
-        'settings_hotkeys_click_to_change': "Click to change",
-        # НОВЫЕ СТРОКИ ДЛЯ ПОИСКА БРАУЗЕРОВ
-        'browser_find_title': "Select Browser",
-        'browser_find_header': "Select browser to use:",
-        'browser_find_recommend': "💡 Yandex Browser is recommended for best compatibility",
-        'browser_find_hint': "Click on a browser to select it, then click 'Select'",
-        'browser_find_select': "✅ Select",
-        'browser_find_cancel': "❌ Cancel",
-        'browser_find_path_label': "Select a browser from the list",
-        'browser_find_selected': "✅ Selected: {}",
-        'browser_find_path_prefix': "📁 {}",
-        'browser_find_not_found': "Browsers not found.",
-        'browser_find_install_hint': "Make sure one of the following browsers is installed:\n• Google Chrome\n• Yandex Browser",
-        'browser_find_not_found_recommend': "💡 Yandex Browser is recommended for best compatibility.",
-        'browser_find_warning_title': "Warning",
-        'browser_find_warning_message': "Select a browser from the list",
     }
 
 
@@ -302,7 +341,6 @@ def get_english_shortcuts_strings():
         'shortcuts_title': "Keyboard Shortcuts",
         'shortcuts_text': "📋 Keyboard shortcuts:\n\nF2 - Take window screenshot\nF3 - Select area to translate\nF1 - Show/Hide overlay\nESC - Close overlay",
     }
-
 
 
 def get_strings(language_code='ru'):

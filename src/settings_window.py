@@ -15,21 +15,19 @@ class SettingsWindow:
     """Окно настроек программы"""
 
     def __init__(self, app_instance, settings, on_settings_changed):
-        self.app = app_instance  # Сохраняем ссылку на экземпляр приложения
-        self.parent = app_instance.root  # Родительское окно - главное окно приложения
+        self.app = app_instance
+        self.parent = app_instance.root
         self.settings = settings
         self.on_settings_changed = on_settings_changed
 
         self.window = tk.Toplevel(self.parent)
         self.window.title(self.get_string('settings_title'))
-        # Увеличиваем размер окна
-        self.window.geometry("700x600")
-        self.window.minsize(650, 550)
+        # Увеличиваем размер окна для всех вкладок
+        self.window.geometry("750x750")
+        self.window.minsize(700, 650)
         self.window.resizable(True, True)
         self.window.configure(bg='#1e1e1e')
 
-        # НЕ используем transient, чтобы окно было независимым
-        # self.window.transient(self.parent)  # УБРАНО!
         self.window.grab_set()
 
         # Явно разрешаем максимизацию через системное меню
@@ -37,10 +35,8 @@ class SettingsWindow:
             import ctypes
             from ctypes import wintypes
 
-            # Получаем HWND окна
             hwnd = int(self.window.winfo_id())
 
-            # Константы Windows
             GWL_STYLE = -16
             WS_MAXIMIZEBOX = 0x00010000
             WS_MINIMIZEBOX = 0x00020000
@@ -48,14 +44,10 @@ class SettingsWindow:
             WS_CAPTION = 0x00C00000
             WS_THICKFRAME = 0x00040000
 
-            # Получаем текущие стили окна
             style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_STYLE)
-
-            # Добавляем все необходимые флаги для полноценного окна
             new_style = style | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_SYSMENU | WS_CAPTION | WS_THICKFRAME
             ctypes.windll.user32.SetWindowLongW(hwnd, GWL_STYLE, new_style)
 
-            # Обновляем окно, чтобы применить изменения
             SWP_FRAMECHANGED = 0x0020
             SWP_NOMOVE = 0x0002
             SWP_NOSIZE = 0x0001
@@ -69,13 +61,9 @@ class SettingsWindow:
             self.logger.info("Установлены стили окна с кнопкой максимизации")
 
         except Exception as e:
-            # Если не удалось установить стиль, пробуем альтернативный метод
             try:
-                # Альтернативный метод через tkinter
                 self.window.attributes('-toolwindow', False)
                 self.window.attributes('-topmost', False)
-
-                # Принудительно показываем системное меню
                 self.window.protocol("WM_DELETE_WINDOW", self.window.destroy)
             except:
                 pass
@@ -102,6 +90,515 @@ class SettingsWindow:
         self.window.deiconify()
         self.window.lift()
         self.window.focus_force()
+
+    def create_widgets(self):
+        main_container = tk.Frame(self.window, bg='#1e1e1e')
+        main_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=15)
+
+        title = tk.Label(main_container, text=self.get_string('settings_title'),
+                         font=('Segoe UI', 16, 'bold'), bg='#1e1e1e', fg='white')
+        title.pack(pady=(0, 15))
+
+        # --- СОЗДАЕМ ВКЛАДКИ (NOTEBOOK) ---
+        style = ttk.Style()
+        style.theme_use('clam')
+        style.configure('TNotebook', background='#1e1e1e', borderwidth=0)
+        style.configure('TNotebook.Tab', background='#2d2d2d', foreground='#cccccc',
+                        padding=[12, 6], font=('Segoe UI', 10))
+        style.map('TNotebook.Tab', background=[('selected', '#3c3c3c')],
+                  foreground=[('selected', 'white')])
+
+        notebook = ttk.Notebook(main_container)
+        notebook.pack(fill=tk.BOTH, expand=True, pady=(0, 12))
+
+        # --- ВКЛАДКА 1: БРАУЗЕР ---
+        browser_frame = tk.Frame(notebook, bg='#1e1e1e')
+        notebook.add(browser_frame, text="  🌐 " + self.get_string('settings_browser_section'))
+
+        browser_inner = tk.Frame(browser_frame, bg='#1e1e1e')
+        browser_inner.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        current_path = self.settings.get_browser_path()
+        lang = self.settings.get_language()
+
+        if current_path and os.path.exists(current_path):
+            if 'Yandex' in current_path or 'Яндекс' in current_path:
+                browser_name = "Yandex Browser" if lang == 'en' else "Яндекс Браузер"
+            elif 'Google' in current_path or 'Chrome' in current_path:
+                browser_name = "Google Chrome"
+            elif 'Brave' in current_path:
+                browser_name = "Brave"
+            elif 'Vivaldi' in current_path:
+                browser_name = "Vivaldi"
+            elif 'Opera' in current_path:
+                browser_name = "Opera"
+            elif 'Edge' in current_path or 'Microsoft' in current_path:
+                browser_name = "Microsoft Edge"
+            elif 'Chromium' in current_path:
+                browser_name = "Chromium"
+            else:
+                browser_name = Path(current_path).name
+
+            status_text = self.get_string('settings_browser_using').format(browser_name)
+            status_color = '#4CAF50'
+        else:
+            status_text = self.get_string('settings_browser_not_specified')
+            status_color = '#ff9800'
+
+        status_label = tk.Label(
+            browser_inner,
+            text=status_text,
+            bg='#1e1e1e',
+            fg=status_color,
+            font=('Segoe UI', 10, 'bold'),
+            anchor='w'
+        )
+        status_label.pack(anchor=tk.W, pady=(0, 8), fill=tk.X)
+
+        path_frame = tk.Frame(browser_inner, bg='#1e1e1e')
+        path_frame.pack(fill=tk.X, pady=5)
+
+        self.browser_path_var = tk.StringVar()
+
+        path_entry_frame = tk.Frame(path_frame, bg='#1e1e1e')
+        path_entry_frame.pack(fill=tk.X)
+
+        self.browser_path_entry = tk.Entry(
+            path_entry_frame,
+            textvariable=self.browser_path_var,
+            bg='#2d2d2d',
+            fg='white',
+            insertbackground='white',
+            font=('Segoe UI', 9),
+            relief=tk.FLAT
+        )
+        self.browser_path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5), ipady=3)
+
+        browse_btn = tk.Button(
+            path_entry_frame,
+            text=self.get_string('settings_browser_browse'),
+            command=self.browse_browser,
+            bg='#3c3c3c',
+            fg='white',
+            font=('Segoe UI', 9),
+            relief=tk.FLAT,
+            padx=8,
+            pady=5,
+            cursor='hand2',
+            width=8
+        )
+        browse_btn.pack(side=tk.RIGHT, padx=(0, 5))
+
+        find_btn = tk.Button(
+            path_entry_frame,
+            text="🔍 Найти",
+            command=self.find_chromium_browsers,
+            bg='#2196F3',
+            fg='white',
+            font=('Segoe UI', 9, 'bold'),
+            relief=tk.FLAT,
+            padx=8,
+            pady=5,
+            cursor='hand2',
+            width=6
+        )
+        find_btn.pack(side=tk.RIGHT)
+
+        self._add_tooltip(find_btn, "Найти все установленные Chromium-браузеры")
+
+        tk.Label(
+            browser_inner,
+            text=self.get_string('settings_browser_path_hint'),
+            bg='#1e1e1e',
+            fg='#666666',
+            font=('Segoe UI', 8),
+            wraplength=480,
+            anchor='w',
+            justify='left'
+        ).pack(anchor=tk.W, pady=(5, 0), fill=tk.X)
+
+        # --- ВКЛАДКА 2: ИНТЕРФЕЙС ---
+        ui_frame = tk.Frame(notebook, bg='#1e1e1e')
+        notebook.add(ui_frame, text="  🎨 " + self.get_string('settings_ui'))
+
+        ui_inner = tk.Frame(ui_frame, bg='#1e1e1e')
+        ui_inner.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        self.show_indicator_var = tk.BooleanVar(value=self.settings.get_show_translation_indicator())
+        indicator_cb = tk.Checkbutton(
+            ui_inner,
+            text=self.get_string('show_translation_indicator'),
+            variable=self.show_indicator_var,
+            bg='#1e1e1e',
+            fg='white',
+            selectcolor='#1e1e1e',
+            font=('Segoe UI', 10),
+            padx=5,
+            pady=4
+        )
+        indicator_cb.pack(anchor=tk.W, pady=4)
+
+        self.auto_hide_var = tk.BooleanVar(value=self.settings.get_auto_hide_overlay())
+        auto_hide_cb = tk.Checkbutton(
+            ui_inner,
+            text=self.get_string('auto_hide_overlay'),
+            variable=self.auto_hide_var,
+            bg='#1e1e1e',
+            fg='white',
+            selectcolor='#1e1e1e',
+            font=('Segoe UI', 10),
+            padx=5,
+            pady=4
+        )
+        auto_hide_cb.pack(anchor=tk.W, pady=4)
+
+        self.auto_windowed_fullscreen_var = tk.BooleanVar(value=self.settings.get_auto_windowed_fullscreen())
+        auto_fullscreen_cb = tk.Checkbutton(
+            ui_inner,
+            text=self.get_string('auto_windowed_fullscreen'),
+            variable=self.auto_windowed_fullscreen_var,
+            bg='#1e1e1e',
+            fg='white',
+            selectcolor='#1e1e1e',
+            font=('Segoe UI', 10),
+            padx=5,
+            pady=4
+        )
+        auto_fullscreen_cb.pack(anchor=tk.W, pady=4)
+
+        self.auto_replace_translated_var = tk.BooleanVar(value=self.settings.get_auto_replace_translated())
+        auto_replace_cb = tk.Checkbutton(
+            ui_inner,
+            text=self.get_string('auto_replace_translated'),
+            variable=self.auto_replace_translated_var,
+            bg='#1e1e1e',
+            fg='white',
+            selectcolor='#1e1e1e',
+            font=('Segoe UI', 10),
+            padx=5,
+            pady=4
+        )
+        auto_replace_cb.pack(anchor=tk.W, pady=4)
+        self._add_tooltip(auto_replace_cb, self.get_string('auto_replace_translated_tooltip'))
+
+        self.edit_mode_var = tk.BooleanVar(value=self.settings.get_edit_mode_enabled())
+        edit_mode_cb = tk.Checkbutton(
+            ui_inner,
+            text=self.get_string('edit_mode'),
+            variable=self.edit_mode_var,
+            bg='#1e1e1e',
+            fg='white',
+            selectcolor='#1e1e1e',
+            font=('Segoe UI', 10),
+            padx=5,
+            pady=4
+        )
+        edit_mode_cb.pack(anchor=tk.W, pady=4)
+        self._add_tooltip(edit_mode_cb, self.get_string('edit_mode_tooltip'))
+
+        # --- ВКЛАДКА 3: МОНИТОРИНГ ---
+        monitor_frame = tk.Frame(notebook, bg='#1e1e1e')
+        notebook.add(monitor_frame, text="  🔍 " + self.get_string('settings_monitor'))
+
+        monitor_inner = tk.Frame(monitor_frame, bg='#1e1e1e')
+        monitor_inner.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        tk.Label(
+            monitor_inner,
+            text=self.get_string('settings_confidence'),
+            bg='#1e1e1e',
+            fg='#cccccc',
+            font=('Segoe UI', 10),
+            anchor='w'
+        ).pack(anchor=tk.W, pady=(0, 3))
+
+        self.confidence_var = tk.DoubleVar(value=self.settings.get_confidence_threshold())
+        confidence_scale = tk.Scale(
+            monitor_inner,
+            from_=0.5, to=1.0, resolution=0.01,
+            orient=tk.HORIZONTAL,
+            variable=self.confidence_var,
+            bg='#3c3c3c',
+            fg='white',
+            highlightthickness=0,
+            width=16,
+            length=300
+        )
+        confidence_scale.pack(fill=tk.X, pady=(0, 8))
+
+        confidence_label = tk.Label(
+            monitor_inner,
+            text=f"{self.confidence_var.get() * 100:.0f}%",
+            bg='#1e1e1e',
+            fg='#4CAF50',
+            font=('Segoe UI', 11, 'bold')
+        )
+        confidence_label.pack(anchor=tk.W, pady=(0, 8))
+
+        def update_confidence_label(val):
+            confidence_label.config(text=f"{float(val) * 100:.0f}%")
+
+        confidence_scale.configure(command=update_confidence_label)
+
+        tk.Label(
+            monitor_inner,
+            text=self.get_string('settings_monitor_delay'),
+            bg='#1e1e1e',
+            fg='#cccccc',
+            font=('Segoe UI', 10),
+            anchor='w'
+        ).pack(anchor=tk.W, pady=(8, 3))
+
+        self.monitor_delay_var = tk.DoubleVar(value=self.settings.get_monitor_delay())
+        delay_scale = tk.Scale(
+            monitor_inner,
+            from_=0.1, to=2.0, resolution=0.05,
+            orient=tk.HORIZONTAL,
+            variable=self.monitor_delay_var,
+            bg='#3c3c3c',
+            fg='white',
+            highlightthickness=0,
+            width=16,
+            length=300
+        )
+        delay_scale.pack(fill=tk.X, pady=(0, 8))
+
+        delay_label = tk.Label(
+            monitor_inner,
+            text=f"{self.monitor_delay_var.get():.2f} сек",
+            bg='#1e1e1e',
+            fg='#4CAF50',
+            font=('Segoe UI', 11, 'bold')
+        )
+        delay_label.pack(anchor=tk.W, pady=(0, 8))
+
+        def update_delay_label(val):
+            delay_label.config(text=f"{float(val):.2f} сек")
+
+        delay_scale.configure(command=update_delay_label)
+
+        # --- ВКЛАДКА 4: ГОРЯЧИЕ КЛАВИШИ ---
+        hotkey_frame = tk.Frame(notebook, bg='#1e1e1e')
+        notebook.add(hotkey_frame, text="  ⌨️ " + self.get_string('settings_hotkeys'))
+
+        hotkey_inner = tk.Frame(hotkey_frame, bg='#1e1e1e')
+        hotkey_inner.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        tk.Label(
+            hotkey_inner,
+            text=self.get_string('settings_hotkeys_click_to_change'),
+            bg='#1e1e1e',
+            fg='#888888',
+            font=('Segoe UI', 9),
+            anchor='w'
+        ).pack(anchor=tk.W, pady=(0, 10))
+
+        self.hotkey_vars = {}
+        self.hotkey_buttons = {}
+        self.hotkey_capturing = {}
+
+        hotkey_actions = [
+            ("screenshot", "settings_hotkeys_action_screenshot"),
+            ("area", "settings_hotkeys_action_area"),
+            ("toggle_overlay", "settings_hotkeys_action_toggle_overlay"),
+            ("clear_all", "settings_hotkeys_action_clear_all"),
+            ("edit_mode", "settings_hotkeys_action_edit_mode"),
+            ("auto_replace", "settings_hotkeys_action_auto_replace"),
+        ]
+
+        for action, label_key in hotkey_actions:
+            row_frame = tk.Frame(hotkey_inner, bg='#1e1e1e')
+            row_frame.pack(fill=tk.X, pady=3)
+
+            label = tk.Label(
+                row_frame,
+                text=self.get_string(label_key) + ":",
+                bg='#1e1e1e',
+                fg='#cccccc',
+                font=('Segoe UI', 10),
+                width=22,
+                anchor='w'
+            )
+            label.pack(side=tk.LEFT)
+
+            current_key = self.settings.get_hotkey(action)
+            display_key = current_key.upper() if current_key else "—"
+
+            btn = tk.Button(
+                row_frame,
+                text=display_key,
+                command=lambda a=action: self._start_hotkey_capture(a),
+                bg='#2d2d2d',
+                fg='white',
+                font=('Segoe UI', 9, 'bold'),
+                relief=tk.FLAT,
+                padx=14,
+                pady=4,
+                cursor='hand2',
+                width=12
+            )
+            btn.pack(side=tk.RIGHT)
+
+            self.hotkey_buttons[action] = btn
+            self.hotkey_vars[action] = tk.StringVar(value=current_key)
+            self.hotkey_capturing[action] = False
+
+            self._add_tooltip(btn, self.get_string('settings_hotkeys_click_to_change'))
+
+        # --- КНОПКИ ВНИЗУ ---
+        btn_frame = tk.Frame(main_container, bg='#1e1e1e')
+        btn_frame.pack(fill=tk.X, pady=(8, 0))
+
+        save_btn = tk.Button(
+            btn_frame,
+            text=self.get_string('settings_save'),
+            command=self.save_settings,
+            bg='#4CAF50',
+            fg='white',
+            font=('Segoe UI', 10, 'bold'),
+            relief=tk.FLAT,
+            height=1,
+            pady=10,
+            cursor='hand2'
+        )
+        save_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 4), ipady=1)
+
+        reset_btn = tk.Button(
+            btn_frame,
+            text=self.get_string('settings_reset'),
+            command=self.reset_settings,
+            bg='#3c3c3c',
+            fg='white',
+            font=('Segoe UI', 10),
+            relief=tk.FLAT,
+            height=1,
+            pady=10,
+            cursor='hand2'
+        )
+        reset_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(4, 4), ipady=1)
+
+        cancel_btn = tk.Button(
+            btn_frame,
+            text=self.get_string('settings_cancel'),
+            command=self.window.destroy,
+            bg='#3c3c3c',
+            fg='white',
+            font=('Segoe UI', 10),
+            relief=tk.FLAT,
+            height=1,
+            pady=10,
+            cursor='hand2'
+        )
+        cancel_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(4, 0), ipady=1)
+
+        self.window.bind('<Escape>', lambda e: self._cancel_hotkey_capture())
+
+    def save_settings(self):
+        """Сохраняет настройки."""
+        logger = logging.getLogger(__name__)
+
+        # Проверяем, не идет ли захват клавиши
+        for action in self.hotkey_capturing:
+            if self.hotkey_capturing[action]:
+                self.hotkey_capturing[action] = False
+                self.hotkey_buttons[action].config(
+                    bg='#2d2d2d',
+                    text=self.hotkey_vars[action].get().upper() or "—"
+                )
+                self.window.unbind_all('<Key>')
+                self.window.unbind_all('<Escape>')
+                if hasattr(self, 'app') and hasattr(self.app, 'set_actions_blocked'):
+                    self.app.set_actions_blocked(False)
+                break
+
+        # Сохраняем старый путь для сравнения
+        old_browser_path = self.settings.get_browser_path()
+        new_browser_path = self.browser_path_var.get().strip()
+
+        if new_browser_path and not os.path.exists(new_browser_path):
+            messagebox.showerror(
+                "Ошибка",
+                "Указанный файл не существует!\nПроверьте путь."
+            )
+            return
+
+        # Сохраняем настройки
+        self.settings.set_browser_path(new_browser_path)
+        self.settings.set_show_translation_indicator(self.show_indicator_var.get())
+        self.settings.set_auto_hide_overlay(self.auto_hide_var.get())
+        self.settings.set_auto_windowed_fullscreen(self.auto_windowed_fullscreen_var.get())
+        self.settings.set_auto_replace_translated(self.auto_replace_translated_var.get())
+        self.settings.set_confidence_threshold(self.confidence_var.get())
+        self.settings.set_monitor_delay(self.monitor_delay_var.get())
+        self.settings.set("scan_fullscreen", self.scan_fullscreen_var.get())
+
+        edit_mode = self.edit_mode_var.get()
+        self.settings.set_edit_mode_enabled(edit_mode)
+
+        # Сохраняем горячие клавиши
+        if hasattr(self, 'hotkey_vars'):
+            for action, var in self.hotkey_vars.items():
+                key = var.get().strip()
+                if key:
+                    self.settings.set_hotkey(action, key)
+
+        self.settings.save()
+
+        # Обновляем монитор, если он существует
+        if hasattr(self, 'app') and hasattr(self.app, 'translation_monitor'):
+            monitor = self.app.translation_monitor
+            if monitor:
+                monitor.set_confidence(self.confidence_var.get())
+                monitor.set_delay(self.monitor_delay_var.get())
+                monitor.set_scan_fullscreen(self.scan_fullscreen_var.get())
+
+                # Если автозамена включена и есть шаблоны — запускаем монитор
+                if self.auto_replace_translated_var.get() and monitor.templates:
+                    if not monitor.is_running():
+                        monitor.start()
+                else:
+                    if monitor.is_running():
+                        monitor.stop()
+
+        # Проверяем, изменился ли путь к браузеру
+        browser_path_changed = (old_browser_path != new_browser_path)
+        if browser_path_changed:
+            logger.info(f"[SETTINGS] Путь к браузеру изменен: {old_browser_path} -> {new_browser_path}")
+            if hasattr(self.app, 'ready') and self.app.ready:
+                logger.info("[SETTINGS] Браузер активен, выполняем перезапуск...")
+                if hasattr(self.app, 'update_status'):
+                    self.app.update_status("● " + self.app.get_string('starting_browser'), '#ff9800')
+                if hasattr(self.app, '_restart_translator'):
+                    self.app._restart_translator()
+            else:
+                logger.info("[SETTINGS] Браузер не активен, перезапуск не требуется")
+                if hasattr(self.app, 'update_status'):
+                    self.app.update_status("● Настройки сохранены", '#4CAF50')
+
+        # Обновляем состояние режима редактирования
+        if hasattr(self, 'app') and hasattr(self.app, '_edit_mode_enabled'):
+            self.app._edit_mode_enabled = edit_mode
+            if hasattr(self.app, 'btn_edit_mode'):
+                status_text = "ВКЛЮЧЕН" if edit_mode else "ВЫКЛЮЧЕН"
+                self.app.btn_edit_mode.config(
+                    text=f"✏️ Редактирование: {status_text} (F5)",
+                    bg='#4CAF50' if edit_mode else '#ff9800'
+                )
+            self.app.logger.info(f"Режим редактирования из настроек: {edit_mode}")
+
+        # Перерегистрируем горячие клавиши
+        if hasattr(self, 'app') and hasattr(self.app, 'setup_hotkeys'):
+            self.app.setup_hotkeys()
+
+        # Обновляем текст на кнопках
+        if hasattr(self, 'app') and hasattr(self.app, 'update_hotkey_buttons'):
+            self.app.update_hotkey_buttons()
+
+        if self.on_settings_changed:
+            self.on_settings_changed()
+
+        # Закрываем окно настроек
+        self.window.destroy()
 
     def reset_hotkey_capture_state(self):
         """Принудительно сбрасывает состояние захвата клавиш."""
@@ -434,93 +931,6 @@ class SettingsWindow:
                 break
 
         logger.info("[HOTKEYS_SETTINGS] ===== ОТМЕНА ЗАХВАТА ЗАВЕРШЕНА =====")
-
-    def save_settings(self):
-        """Сохраняет настройки."""
-        logger = logging.getLogger(__name__)
-
-        # Проверяем, не идет ли захват клавиши
-        for action in self.hotkey_capturing:
-            if self.hotkey_capturing[action]:
-                self.hotkey_capturing[action] = False
-                self.hotkey_buttons[action].config(
-                    bg='#2d2d2d',
-                    text=self.hotkey_vars[action].get().upper() or "—"
-                )
-                self.window.unbind_all('<Key>')
-                self.window.unbind_all('<Escape>')
-                if hasattr(self, 'app') and hasattr(self.app, 'set_actions_blocked'):
-                    self.app.set_actions_blocked(False)
-                break
-
-        # Сохраняем старый путь для сравнения
-        old_browser_path = self.settings.get_browser_path()
-        new_browser_path = self.browser_path_var.get().strip()
-
-        if new_browser_path and not os.path.exists(new_browser_path):
-            messagebox.showerror(
-                "Ошибка",
-                "Указанный файл не существует!\nПроверьте путь."
-            )
-            return
-
-        # Сохраняем настройки
-        self.settings.set_browser_path(new_browser_path)
-        self.settings.set_show_translation_indicator(self.show_indicator_var.get())
-        self.settings.set_auto_hide_overlay(self.auto_hide_var.get())
-        self.settings.set_auto_windowed_fullscreen(self.auto_windowed_fullscreen_var.get())
-
-        edit_mode = self.edit_mode_var.get()
-        self.settings.set_edit_mode_enabled(edit_mode)
-
-        # Сохраняем горячие клавиши
-        if hasattr(self, 'hotkey_vars'):
-            for action, var in self.hotkey_vars.items():
-                key = var.get().strip()
-                if key:
-                    self.settings.set_hotkey(action, key)
-
-        self.settings.save()
-
-        # Проверяем, изменился ли путь к браузеру
-        browser_path_changed = (old_browser_path != new_browser_path)
-        if browser_path_changed:
-            logger.info(f"[SETTINGS] Путь к браузеру изменен: {old_browser_path} -> {new_browser_path}")
-            if hasattr(self.app, 'ready') and self.app.ready:
-                logger.info("[SETTINGS] Браузер активен, выполняем перезапуск...")
-                if hasattr(self.app, 'update_status'):
-                    self.app.update_status("● " + self.app.get_string('starting_browser'), '#ff9800')
-                if hasattr(self.app, '_restart_translator'):
-                    self.app._restart_translator()
-            else:
-                logger.info("[SETTINGS] Браузер не активен, перезапуск не требуется")
-                if hasattr(self.app, 'update_status'):
-                    self.app.update_status("● Настройки сохранены", '#4CAF50')
-
-        # Обновляем состояние режима редактирования
-        if hasattr(self, 'app') and hasattr(self.app, '_edit_mode_enabled'):
-            self.app._edit_mode_enabled = edit_mode
-            if hasattr(self.app, 'btn_edit_mode'):
-                status_text = "ВКЛЮЧЕН" if edit_mode else "ВЫКЛЮЧЕН"
-                self.app.btn_edit_mode.config(
-                    text=f"✏️ Редактирование: {status_text} (F5)",
-                    bg='#4CAF50' if edit_mode else '#ff9800'
-                )
-            self.app.logger.info(f"Режим редактирования из настроек: {edit_mode}")
-
-        # Перерегистрируем горячие клавиши
-        if hasattr(self, 'app') and hasattr(self.app, 'setup_hotkeys'):
-            self.app.setup_hotkeys()
-
-        # Обновляем текст на кнопках
-        if hasattr(self, 'app') and hasattr(self.app, 'update_hotkey_buttons'):
-            self.app.update_hotkey_buttons()
-
-        if self.on_settings_changed:
-            self.on_settings_changed()
-
-        # Закрываем окно настроек
-        self.window.destroy()
 
     def find_chromium_browsers(self):
         """Находит установленные Яндекс Браузер и Google Chrome, показывает список для выбора."""
@@ -905,315 +1315,6 @@ class SettingsWindow:
 
         logger.info("[BROWSER_FIND] Диалог выбора браузера создан и отображен")
         dialog.focus_force()
-
-    def create_widgets(self):
-        main_container = tk.Frame(self.window, bg='#1e1e1e')
-        main_container.pack(fill=tk.BOTH, expand=True, padx=25, pady=20)
-
-        title = tk.Label(main_container, text=self.get_string('settings_title'),
-                         font=('Segoe UI', 18, 'bold'), bg='#1e1e1e', fg='white')
-        title.pack(pady=(0, 20))
-
-        # --- СОЗДАЕМ ВКЛАДКИ (NOTEBOOK) ---
-        style = ttk.Style()
-        style.theme_use('clam')
-        style.configure('TNotebook', background='#1e1e1e', borderwidth=0)
-        style.configure('TNotebook.Tab', background='#2d2d2d', foreground='#cccccc',
-                        padding=[15, 8], font=('Segoe UI', 11))
-        style.map('TNotebook.Tab', background=[('selected', '#3c3c3c')],
-                  foreground=[('selected', 'white')])
-
-        notebook = ttk.Notebook(main_container)
-        notebook.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
-
-        # --- ВКЛАДКА 1: БРАУЗЕР ---
-        browser_frame = tk.Frame(notebook, bg='#1e1e1e')
-        notebook.add(browser_frame, text="  🌐 " + self.get_string('settings_browser_section'))
-
-        browser_inner = tk.Frame(browser_frame, bg='#1e1e1e')
-        browser_inner.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-        current_path = self.settings.get_browser_path()
-        lang = self.settings.get_language()
-
-        if current_path and os.path.exists(current_path):
-            if 'Yandex' in current_path or 'Яндекс' in current_path:
-                browser_name = "Yandex Browser" if lang == 'en' else "Яндекс Браузер"
-            elif 'Google' in current_path or 'Chrome' in current_path:
-                browser_name = "Google Chrome"
-            elif 'Brave' in current_path:
-                browser_name = "Brave"
-            elif 'Vivaldi' in current_path:
-                browser_name = "Vivaldi"
-            elif 'Opera' in current_path:
-                browser_name = "Opera"
-            elif 'Edge' in current_path or 'Microsoft' in current_path:
-                browser_name = "Microsoft Edge"
-            elif 'Chromium' in current_path:
-                browser_name = "Chromium"
-            else:
-                browser_name = Path(current_path).name
-
-            status_text = self.get_string('settings_browser_using').format(browser_name)
-            status_color = '#4CAF50'
-        else:
-            status_text = self.get_string('settings_browser_not_specified')
-            status_color = '#ff9800'
-
-        status_label = tk.Label(
-            browser_inner,
-            text=status_text,
-            bg='#1e1e1e',
-            fg=status_color,
-            font=('Segoe UI', 11, 'bold'),
-            anchor='w'
-        )
-        status_label.pack(anchor=tk.W, pady=(0, 10), fill=tk.X)
-
-        path_frame = tk.Frame(browser_inner, bg='#1e1e1e')
-        path_frame.pack(fill=tk.X, pady=5)
-
-        self.browser_path_var = tk.StringVar()
-
-        path_entry_frame = tk.Frame(path_frame, bg='#1e1e1e')
-        path_entry_frame.pack(fill=tk.X)
-
-        self.browser_path_entry = tk.Entry(
-            path_entry_frame,
-            textvariable=self.browser_path_var,
-            bg='#2d2d2d',
-            fg='white',
-            insertbackground='white',
-            font=('Segoe UI', 10),
-            relief=tk.FLAT
-        )
-        self.browser_path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5), ipady=4)
-
-        # Кнопка "Обзор"
-        browse_btn = tk.Button(
-            path_entry_frame,
-            text=self.get_string('settings_browser_browse'),
-            command=self.browse_browser,
-            bg='#3c3c3c',
-            fg='white',
-            font=('Segoe UI', 9),
-            relief=tk.FLAT,
-            padx=10,
-            pady=6,
-            cursor='hand2',
-            width=10
-        )
-        browse_btn.pack(side=tk.RIGHT, padx=(0, 5))
-
-        # НОВАЯ КНОПКА "Найти браузеры"
-        find_btn = tk.Button(
-            path_entry_frame,
-            text="🔍 Найти",
-            command=self.find_chromium_browsers,
-            bg='#2196F3',
-            fg='white',
-            font=('Segoe UI', 9, 'bold'),
-            relief=tk.FLAT,
-            padx=10,
-            pady=6,
-            cursor='hand2',
-            width=8
-        )
-        find_btn.pack(side=tk.RIGHT)
-
-        # Подсказка для кнопки
-        self._add_tooltip(find_btn, "Найти все установленные Chromium-браузеры")
-
-        tk.Label(
-            browser_inner,
-            text=self.get_string('settings_browser_path_hint'),
-            bg='#1e1e1e',
-            fg='#666666',
-            font=('Segoe UI', 9),
-            wraplength=480,
-            anchor='w',
-            justify='left'
-        ).pack(anchor=tk.W, pady=(5, 0), fill=tk.X)
-
-        # --- ВКЛАДКА 2: ИНТЕРФЕЙС ---
-        ui_frame = tk.Frame(notebook, bg='#1e1e1e')
-        notebook.add(ui_frame, text="  🎨 " + self.get_string('settings_ui'))
-
-        ui_inner = tk.Frame(ui_frame, bg='#1e1e1e')
-        ui_inner.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-        self.show_indicator_var = tk.BooleanVar(value=self.settings.get_show_translation_indicator())
-        indicator_cb = tk.Checkbutton(
-            ui_inner,
-            text=self.get_string('show_translation_indicator'),
-            variable=self.show_indicator_var,
-            bg='#1e1e1e',
-            fg='white',
-            selectcolor='#1e1e1e',
-            font=('Segoe UI', 11),
-            padx=5,
-            pady=5
-        )
-        indicator_cb.pack(anchor=tk.W, pady=6)
-
-        self.auto_hide_var = tk.BooleanVar(value=self.settings.get_auto_hide_overlay())
-        auto_hide_cb = tk.Checkbutton(
-            ui_inner,
-            text=self.get_string('auto_hide_overlay'),
-            variable=self.auto_hide_var,
-            bg='#1e1e1e',
-            fg='white',
-            selectcolor='#1e1e1e',
-            font=('Segoe UI', 11),
-            padx=5,
-            pady=5
-        )
-        auto_hide_cb.pack(anchor=tk.W, pady=6)
-
-        self.auto_windowed_fullscreen_var = tk.BooleanVar(value=self.settings.get_auto_windowed_fullscreen())
-        auto_fullscreen_cb = tk.Checkbutton(
-            ui_inner,
-            text=self.get_string('auto_windowed_fullscreen'),
-            variable=self.auto_windowed_fullscreen_var,
-            bg='#1e1e1e',
-            fg='white',
-            selectcolor='#1e1e1e',
-            font=('Segoe UI', 11),
-            padx=5,
-            pady=5
-        )
-        auto_fullscreen_cb.pack(anchor=tk.W, pady=6)
-
-        self.edit_mode_var = tk.BooleanVar(value=self.settings.get_edit_mode_enabled())
-        edit_mode_cb = tk.Checkbutton(
-            ui_inner,
-            text=self.get_string('edit_mode'),
-            variable=self.edit_mode_var,
-            bg='#1e1e1e',
-            fg='white',
-            selectcolor='#1e1e1e',
-            font=('Segoe UI', 11),
-            padx=5,
-            pady=5
-        )
-        edit_mode_cb.pack(anchor=tk.W, pady=6)
-        self._add_tooltip(edit_mode_cb, self.get_string('edit_mode_tooltip'))
-
-        # --- ВКЛАДКА 3: ГОРЯЧИЕ КЛАВИШИ ---
-        hotkey_frame = tk.Frame(notebook, bg='#1e1e1e')
-        notebook.add(hotkey_frame, text="  ⌨️ " + self.get_string('settings_hotkeys'))
-
-        hotkey_inner = tk.Frame(hotkey_frame, bg='#1e1e1e')
-        hotkey_inner.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-        # Информационная метка
-        tk.Label(
-            hotkey_inner,
-            text=self.get_string('settings_hotkeys_click_to_change'),
-            bg='#1e1e1e',
-            fg='#888888',
-            font=('Segoe UI', 10),
-            anchor='w'
-        ).pack(anchor=tk.W, pady=(0, 15))
-
-        self.hotkey_vars = {}
-        self.hotkey_buttons = {}
-        self.hotkey_capturing = {}
-
-        hotkey_actions = [
-            ("screenshot", "settings_hotkeys_action_screenshot"),
-            ("area", "settings_hotkeys_action_area"),
-            ("toggle_overlay", "settings_hotkeys_action_toggle_overlay"),
-            ("clear_all", "settings_hotkeys_action_clear_all"),
-            ("edit_mode", "settings_hotkeys_action_edit_mode"),
-        ]
-
-        for action, label_key in hotkey_actions:
-            row_frame = tk.Frame(hotkey_inner, bg='#1e1e1e')
-            row_frame.pack(fill=tk.X, pady=5)
-
-            label = tk.Label(
-                row_frame,
-                text=self.get_string(label_key) + ":",
-                bg='#1e1e1e',
-                fg='#cccccc',
-                font=('Segoe UI', 11),
-                width=25,
-                anchor='w'
-            )
-            label.pack(side=tk.LEFT)
-
-            current_key = self.settings.get_hotkey(action)
-            display_key = current_key.upper() if current_key else "—"
-
-            btn = tk.Button(
-                row_frame,
-                text=display_key,
-                command=lambda a=action: self._start_hotkey_capture(a),
-                bg='#2d2d2d',
-                fg='white',
-                font=('Segoe UI', 10, 'bold'),
-                relief=tk.FLAT,
-                padx=20,
-                pady=5,
-                cursor='hand2',
-                width=14
-            )
-            btn.pack(side=tk.RIGHT)
-
-            self.hotkey_buttons[action] = btn
-            self.hotkey_vars[action] = tk.StringVar(value=current_key)
-            self.hotkey_capturing[action] = False
-
-            self._add_tooltip(btn, self.get_string('settings_hotkeys_click_to_change'))
-
-        # --- КНОПКИ ВНИЗУ ---
-        btn_frame = tk.Frame(main_container, bg='#1e1e1e')
-        btn_frame.pack(fill=tk.X, pady=(10, 0))
-
-        save_btn = tk.Button(
-            btn_frame,
-            text=self.get_string('settings_save'),
-            command=self.save_settings,
-            bg='#4CAF50',
-            fg='white',
-            font=('Segoe UI', 11, 'bold'),
-            relief=tk.FLAT,
-            height=1,
-            pady=12,
-            cursor='hand2'
-        )
-        save_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 5), ipady=2)
-
-        reset_btn = tk.Button(
-            btn_frame,
-            text=self.get_string('settings_reset'),
-            command=self.reset_settings,
-            bg='#3c3c3c',
-            fg='white',
-            font=('Segoe UI', 11),
-            relief=tk.FLAT,
-            height=1,
-            pady=12,
-            cursor='hand2'
-        )
-        reset_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(5, 5), ipady=2)
-
-        cancel_btn = tk.Button(
-            btn_frame,
-            text=self.get_string('settings_cancel'),
-            command=self.window.destroy,
-            bg='#3c3c3c',
-            fg='white',
-            font=('Segoe UI', 11),
-            relief=tk.FLAT,
-            height=1,
-            pady=12,
-            cursor='hand2'
-        )
-        cancel_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(5, 0), ipady=2)
-
-        self.window.bind('<Escape>', lambda e: self._cancel_hotkey_capture())
 
     def reset_settings(self):
         """Сбрасывает настройки к значениям по умолчанию"""

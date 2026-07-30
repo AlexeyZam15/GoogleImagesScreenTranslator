@@ -29,6 +29,163 @@ class ScreenshotCapturer:
         self._is_fullscreen = False
         self.camera = None
 
+    def _capture_standard_window(self, hwnd: int) -> Optional[Image.Image]:
+        """Стандартный метод захвата через BitBlt (для обычных окон)."""
+        try:
+            rect = win32gui.GetWindowRect(hwnd)
+            x1, y1, x2, y2 = rect
+            width = x2 - x1
+            height = y2 - y1
+
+            if width <= 0 or height <= 0:
+                self.logger.error(f"Некорректные размеры окна: {width}x{height}")
+                return None
+
+            self._last_window_rect = rect
+
+            # Пробуем BitBlt
+            hwnd_dc = win32gui.GetWindowDC(hwnd)
+            dc = win32ui.CreateDCFromHandle(hwnd_dc)
+            mem_dc = dc.CreateCompatibleDC()
+
+            bitmap = win32ui.CreateBitmap()
+            bitmap.CreateCompatibleBitmap(dc, width, height)
+            mem_dc.SelectObject(bitmap)
+
+            mem_dc.BitBlt((0, 0), (width, height), dc, (0, 0), win32con.SRCCOPY)
+
+            bmpinfo = bitmap.GetInfo()
+            bmpstr = bitmap.GetBitmapBits(True)
+
+            img = Image.frombuffer(
+                'RGB',
+                (bmpinfo['bmWidth'], bmpinfo['bmHeight']),
+                bmpstr, 'raw', 'BGRX', 0, 1
+            )
+
+            dc.DeleteDC()
+            mem_dc.DeleteDC()
+            win32gui.ReleaseDC(hwnd, hwnd_dc)
+            win32gui.DeleteObject(bitmap.GetHandle())
+
+            self.logger.info(f"Скриншот через BitBlt: {width}x{height}, HWND={hwnd}")
+            return img
+
+        except Exception as e:
+            self.logger.error(f"Ошибка стандартного захвата: {e}")
+            return None
+
+    def _capture_with_printwindow(self, hwnd: int) -> Optional[Image.Image]:
+        """Захват через PrintWindow (для браузеров и DX-приложений)."""
+        try:
+            rect = win32gui.GetWindowRect(hwnd)
+            x1, y1, x2, y2 = rect
+            width = x2 - x1
+            height = y2 - y1
+
+            if width <= 0 or height <= 0:
+                self.logger.error(f"Некорректные размеры окна: {width}x{height}")
+                return None
+
+            self._last_window_rect = rect
+
+            hwnd_dc = win32gui.GetWindowDC(hwnd)
+            dc = win32ui.CreateDCFromHandle(hwnd_dc)
+            mem_dc = dc.CreateCompatibleDC()
+
+            bitmap = win32ui.CreateBitmap()
+            bitmap.CreateCompatibleBitmap(dc, width, height)
+            mem_dc.SelectObject(bitmap)
+
+            # Константа для PrintWindow
+            PW_RENDERFULLCONTENT = 0x00000002
+            user32 = ctypes.windll.user32
+
+            result = user32.PrintWindow(hwnd, mem_dc.GetSafeHdc(), PW_RENDERFULLCONTENT)
+
+            if not result:
+                result = user32.PrintWindow(hwnd, mem_dc.GetSafeHdc(), 0)
+
+            if not result:
+                dc.DeleteDC()
+                mem_dc.DeleteDC()
+                win32gui.ReleaseDC(hwnd, hwnd_dc)
+                self.logger.warning(f"PrintWindow не сработал для окна {hwnd}")
+                return None
+
+            bmpinfo = bitmap.GetInfo()
+            bmpstr = bitmap.GetBitmapBits(True)
+
+            img = Image.frombuffer(
+                'RGB',
+                (bmpinfo['bmWidth'], bmpinfo['bmHeight']),
+                bmpstr, 'raw', 'BGRX', 0, 1
+            )
+
+            dc.DeleteDC()
+            mem_dc.DeleteDC()
+            win32gui.ReleaseDC(hwnd, hwnd_dc)
+            win32gui.DeleteObject(bitmap.GetHandle())
+
+            self.logger.info(f"Скриншот через PrintWindow: {width}x{height}, HWND={hwnd}")
+            return img
+
+        except Exception as e:
+            self.logger.error(f"Ошибка PrintWindow захвата: {e}")
+            return None
+
+    def capture_active_window(self) -> Optional[Image.Image]:
+        """Захватывает скриншот активного окна"""
+        try:
+            hwnd = win32gui.GetForegroundWindow()
+            if not hwnd:
+                self.logger.error("Не удалось получить активное окно")
+                return None
+
+            # Проверяем, не является ли активное окно нашим оверлеем
+            import win32con
+            try:
+                class_name = win32gui.GetClassName(hwnd)
+                window_text = win32gui.GetWindowText(hwnd)
+                if class_name == "TkTopLevel" and window_text == "Перевод":
+                    if self._last_hwnd is not None:
+                        self.logger.info(f"Активное окно - оверлей, используем сохраненный HWND: {self._last_hwnd}")
+                        hwnd = self._last_hwnd
+                    else:
+                        target_hwnd = self._find_target_window()
+                        if target_hwnd:
+                            hwnd = target_hwnd
+                            self.logger.info(f"Найдено целевое окно через EnumWindows: {hwnd}")
+                        else:
+                            return None
+            except Exception as e:
+                self.logger.warning(f"Ошибка проверки активного окна: {e}")
+
+            self._last_hwnd = hwnd
+            self._is_fullscreen = self.is_window_fullscreen(hwnd)
+            self.logger.info(f"Окно {hwnd} определено как {'полноэкранное' if self._is_fullscreen else 'обычное'}")
+
+            if self._is_fullscreen:
+                self.logger.info("Обнаружено полноэкранное приложение, используем DXcam")
+                return self._capture_with_dxcam(hwnd)
+            else:
+                self.logger.info("Обычное окно, пробуем захват...")
+
+                # Сначала пробуем PrintWindow (лучше для браузеров)
+                img = self._capture_with_printwindow(hwnd)
+                if img:
+                    return img
+
+                # Если PrintWindow не сработал - пробуем BitBlt
+                self.logger.info("PrintWindow не сработал, пробуем BitBlt")
+                return self._capture_standard_window(hwnd)
+
+        except Exception as e:
+            self.logger.error(f"Ошибка захвата скриншота: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
     def _find_target_window(self) -> Optional[int]:
         """Находит целевое окно (не оверлей) через EnumWindows"""
         import win32gui
@@ -171,50 +328,6 @@ class ScreenshotCapturer:
             self.logger.error(f"Ошибка получения размеров окна: {e}")
             return None
 
-    def capture_active_window(self) -> Optional[Image.Image]:
-        """Захватывает скриншот активного окна"""
-        try:
-            hwnd = win32gui.GetForegroundWindow()
-            if not hwnd:
-                self.logger.error("Не удалось получить активное окно")
-                return None
-
-            # Проверяем, не является ли активное окно нашим оверлеем
-            import win32con
-            try:
-                class_name = win32gui.GetClassName(hwnd)
-                window_text = win32gui.GetWindowText(hwnd)
-                if class_name == "TkTopLevel" and window_text == "Перевод":
-                    if self._last_hwnd is not None:
-                        self.logger.info(f"Активное окно - оверлей, используем сохраненный HWND: {self._last_hwnd}")
-                        hwnd = self._last_hwnd
-                    else:
-                        target_hwnd = self._find_target_window()
-                        if target_hwnd:
-                            hwnd = target_hwnd
-                            self.logger.info(f"Найдено целевое окно через EnumWindows: {hwnd}")
-                        else:
-                            return None
-            except Exception as e:
-                self.logger.warning(f"Ошибка проверки активного окна: {e}")
-
-            self._last_hwnd = hwnd
-            self._is_fullscreen = self.is_window_fullscreen(hwnd)
-            self.logger.info(f"Окно {hwnd} определено как {'полноэкранное' if self._is_fullscreen else 'обычное'}")
-
-            if self._is_fullscreen:
-                self.logger.info("Обнаружено полноэкранное приложение, используем DXcam")
-                return self._capture_with_dxcam(hwnd)
-            else:
-                self.logger.info("Обычное окно, используем BitBlt")
-                return self._capture_standard_window(hwnd)
-
-        except Exception as e:
-            self.logger.error(f"Ошибка захвата скриншота: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
-
     def is_last_window_fullscreen(self) -> bool:
         """Возвращает, было ли последнее захваченное окно полноэкранным"""
         return getattr(self, '_is_fullscreen', False)
@@ -222,51 +335,6 @@ class ScreenshotCapturer:
     def get_last_hwnd(self) -> Optional[int]:
         """Возвращает HWND последнего захваченного окна"""
         return getattr(self, '_last_hwnd', None)
-
-    def _capture_standard_window(self, hwnd: int) -> Optional[Image.Image]:
-        """Стандартный метод захвата через BitBlt (для обычных окон)"""
-        try:
-            rect = win32gui.GetWindowRect(hwnd)
-            x1, y1, x2, y2 = rect
-            width = x2 - x1
-            height = y2 - y1
-
-            if width <= 0 or height <= 0:
-                self.logger.error(f"Некорректные размеры окна: {width}x{height}")
-                return None
-
-            self._last_window_rect = rect
-
-            hwnd_dc = win32gui.GetWindowDC(hwnd)
-            dc = win32ui.CreateDCFromHandle(hwnd_dc)
-            mem_dc = dc.CreateCompatibleDC()
-
-            bitmap = win32ui.CreateBitmap()
-            bitmap.CreateCompatibleBitmap(dc, width, height)
-            mem_dc.SelectObject(bitmap)
-
-            mem_dc.BitBlt((0, 0), (width, height), dc, (0, 0), win32con.SRCCOPY)
-
-            bmpinfo = bitmap.GetInfo()
-            bmpstr = bitmap.GetBitmapBits(True)
-
-            img = Image.frombuffer(
-                'RGB',
-                (bmpinfo['bmWidth'], bmpinfo['bmHeight']),
-                bmpstr, 'raw', 'BGRX', 0, 1
-            )
-
-            dc.DeleteDC()
-            mem_dc.DeleteDC()
-            win32gui.ReleaseDC(hwnd, hwnd_dc)
-            win32gui.DeleteObject(bitmap.GetHandle())
-
-            self.logger.info(f"Скриншот через BitBlt: {width}x{height}, HWND={hwnd}")
-            return img
-
-        except Exception as e:
-            self.logger.error(f"Ошибка стандартного захвата: {e}")
-            return None
 
     def _capture_with_dxcam(self, hwnd: int) -> Optional[Image.Image]:
         """
