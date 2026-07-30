@@ -281,7 +281,7 @@ class TranslationMonitor:
                     try:
                         overlay = template_data['overlay']
                         if overlay.visible:
-                            overlay.hide()
+                            overlay.hide(by_user=False)  # <-- by_user=False
                     except:
                         pass
             return
@@ -307,7 +307,7 @@ class TranslationMonitor:
                         try:
                             overlay = template_data['overlay']
                             if overlay.visible:
-                                overlay.hide()
+                                overlay.hide(by_user=False)  # <-- by_user=False
                                 self.logger.info(f"Шаблон #{idx} НЕ НАЙДЕН, скрываем оверлей")
                         except:
                             pass
@@ -419,7 +419,7 @@ class TranslationMonitor:
         self.delay_sec = max(0.1, delay)
 
     def _monitor_loop(self):
-        """Основной цикл мониторинга - проверяет ТОЛЬКО шаблоны активного окна."""
+        """Основной цикл мониторинга — проверяет ТОЛЬКО шаблоны активного окна."""
         last_time = time.time()
         self.logger.info("[MONITOR] Цикл мониторинга запущен")
 
@@ -453,6 +453,20 @@ class TranslationMonitor:
                         time.sleep(0.05)
                         continue
 
+                    # === ПРОВЕРКА: ЯВЛЯЕТСЯ ЛИ АКТИВНОЕ ОКНО ОКНОМ ВЫДЕЛЕНИЯ ===
+                    is_selection_window = False
+                    try:
+                        if hasattr(self, 'parent') and self.parent:
+                            parent = self.parent
+                            if hasattr(parent, '_capture_mode') and parent._capture_mode:
+                                is_selection_window = True
+                    except:
+                        pass
+
+                    if is_selection_window:
+                        time.sleep(0.05)
+                        continue
+
                     # === ПРОВЕРЯЕМ ТОЛЬКО ШАБЛОНЫ ДЛЯ АКТИВНОГО ОКНА ===
                     for template_data in self.templates:
                         if not template_data.get('enabled', True):
@@ -462,14 +476,13 @@ class TranslationMonitor:
                         if not target_hwnd:
                             continue
 
-                        # === ЕСЛИ ОКНО НЕ АКТИВНО - ПРОПУСКАЕМ ЭТОТ ШАБЛОН ===
+                        # === ЕСЛИ ОКНО НЕ АКТИВНО — СКРЫВАЕМ ОВЕРЛЕЙ, НО НЕ УДАЛЯЕМ ===
                         if target_hwnd != active_hwnd:
-                            # Если оверлей виден, но окно не активно - скрываем
                             if template_data.get('overlay'):
                                 try:
                                     overlay = template_data['overlay']
                                     if overlay.visible:
-                                        overlay.hide()
+                                        overlay.hide(by_user=False)
                                         self.logger.info(f"[MONITOR] Оверлей скрыт - окно {target_hwnd} не активно")
                                 except:
                                     pass
@@ -484,8 +497,9 @@ class TranslationMonitor:
                                         try:
                                             overlay = template_data['overlay']
                                             if overlay.visible:
-                                                overlay.hide()
-                                                self.logger.info(f"[MONITOR] Окно недоступно, скрываем оверлей")
+                                                overlay.hide(by_user=False)
+                                                self.logger.info(
+                                                    f"[MONITOR] Окно {target_hwnd} недоступно, скрываем оверлей")
                                         except:
                                             pass
                                 continue

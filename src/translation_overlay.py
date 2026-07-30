@@ -23,55 +23,78 @@ class TranslationOverlay:
         self._status_text = "Перевод..."
         self._close_after = None
 
-    def _ensure_topmost(self):
-        """Гарантирует, что оверлей находится поверх всех окон"""
+    def hide(self):
+        """Скрывает оверлей с полной очисткой"""
+        self._stop_animation = True
+        self.visible = False
+        self._close_window()
+
+    def _close_window(self):
+        """Закрывает окно с полной очисткой всех ссылок"""
         try:
-            if not self.root or not self.root.winfo_exists():
-                return
+            self.visible = False
+            self._stop_animation = True
 
-            self.root.lift()
-            self.root.attributes('-topmost', True)
+            if self.root is not None:
+                try:
+                    if self.root.winfo_exists():
+                        print("[DEBUG] Закрытие окна прогресса...")
+                        self.root.destroy()
+                        print("[DEBUG] Окно прогресса закрыто")
+                except Exception as e:
+                    print(f"[DEBUG] Ошибка при закрытии окна: {e}")
+                finally:
+                    self.root = None
+                    self.progress = None
+                    self.status_label = None
 
+        except Exception as e:
+            print(f"[DEBUG] Ошибка при закрытии окна: {e}")
+            self.root = None
+            self.progress = None
+            self.status_label = None
+
+    def finish(self):
+        """Завершает перевод - останавливает анимацию и закрывает окно"""
+        print(f"[DEBUG] Перевод завершен, закрываем окно прогресса")
+        self._stop_animation = True
+
+        if self.root is not None:
             try:
-                hwnd = int(self.root.winfo_id())
-                win32gui.SetWindowPos(
-                    hwnd,
-                    win32con.HWND_TOPMOST,
-                    0, 0, 0, 0,
-                    win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE | win32con.SWP_SHOWWINDOW
-                )
-            except:
-                pass
-
-        except Exception as e:
-            print(f"[DEBUG] _ensure_topmost ошибка: {e}")
-
-    def show(self, text="Перевод..."):
-        """Показывает оверлей с индикатором"""
-        try:
-            if self.visible:
-                print(f"[DEBUG] Оверлей уже виден")
-                return
-
-            self._stop_animation = False
-            self._status_text = text
-            self.visible = True
-
-            self._create_window()
-            print(f"[DEBUG] TranslationOverlay.show() - окно создано")
-
-        except Exception as e:
-            print(f"Ошибка при создании оверлея: {e}")
-            import traceback
-            traceback.print_exc()
+                if self.root.winfo_exists():
+                    self.root.after(0, self._set_finished_ui)
+                else:
+                    print("[DEBUG] Окно уже закрыто, пропускаем")
+                    self.visible = False
+                    self.root = None
+                    self.progress = None
+                    self.status_label = None
+            except Exception as e:
+                print(f"[DEBUG] Ошибка при завершении: {e}")
+                self._close_window()
+        else:
+            print("[DEBUG] Нет активного окна для завершения")
+            self.visible = False
 
     def _create_window(self):
         """Создает окно оверлея как Toplevel от главного окна"""
         try:
             import tkinter as tk
             print(f"[DEBUG] _create_window() - начат")
-            print(f"[DEBUG] self.parent = {self.parent}")
 
+            # === ЗАЩИТА: ЕСЛИ ОКНО УЖЕ СУЩЕСТВУЕТ, ЗАКРЫВАЕМ ЕГО ===
+            if self.root is not None:
+                try:
+                    if self.root.winfo_exists():
+                        print("[DEBUG] _create_window: существующее окно найдено, закрываем")
+                        self.root.destroy()
+                except:
+                    pass
+                self.root = None
+                self.progress = None
+                self.status_label = None
+
+            # === ПРОВЕРЯЕМ РОДИТЕЛЯ ===
             if not self.parent:
                 root = tk._default_root
                 if root:
@@ -117,8 +140,13 @@ class TranslationOverlay:
             main = tk.Frame(self.root, bg='#1e1e1e', bd=2, relief=tk.RAISED)
             main.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
             main.config(takefocus=False)
-            main.bind('<Button-1>', lambda e: "break")
-            main.bind('<ButtonRelease-1>', lambda e: "break")
+
+            # === ПРОВЕРКА: СУЩЕСТВУЕТ ЛИ ВИДЖЕТ ПЕРЕД ПРИВЯЗКОЙ ===
+            if main.winfo_exists():
+                main.bind('<Button-1>', lambda e: "break")
+                main.bind('<ButtonRelease-1>', lambda e: "break")
+            else:
+                print("[DEBUG] main виджет не существует, пропускаем привязку")
 
             self.status_label = tk.Label(
                 main,
@@ -129,14 +157,18 @@ class TranslationOverlay:
             )
             self.status_label.pack(pady=(15, 10))
             self.status_label.config(takefocus=False)
-            self.status_label.bind('<Button-1>', lambda e: "break")
-            self.status_label.bind('<ButtonRelease-1>', lambda e: "break")
+
+            if self.status_label.winfo_exists():
+                self.status_label.bind('<Button-1>', lambda e: "break")
+                self.status_label.bind('<ButtonRelease-1>', lambda e: "break")
 
             progress_frame = tk.Frame(main, bg='#1e1e1e')
             progress_frame.pack(fill=tk.X, padx=20, pady=(5, 15))
             progress_frame.config(takefocus=False)
-            progress_frame.bind('<Button-1>', lambda e: "break")
-            progress_frame.bind('<ButtonRelease-1>', lambda e: "break")
+
+            if progress_frame.winfo_exists():
+                progress_frame.bind('<Button-1>', lambda e: "break")
+                progress_frame.bind('<ButtonRelease-1>', lambda e: "break")
 
             self.progress = ttk.Progressbar(
                 progress_frame,
@@ -146,8 +178,10 @@ class TranslationOverlay:
             )
             self.progress.pack()
             self.progress.config(takefocus=False)
-            self.progress.bind('<Button-1>', lambda e: "break")
-            self.progress.bind('<ButtonRelease-1>', lambda e: "break")
+
+            if self.progress.winfo_exists():
+                self.progress.bind('<Button-1>', lambda e: "break")
+                self.progress.bind('<ButtonRelease-1>', lambda e: "break")
 
             style = ttk.Style()
             style.theme_use('clam')
@@ -164,8 +198,9 @@ class TranslationOverlay:
             self._update_status_animation()
 
             self.root.bind('<Escape>', self._on_escape)
-            self.root.bind('<Button-1>', lambda e: "break")
-            self.root.bind('<ButtonRelease-1>', lambda e: "break")
+            if self.root.winfo_exists():
+                self.root.bind('<Button-1>', lambda e: "break")
+                self.root.bind('<ButtonRelease-1>', lambda e: "break")
 
             self.root.update_idletasks()
             self.root.update()
@@ -179,6 +214,48 @@ class TranslationOverlay:
             import traceback
             traceback.print_exc()
             self.visible = False
+
+    def _ensure_topmost(self):
+        """Гарантирует, что оверлей находится поверх всех окон"""
+        try:
+            if not self.root or not self.root.winfo_exists():
+                return
+
+            self.root.lift()
+            self.root.attributes('-topmost', True)
+
+            try:
+                hwnd = int(self.root.winfo_id())
+                win32gui.SetWindowPos(
+                    hwnd,
+                    win32con.HWND_TOPMOST,
+                    0, 0, 0, 0,
+                    win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE | win32con.SWP_SHOWWINDOW
+                )
+            except:
+                pass
+
+        except Exception as e:
+            print(f"[DEBUG] _ensure_topmost ошибка: {e}")
+
+    def show(self, text="Перевод..."):
+        """Показывает оверлей с индикатором"""
+        try:
+            if self.visible:
+                print(f"[DEBUG] Оверлей уже виден")
+                return
+
+            self._stop_animation = False
+            self._status_text = text
+            self.visible = True
+
+            self._create_window()
+            print(f"[DEBUG] TranslationOverlay.show() - окно создано")
+
+        except Exception as e:
+            print(f"Ошибка при создании оверлея: {e}")
+            import traceback
+            traceback.print_exc()
 
     def _update_status_animation(self):
         """Обновляет текст статуса с точками для имитации активности"""
@@ -204,21 +281,6 @@ class TranslationOverlay:
     def _on_escape(self, event):
         self.hide()
         return "break"
-
-    def finish(self):
-        """Завершает перевод - останавливает анимацию и закрывает окно"""
-        print(f"[DEBUG] Перевод завершен, закрываем окно прогресса")
-        self._stop_animation = True
-
-        if self.root and self.root.winfo_exists():
-            try:
-                self.root.after(0, self._set_finished_ui)
-            except Exception as e:
-                print(f"[DEBUG] Ошибка при завершении: {e}")
-                self._close_window()
-        else:
-            print("[DEBUG] Нет активного окна для завершения")
-            self.visible = False
 
     def _set_finished_ui(self):
         """Устанавливает UI в состояние 'Готово' и закрывает окно"""
@@ -252,33 +314,6 @@ class TranslationOverlay:
         except Exception as e:
             print(f"[DEBUG] Ошибка установки завершения: {e}")
             self._close_window()
-
-    def _close_window(self):
-        """Закрывает окно"""
-        try:
-            self.visible = False
-            self._stop_animation = True
-
-            if self.root and self.root.winfo_exists():
-                print("[DEBUG] Закрытие окна прогресса...")
-                self.root.destroy()
-                print("[DEBUG] Окно прогресса закрыто")
-
-            self.root = None
-            self.progress = None
-            self.status_label = None
-
-        except Exception as e:
-            print(f"[DEBUG] Ошибка при закрытии окна: {e}")
-            self.root = None
-            self.progress = None
-            self.status_label = None
-
-    def hide(self):
-        """Скрывает оверлей"""
-        self._stop_animation = True
-        self.visible = False
-        self._close_window()
 
     def is_visible(self):
         return self.visible
