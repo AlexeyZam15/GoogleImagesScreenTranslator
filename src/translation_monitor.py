@@ -42,6 +42,107 @@ class TranslationMonitor:
 
         self.logger.info("TranslationMonitor инициализирован")
 
+    def _update_overlay(self, template_data: Dict, x: int, y: int, w: int, h: int):
+        """Обновляет или создает оверлей для шаблона."""
+        translated_path = template_data.get('translated_path')
+        if not translated_path or not translated_path.exists():
+            return
+
+        pair_index = template_data['pair_index']
+
+        if template_data.get('overlay'):
+            try:
+                overlay = template_data['overlay']
+                if overlay.root and overlay.root.winfo_exists():
+                    current_x = overlay.root.winfo_x()
+                    current_y = overlay.root.winfo_y()
+                    if abs(current_x - x) > 5 or abs(current_y - y) > 5:
+                        overlay.root.geometry(f"+{x}+{y}")
+                    # === ПОКАЗЫВАЕМ ТОЛЬКО ЕСЛИ ПОЛЬЗОВАТЕЛЬ НЕ СКРЫЛ ОВЕРЛЕЙ ===
+                    if not overlay.visible and not overlay._hidden_by_user:
+                        overlay._is_visible_by_user = True
+                        overlay.root.after(0,
+                                           lambda: overlay.show() if overlay.root and overlay.root.winfo_exists() else None)
+                        self.logger.info(f"[MONITOR] Оверлей #{pair_index} показан (найден шаблон)")
+                    elif not overlay.visible and overlay._hidden_by_user:
+                        self.logger.info(f"[MONITOR] Оверлей #{pair_index} найден, но скрыт пользователем (F1)")
+                    return
+                else:
+                    template_data['overlay'] = None
+            except:
+                template_data['overlay'] = None
+
+        if self.overlay_manager:
+            window_rect = (x, y, x + w, y + h)
+            overlay = self.overlay_manager.create_overlay(
+                image_path=translated_path,
+                window_rect=window_rect,
+                target_hwnd=template_data.get('target_hwnd'),
+                is_fullscreen=False,
+                show_immediately=True,
+                is_window_screenshot=False,
+                is_auto_replace=True
+            )
+            if overlay:
+                template_data['overlay'] = overlay
+                overlay._is_visible_by_user = True
+                overlay._is_auto_replace = True
+                overlay._creation_time = time.time()
+                overlay._monitor_stable_time = time.time() + 3.0
+                # НЕ сбрасываем _hidden_by_user — если пользователь скрыл оверлей, не показываем
+                # Но если создается новый оверлей, он должен быть виден (пользователь его еще не скрывал)
+                if not overlay._hidden_by_user:
+                    overlay.show()
+                self.logger.info(f"[MONITOR] Создан новый оверлей для шаблона #{pair_index}")
+
+    def start(self):
+        """Запускает мониторинг."""
+        if self.monitoring:
+            return
+
+        if not self.templates:
+            self.logger.info("Нет шаблонов для мониторинга")
+            return
+
+        self.monitoring = True
+        self.monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
+        self.monitor_thread.start()
+        self.logger.info(f"Мониторинг запущен для {len(self.templates)} шаблонов")
+
+        # === ПОСЛЕ ЗАПУСКА МОНИТОРА — ПРОВЕРЯЕМ ВСЕ ШАБЛОНЫ ===
+        # Это нужно, чтобы сразу показать оверлеи для уже найденных шаблонов
+        def check_existing_templates():
+            try:
+                import win32gui
+                active_hwnd = win32gui.GetForegroundWindow()
+                for template_data in self.templates:
+                    if not template_data.get('enabled', True):
+                        continue
+                    target_hwnd = template_data.get('target_hwnd')
+                    if target_hwnd != active_hwnd:
+                        continue
+                    if template_data.get('found', False):
+                        overlay = template_data.get('overlay')
+                        if overlay:
+                            try:
+                                if not overlay.visible:
+                                    overlay._is_visible_by_user = True
+                                    overlay._hidden_by_user = False
+                                    overlay.show()
+                                    self.logger.info(
+                                        f"[MONITOR] Оверлей для шаблона #{template_data['pair_index']} показан при запуске монитора")
+                            except Exception as e:
+                                self.logger.warning(f"[MONITOR] Ошибка показа оверлея при запуске: {e}")
+            except Exception as e:
+                self.logger.warning(f"[MONITOR] Ошибка проверки шаблонов при запуске: {e}")
+
+        # Запускаем проверку с небольшой задержкой, чтобы монитор успел инициализироваться
+        if hasattr(self, 'parent') and hasattr(self.parent, 'root'):
+            self.parent.root.after(500, check_existing_templates)
+        else:
+            # Fallback: запускаем в отдельном потоке
+            threading.Thread(target=check_existing_templates, daemon=True).start()
+
     def _capture_window(self, hwnd: int) -> Optional[np.ndarray]:
         """Захватывает скриншот окна через PrintWindow (для браузеров)."""
         if not hwnd:
@@ -157,46 +258,6 @@ class TranslationMonitor:
         except Exception as e:
             self.logger.warning(f"Ошибка BitBlt захвата окна {hwnd}: {e}")
             return None
-
-    def _update_overlay(self, template_data: Dict, x: int, y: int, w: int, h: int):
-        """Обновляет или создает оверлей для шаблона."""
-        translated_path = template_data.get('translated_path')
-        if not translated_path or not translated_path.exists():
-            return
-
-        pair_index = template_data['pair_index']
-
-        if template_data.get('overlay'):
-            try:
-                overlay = template_data['overlay']
-                if overlay.root and overlay.root.winfo_exists():
-                    current_x = overlay.root.winfo_x()
-                    current_y = overlay.root.winfo_y()
-                    if abs(current_x - x) > 5 or abs(current_y - y) > 5:
-                        overlay.root.geometry(f"+{x}+{y}")
-                    if not overlay.visible and overlay._is_visible_by_user:
-                        overlay.root.after(0,
-                                           lambda: overlay.show() if overlay.root and overlay.root.winfo_exists() else None)
-                    return
-                else:
-                    template_data['overlay'] = None
-            except:
-                template_data['overlay'] = None
-
-        if self.overlay_manager:
-            window_rect = (x, y, x + w, y + h)
-            overlay = self.overlay_manager.create_overlay(
-                image_path=translated_path,
-                window_rect=window_rect,
-                target_hwnd=template_data.get('target_hwnd'),
-                is_fullscreen=False,
-                show_immediately=True,
-                is_window_screenshot=False,
-                is_auto_replace=True
-            )
-            if overlay:
-                template_data['overlay'] = overlay
-                overlay._is_visible_by_user = True
 
     def _find_in_window(self, image: np.ndarray, template_data: Dict):
         """Ищет шаблон в изображении окна."""
@@ -333,20 +394,6 @@ class TranslationMonitor:
                     pass
         self.templates.clear()
         self.logger.info("Все шаблоны удалены")
-
-    def start(self):
-        """Запускает мониторинг."""
-        if self.monitoring:
-            return
-
-        if not self.templates:
-            self.logger.info("Нет шаблонов для мониторинга")
-            return
-
-        self.monitoring = True
-        self.monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
-        self.monitor_thread.start()
-        self.logger.info(f"Мониторинг запущен для {len(self.templates)} шаблонов")
 
     def stop(self):
         """Останавливает мониторинг."""

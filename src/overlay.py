@@ -55,6 +55,11 @@ class OverlayWindow:
         self._is_window_screenshot = False
         self._context_menu_visible = False
         self._right_click_processing = False
+        self._hidden_by_user = False
+        # НОВЫЙ ФЛАГ: является ли оверлей автозамены
+        self._is_auto_replace = False
+        # Время создания оверлея (для отсрочки проверки автозамены)
+        self._creation_time = time.time()
 
         self.root = tk.Toplevel(parent) if parent else tk.Toplevel()
         self.root.title("Перевод")
@@ -84,6 +89,438 @@ class OverlayWindow:
         self.root.bind('<Leave>', self._on_mouse_leave)
 
         self.logger.info("OverlayWindow инициализирован")
+
+    def toggle(self):
+        """Переключает видимость оверлея и возвращает фокус на целевое окно"""
+        self.logger.info(
+            f"[DEBUG][toggle] НАЧАЛО: visible={self.visible}, _is_visible_by_user={self._is_visible_by_user}")
+
+        if self.visible:
+            self.logger.info("[DEBUG][toggle] оверлей виден -> скрываем")
+            # ЯВНО УСТАНАВЛИВАЕМ флаг, что пользователь скрыл оверлей
+            self._hidden_by_user = True
+            self.hide()
+        else:
+            self.logger.info("[DEBUG][toggle] оверлей скрыт -> показываем")
+            # Сбрасываем флаг, что пользователь скрыл оверлей
+            self._hidden_by_user = False
+            self._is_visible_by_user = True
+            if self._last_image_path and self._last_window_rect:
+                self.logger.info(
+                    f"[DEBUG][toggle] показываем оверлей с сохраненным изображением: {self._last_image_path}")
+                self._load_and_show_image(self._last_image_path, self._last_window_rect)
+            else:
+                self.logger.warning("[DEBUG][toggle] нет сохраненного изображения для показа")
+
+        self.logger.info("[DEBUG][toggle] возвращаем фокус на целевое окно")
+        self.restore_target_window_focus()
+        self.logger.info(f"[DEBUG][toggle] ЗАВЕРШЕНИЕ: visible={self.visible}")
+
+    def _is_selection_window_active(self, active_hwnd: int) -> bool:
+        """Проверяет, является ли активное окно окном выделения области."""
+        if hasattr(self, '_overlay_manager') and self._overlay_manager:
+            parent = self._overlay_manager.parent
+
+            # Проверка по флагу
+            if hasattr(parent, '_capture_mode') and parent._capture_mode:
+                return True
+
+            # Проверка по HWND
+            if hasattr(parent, '_area_selector') and parent._area_selector:
+                try:
+                    selector_root = parent._area_selector.root
+                    if selector_root and selector_root.winfo_exists():
+                        selector_hwnd = int(selector_root.winfo_id())
+                        if selector_hwnd == active_hwnd:
+                            return True
+                except:
+                    pass
+
+            # Проверка по тексту окна
+            try:
+                import win32gui
+                window_text = win32gui.GetWindowText(active_hwnd)
+                if window_text and "Выделите область" in window_text:
+                    return True
+            except:
+                pass
+
+        return False
+
+    def _check_and_update_visibility(self):
+        """
+        Проверяет видимость оверлея.
+
+        Оверлей показывается ТОЛЬКО если его окно активно.
+        Используется группировка по HWND из OverlayManager.
+        """
+        # ===== РЕЖИМ 1: КОНТЕКСТНОЕ МЕНЮ =====
+        if self._context_menu_visible:
+            if self._is_visible_by_user and not self.visible and not self._hidden_by_mouse:
+                self._show_internal()
+            return
+
+        # ===== РЕЖИМ 2: БАЗОВЫЕ ПРОВЕРКИ =====
+        if not self.auto_hide_enabled or not self._is_visible_by_user:
+            return
+
+        # ЕСЛИ ПОЛЬЗОВАТЕЛЬ ЯВНО СКРЫЛ ОВЕРЛЕЙ ЧЕРЕЗ F1 — НЕ ПОКАЗЫВАЕМ
+        if self._hidden_by_user:
+            return
+
+        if hasattr(self, '_overlay_manager') and self._overlay_manager:
+            if self._overlay_manager.is_dragging():
+                return
+
+        if time.time() < self._monitor_stable_time:
+            return
+
+        try:
+            import win32gui
+            import win32api
+
+            active_hwnd = win32gui.GetForegroundWindow()
+
+            # ===== ПРОВЕРКА: АКТИВНО ЛИ ОКНО ВЫДЕЛЕНИЯ ОБЛАСТИ =====
+            # Если активно окно выделения — НЕ СКРЫВАЕМ оверлей (пользователь выбирает область)
+            # ЭТА ПРОВЕРКА ДОЛЖНА БЫТЬ ПЕРВОЙ, ДО ПРОВЕРКИ active_hwnd != target_hwnd
+            if self._is_selection_window_active(active_hwnd):
+                # Убеждаемся, что оверлей виден
+                if not self.visible and self._is_visible_by_user and not self._hidden_by_user:
+                    self.logger.info(
+                        "[DEBUG] _check_and_update_visibility: активно окно выделения — НЕ СКРЫВАЕМ оверлей"
+                    )
+                    self._show_internal()
+                return
+
+            # ===== ОСНОВНАЯ ПРОВЕРКА: активно ли окно этого оверлея =====
+            target_hwnd = self.get_target_hwnd()
+            if target_hwnd is None or active_hwnd != target_hwnd:
+                if self.visible:
+                    self.logger.info(f"[DEBUG] _check_and_update_visibility: окно {target_hwnd} не активно - СКРЫВАЕМ")
+                    self._hide_internal()
+                return
+
+            # ===== МЫ НА ЦЕЛЕВОМ ОКНЕ =====
+            cursor_pos = win32api.GetCursorPos()
+            cursor_x, cursor_y = cursor_pos
+
+            # Проверяем статус шаблона для оверлея автозамены
+            overlay_type, template_found = self._get_overlay_status()
+
+            if overlay_type == 'auto_replace':
+                # Если шаблон найден — показываем оверлей
+                if template_found:
+                    if not self.visible and self._is_visible_by_user and not self._hidden_by_user:
+                        self.logger.info(
+                            "[DEBUG] _check_and_update_visibility: оверлей автозамены, шаблон найден - ПОКАЗЫВАЕМ"
+                        )
+                        self._show_internal()
+                else:
+                    # Шаблон не найден — скрываем оверлей
+                    if self.visible:
+                        self.logger.info(
+                            "[DEBUG] _check_and_update_visibility: оверлей автозамены, шаблон НЕ НАЙДЕН - СКРЫВАЕМ"
+                        )
+                        self._hide_internal()
+                        self._is_visible_by_user = False
+                return
+
+            # ===== ОБЫЧНЫЙ ОВЕРЛЕЙ =====
+            if not self.visible and self._is_visible_by_user and not self._hidden_by_user:
+                self.logger.info("[DEBUG] _check_and_update_visibility: вернулись на целевое окно - ПОКАЗЫВАЕМ")
+                self._show_internal()
+
+            # ===== НАВЕДЕНИЕ МЫШИ =====
+            # ДЛЯ F2 (СКРИНШОТ ОКНА) НИКОГДА НЕ СКРЫВАЕМ ПРИ НАВЕДЕНИИ
+            if self._is_window_screenshot:
+                return
+
+            if self._edit_mode_enabled:
+                if self._hidden_by_mouse:
+                    self._hidden_by_mouse = False
+                return
+
+            is_cursor_inside = False
+            if self._last_window_rect:
+                x1, y1, x2, y2 = self._last_window_rect
+                if x1 <= cursor_x <= x2 and y1 <= cursor_y <= y2:
+                    is_cursor_inside = True
+
+            if is_cursor_inside and self.visible:
+                self.logger.info("[DEBUG] _check_and_update_visibility: курсор внутри, скрываем оверлей")
+                self._hidden_by_mouse = True
+                self._hide_internal()
+                return
+
+            if not is_cursor_inside and not self.visible and self._is_visible_by_user and not self._hidden_by_user:
+                self.logger.info("[DEBUG] _check_and_update_visibility: курсор вне области, показываем оверлей")
+                self._hidden_by_mouse = False
+                self._show_internal()
+                return
+
+        except Exception as e:
+            self.logger.warning(f"Ошибка в _check_and_update_visibility: {e}")
+
+    def _get_overlay_status(self) -> tuple:
+        """
+        Определяет тип оверлея и статус шаблона.
+
+        Returns:
+            tuple: (overlay_type, template_found)
+            - overlay_type: 'auto_replace' или 'normal'
+            - template_found: True/False (для автозамены всегда True, если монитор выключен)
+        """
+        overlay_type = 'normal'
+        template_found = True
+
+        if hasattr(self, '_overlay_manager') and self._overlay_manager:
+            parent = self._overlay_manager.parent
+            if parent and hasattr(parent, 'translation_monitor'):
+                monitor = parent.translation_monitor
+                if monitor:
+                    # Проверяем, запущен ли монитор
+                    monitor_running = monitor.is_running()
+                    for template in monitor.templates:
+                        if template.get('overlay') is self:
+                            overlay_type = 'auto_replace'
+                            # Если монитор выключен — считаем шаблон найденным (не скрываем)
+                            if not monitor_running:
+                                template_found = True
+                            else:
+                                template_found = template.get('found', False)
+                            break
+
+        return overlay_type, template_found
+
+    def set_auto_replace_mode(self, enabled: bool):
+        """
+        Устанавливает режим автозамены для оверлея.
+        В этом режиме оверлей не скрывается при наведении мыши.
+        """
+        self._is_auto_replace = enabled
+        self._creation_time = time.time()
+        self.logger.info(f"[DEBUG] set_auto_replace_mode: enabled={enabled}, creation_time={self._creation_time}")
+        if enabled:
+            # Для автозамены увеличиваем стабильное время, чтобы дать монитору найти шаблон
+            self._monitor_stable_time = time.time() + 3.0
+            self.logger.info(f"[DEBUG] set_auto_replace_mode: _monitor_stable_time={self._monitor_stable_time}")
+
+    def hide(self):
+        """Скрывает оверлей."""
+        self.logger.info(
+            f"[DEBUG][hide] НАЧАЛО: visible={self.visible}, _is_visible_by_user={self._is_visible_by_user}")
+
+        # НЕ устанавливаем _hidden_by_user = True автоматически!
+        # Этот флаг должен устанавливаться ТОЛЬКО когда пользователь явно скрывает оверлей через F1
+        # При автоматическом скрытии через _hide_internal() флаг не должен меняться
+        # self._hidden_by_user = True  # <-- УБИРАЕМ!
+
+        self._is_visible_by_user = False
+
+        self._stop_visibility_monitor()
+        self.visible = False
+        self._disable_esc_hook()
+
+        self._hide_close_button()
+
+        try:
+            self.root.withdraw()
+            self.logger.info("[DEBUG][hide] оверлей скрыт (withdraw выполнен)")
+        except Exception as e:
+            self.logger.error(f"[DEBUG][hide] ОШИБКА: {e}")
+
+    def show(self):
+        """Показывает оверлей."""
+        self.logger.info("[DEBUG] show() вызван")
+
+        if not self._last_image_path or not self._last_window_rect:
+            self.logger.warning("[DEBUG] show() - нет сохраненного изображения или rect")
+            return
+
+        if self.visible:
+            self.logger.info("[DEBUG] show() - оверлей уже виден")
+            return
+
+        # Сбрасываем флаг, что пользователь скрыл оверлей
+        self._hidden_by_user = False
+
+        self._hidden_by_mouse = False
+        self._monitor_initialized = False
+        self._last_active_hwnd = None
+
+        if self._monitor_timer is not None:
+            try:
+                if self.root and self.root.winfo_exists():
+                    self.root.after_cancel(self._monitor_timer)
+            except Exception as e:
+                self.logger.warning(f"Ошибка отмены таймера при show: {e}")
+            self._monitor_timer = None
+
+        # Если изображение уже загружено - просто показываем окно
+        if self._image_loaded and self.tk_image is not None:
+            try:
+                self.root.deiconify()
+                self.root.lift()
+                self.visible = True
+                self._ensure_topmost()
+                self._is_visible_by_user = True
+                self._enable_esc_hook()
+                if self.auto_hide_enabled:
+                    self._start_visibility_monitor()
+                self.logger.info("[DEBUG] show() - оверлей показан без перезагрузки изображения")
+                return
+            except Exception as e:
+                self.logger.warning(f"[DEBUG] show() - ошибка при показе существующего окна: {e}")
+
+        # Если изображение не загружено - загружаем и показываем
+        self._is_visible_by_user = True
+        self.logger.info(f"[DEBUG] show() - показываем оверлей с сохраненным изображением: {self._last_image_path}")
+        self._load_and_show_image(self._last_image_path, self._last_window_rect)
+
+        if self._edit_mode_enabled and self._mouse_over:
+            self._show_close_button()
+
+    def _on_mouse_enter(self, event):
+        """Обработчик входа мыши в область оверлея."""
+        self._mouse_over = True
+
+        # ДЛЯ F2 (СКРИНШОТ ОКНА) НИКОГДА НЕ СКРЫВАЕМ ПРИ НАВЕДЕНИИ
+        if self._is_window_screenshot:
+            self.logger.debug("[DEBUG] _on_mouse_enter: F2-оверлей, не скрываем")
+            if self._edit_mode_enabled and self.visible:
+                self._show_close_button()
+            return
+
+        # Для F3 (область) проверяем режим редактирования
+        is_edit_mode = False
+        if hasattr(self, '_edit_mode_enabled'):
+            is_edit_mode = self._edit_mode_enabled
+        elif hasattr(self, '_overlay_manager') and self._overlay_manager:
+            try:
+                parent = self._overlay_manager.parent
+                if parent and hasattr(parent, 'is_edit_mode_enabled'):
+                    is_edit_mode = parent.is_edit_mode_enabled()
+                elif parent and hasattr(parent, '_edit_mode_enabled'):
+                    is_edit_mode = parent._edit_mode_enabled
+            except:
+                pass
+
+        if is_edit_mode and self.visible:
+            self._show_close_button()
+
+        if is_edit_mode:
+            self.logger.debug("[DEBUG] _on_mouse_enter: режим редактирования включен - оверлей не скрываем")
+            return
+
+        if not self.visible:
+            return
+
+        if hasattr(self, '_show_timer') and self._show_timer is not None:
+            try:
+                self.root.after_cancel(self._show_timer)
+                self._show_timer = None
+                self.logger.debug("[DEBUG] _on_mouse_enter: отменен запланированный показ оверлея")
+            except:
+                pass
+
+        if self.visible and self._is_visible_by_user:
+            self.logger.info("[DEBUG] _on_mouse_enter: скрываем оверлей (режим просмотра)")
+            self._hidden_by_mouse = True
+            self._hide_internal()
+            if not self._monitor_timer and self.auto_hide_enabled:
+                self.logger.info("[DEBUG] _on_mouse_enter: запускаем монитор для отслеживания выхода мыши")
+                self._start_visibility_monitor()
+
+    def _on_mouse_leave(self, event):
+        """Обработчик выхода мыши из области оверлея."""
+        self._mouse_over = False
+
+        # Скрываем крестик при выходе мыши
+        if self._edit_mode_enabled:
+            self._hide_close_button()
+
+        # ДЛЯ F2 (СКРИНШОТ ОКНА) НИЧЕГО НЕ ДЕЛАЕМ
+        if self._is_window_screenshot:
+            return
+
+        if not hasattr(self, '_hidden_by_mouse') or not self._hidden_by_mouse:
+            return
+
+        is_edit_mode = False
+        if hasattr(self, '_edit_mode_enabled'):
+            is_edit_mode = self._edit_mode_enabled
+        elif hasattr(self, '_overlay_manager') and self._overlay_manager:
+            try:
+                parent = self._overlay_manager.parent
+                if parent and hasattr(parent, 'is_edit_mode_enabled'):
+                    is_edit_mode = parent.is_edit_mode_enabled()
+                elif parent and hasattr(parent, '_edit_mode_enabled'):
+                    is_edit_mode = parent._edit_mode_enabled
+            except:
+                pass
+
+        if is_edit_mode:
+            self._hidden_by_mouse = False
+            return
+
+        try:
+            import win32gui
+            import win32api
+
+            active_hwnd = win32gui.GetForegroundWindow()
+
+            cursor_pos = win32api.GetCursorPos()
+            cursor_x, cursor_y = cursor_pos
+
+            if self._last_window_rect:
+                x1, y1, x2, y2 = self._last_window_rect
+                if x1 <= cursor_x <= x2 and y1 <= cursor_y <= y2:
+                    self.logger.debug("[DEBUG] _on_mouse_leave: курсор всё ещё внутри области оверлея - не показываем")
+                    return
+
+            is_target_active = (active_hwnd == self._target_hwnd)
+
+            app_hwnd = None
+            try:
+                if hasattr(self.root, 'master'):
+                    master = self.root.master
+                    if master and master.winfo_exists():
+                        app_hwnd = int(master.winfo_id())
+            except:
+                pass
+
+            is_app_window = (active_hwnd == app_hwnd)
+
+            if is_target_active or is_app_window:
+                self.logger.info("[DEBUG] _on_mouse_leave: показываем оверлей (целевое окно активно, мышь вне области)")
+                self._hidden_by_mouse = False
+
+                if hasattr(self, '_show_timer') and self._show_timer is not None:
+                    try:
+                        self.root.after_cancel(self._show_timer)
+                    except:
+                        pass
+                    self._show_timer = None
+
+                def delayed_show():
+                    self._show_timer = None
+                    if self._last_image_path and self._last_window_rect:
+                        if not self.visible and not self._hidden_by_mouse:
+                            self.logger.info("[DEBUG] _on_mouse_leave: delayed_show - показываем оверлей")
+                            self._show_internal()
+
+                if self.root and self.root.winfo_exists():
+                    self._show_timer = self.root.after(150, delayed_show)
+            else:
+                self.logger.debug("[DEBUG] _on_mouse_leave: целевое окно не активно - не показываем оверлей")
+        except Exception as e:
+            self.logger.warning(f"[DEBUG] _on_mouse_leave: ошибка: {e}")
+            self._hidden_by_mouse = False
+            if self._last_image_path and self._last_window_rect:
+                if not self.visible:
+                    self._show_timer = self.root.after(200,
+                                                       lambda: self._show_internal() if not self._hidden_by_mouse else None)
 
     def _load_and_show_image(self, image_path: Path, window_rect: tuple):
         """Загружает изображение и показывает его в оверлее."""
@@ -270,54 +707,6 @@ class OverlayWindow:
             if self.auto_hide_enabled:
                 self.logger.info("[DEBUG] Запуск монитора для отложенного показа")
                 self.root.after(1000, self._start_visibility_monitor_delayed)
-
-    def show(self):
-        """Показывает оверлей."""
-        self.logger.info("[DEBUG] show() вызван")
-
-        if not self._last_image_path or not self._last_window_rect:
-            self.logger.warning("[DEBUG] show() - нет сохраненного изображения или rect")
-            return
-
-        if self.visible:
-            self.logger.info("[DEBUG] show() - оверлей уже виден")
-            return
-
-        self._hidden_by_mouse = False
-        self._monitor_initialized = False
-        self._last_active_hwnd = None
-
-        if self._monitor_timer is not None:
-            try:
-                if self.root and self.root.winfo_exists():
-                    self.root.after_cancel(self._monitor_timer)
-            except Exception as e:
-                self.logger.warning(f"Ошибка отмены таймера при show: {e}")
-            self._monitor_timer = None
-
-        # Если изображение уже загружено - просто показываем окно
-        if self._image_loaded and self.tk_image is not None:
-            try:
-                self.root.deiconify()
-                self.root.lift()
-                self.visible = True
-                self._ensure_topmost()
-                self._is_visible_by_user = True
-                self._enable_esc_hook()
-                if self.auto_hide_enabled:
-                    self._start_visibility_monitor()
-                self.logger.info("[DEBUG] show() - оверлей показан без перезагрузки изображения")
-                return
-            except Exception as e:
-                self.logger.warning(f"[DEBUG] show() - ошибка при показе существующего окна: {e}")
-
-        # Если изображение не загружено - загружаем и показываем
-        self._is_visible_by_user = True
-        self.logger.info(f"[DEBUG] show() - показываем оверлей с сохраненным изображением: {self._last_image_path}")
-        self._load_and_show_image(self._last_image_path, self._last_window_rect)
-
-        if self._edit_mode_enabled and self._mouse_over:
-            self._show_close_button()
 
     def set_auto_hide(self, enabled: bool):
         """Устанавливает режим автоскрытия"""
@@ -567,128 +956,6 @@ class OverlayWindow:
 
         self._remove_overlay()
 
-    def _check_and_update_visibility(self):
-        """
-        Проверяет видимость оверлея.
-
-        Оверлей показывается ТОЛЬКО если его окно активно.
-        Используется группировка по HWND из OverlayManager.
-        """
-        # ===== РЕЖИМ 1: КОНТЕКСТНОЕ МЕНЮ =====
-        if self._context_menu_visible:
-            if self._is_visible_by_user and not self.visible and not self._hidden_by_mouse:
-                self._show_internal()
-            return
-
-        # ===== РЕЖИМ 2: БАЗОВЫЕ ПРОВЕРКИ =====
-        if not self.auto_hide_enabled or not self._is_visible_by_user:
-            return
-
-        if hasattr(self, '_overlay_manager') and self._overlay_manager:
-            if self._overlay_manager.is_dragging():
-                return
-
-        if time.time() < self._monitor_stable_time:
-            return
-
-        try:
-            import win32gui
-            import win32api
-
-            active_hwnd = win32gui.GetForegroundWindow()
-
-            # ===== ОСНОВНАЯ ПРОВЕРКА: активно ли окно этого оверлея =====
-            target_hwnd = self.get_target_hwnd()
-            if target_hwnd is None or active_hwnd != target_hwnd:
-                if self.visible:
-                    self.logger.info(f"[DEBUG] _check_and_update_visibility: окно {target_hwnd} не активно - СКРЫВАЕМ")
-                    self._hide_internal()
-                return
-
-            # ===== МЫ НА ЦЕЛЕВОМ ОКНЕ =====
-            cursor_pos = win32api.GetCursorPos()
-            cursor_x, cursor_y = cursor_pos
-
-            # Проверяем статус шаблона для оверлея автозамены
-            overlay_type, template_found = self._get_overlay_status()
-
-            if overlay_type == 'auto_replace':
-                if template_found:
-                    if not self.visible and self._is_visible_by_user:
-                        self.logger.info(
-                            "[DEBUG] _check_and_update_visibility: оверлей автозамены, шаблон найден - ПОКАЗЫВАЕМ")
-                        self._show_internal()
-                else:
-                    if self.visible:
-                        self.logger.info(
-                            "[DEBUG] _check_and_update_visibility: оверлей автозамены, шаблон НЕ НАЙДЕН - СКРЫВАЕМ")
-                        self._hide_internal()
-                        self._is_visible_by_user = False
-                return
-
-            # ===== ОБЫЧНЫЙ ОВЕРЛЕЙ =====
-            if not self.visible and self._is_visible_by_user:
-                self.logger.info("[DEBUG] _check_and_update_visibility: вернулись на целевое окно - ПОКАЗЫВАЕМ")
-                self._show_internal()
-
-            # ===== НАВЕДЕНИЕ МЫШИ =====
-            if self._edit_mode_enabled:
-                if self._hidden_by_mouse:
-                    self._hidden_by_mouse = False
-                return
-
-            is_cursor_inside = False
-            if self._last_window_rect:
-                x1, y1, x2, y2 = self._last_window_rect
-                if x1 <= cursor_x <= x2 and y1 <= cursor_y <= y2:
-                    is_cursor_inside = True
-
-            if is_cursor_inside and self.visible:
-                self.logger.info("[DEBUG] _check_and_update_visibility: курсор внутри, скрываем оверлей")
-                self._hidden_by_mouse = True
-                self._hide_internal()
-                return
-
-            if not is_cursor_inside and not self.visible and self._is_visible_by_user:
-                self.logger.info("[DEBUG] _check_and_update_visibility: курсор вне области, показываем оверлей")
-                self._hidden_by_mouse = False
-                self._show_internal()
-                return
-
-        except Exception as e:
-            self.logger.warning(f"Ошибка в _check_and_update_visibility: {e}")
-
-    def _is_selection_window_active(self, active_hwnd: int) -> bool:
-        """Проверяет, является ли активное окно окном выделения области."""
-        if hasattr(self, '_overlay_manager') and self._overlay_manager:
-            parent = self._overlay_manager.parent
-
-            # Проверка по флагу
-            if hasattr(parent, '_capture_mode') and parent._capture_mode:
-                return True
-
-            # Проверка по HWND
-            if hasattr(parent, '_area_selector') and parent._area_selector:
-                try:
-                    selector_root = parent._area_selector.root
-                    if selector_root and selector_root.winfo_exists():
-                        selector_hwnd = int(selector_root.winfo_id())
-                        if selector_hwnd == active_hwnd:
-                            return True
-                except:
-                    pass
-
-            # Проверка по тексту окна
-            try:
-                import win32gui
-                window_text = win32gui.GetWindowText(active_hwnd)
-                if window_text and "Выделите область" in window_text:
-                    return True
-            except:
-                pass
-
-        return False
-
     def _is_system_window(self, active_hwnd: int) -> bool:
         """Проверяет, является ли окно системным (не нашим)."""
         try:
@@ -724,29 +991,6 @@ class OverlayWindow:
             pass
 
         return False
-
-    def _get_overlay_status(self) -> tuple:
-        """
-        Определяет тип оверлея и статус шаблона.
-
-        Returns:
-            tuple: (overlay_type, template_found)
-            - overlay_type: 'auto_replace' или 'normal'
-            - template_found: True/False
-        """
-        overlay_type = 'normal'
-        template_found = True
-
-        if hasattr(self, '_overlay_manager') and self._overlay_manager:
-            parent = self._overlay_manager.parent
-            if parent and hasattr(parent, 'translation_monitor'):
-                for template in parent.translation_monitor.templates:
-                    if template.get('overlay') is self:
-                        overlay_type = 'auto_replace'
-                        template_found = template.get('found', False)
-                        break
-
-        return overlay_type, template_found
 
     def _show_close_button(self):
         """Показывает кнопку закрытия на Canvas оверлея."""
@@ -1104,168 +1348,6 @@ class OverlayWindow:
         if not self._edit_mode_enabled:
             self._hide_close_button()
 
-    def _on_mouse_enter(self, event):
-        """Обработчик входа мыши в область оверлея."""
-        self._mouse_over = True
-
-        # ДЛЯ F2 (СКРИНШОТ ОКНА) НИКОГДА НЕ СКРЫВАЕМ ПРИ НАВЕДЕНИИ
-        if self._is_window_screenshot:
-            self.logger.debug("[DEBUG] _on_mouse_enter: F2-оверлей, не скрываем")
-            if self._edit_mode_enabled and self.visible:
-                self._show_close_button()
-            return
-
-        # Для F3 (область) проверяем режим редактирования
-        is_edit_mode = False
-        if hasattr(self, '_edit_mode_enabled'):
-            is_edit_mode = self._edit_mode_enabled
-        elif hasattr(self, '_overlay_manager') and self._overlay_manager:
-            try:
-                parent = self._overlay_manager.parent
-                if parent and hasattr(parent, 'is_edit_mode_enabled'):
-                    is_edit_mode = parent.is_edit_mode_enabled()
-                elif parent and hasattr(parent, '_edit_mode_enabled'):
-                    is_edit_mode = parent._edit_mode_enabled
-            except:
-                pass
-
-        if is_edit_mode and self.visible:
-            self._show_close_button()
-
-        if is_edit_mode:
-            self.logger.debug("[DEBUG] _on_mouse_enter: режим редактирования включен - оверлей не скрываем")
-            return
-
-        if not self.visible:
-            return
-
-        if hasattr(self, '_show_timer') and self._show_timer is not None:
-            try:
-                self.root.after_cancel(self._show_timer)
-                self._show_timer = None
-                self.logger.debug("[DEBUG] _on_mouse_enter: отменен запланированный показ оверлея")
-            except:
-                pass
-
-        if self.visible and self._is_visible_by_user:
-            self.logger.info("[DEBUG] _on_mouse_enter: скрываем оверлей (режим просмотра)")
-            self._hidden_by_mouse = True
-            self._hide_internal()
-            if not self._monitor_timer and self.auto_hide_enabled:
-                self.logger.info("[DEBUG] _on_mouse_enter: запускаем монитор для отслеживания выхода мыши")
-                self._start_visibility_monitor()
-
-    def _on_mouse_leave(self, event):
-        """Обработчик выхода мыши из области оверлея."""
-        self._mouse_over = False
-
-        # Скрываем крестик при выходе мыши
-        if self._edit_mode_enabled:
-            self._hide_close_button()
-
-        # ДЛЯ F2 (СКРИНШОТ ОКНА) НИЧЕГО НЕ ДЕЛАЕМ
-        if self._is_window_screenshot:
-            return
-
-        if not hasattr(self, '_hidden_by_mouse') or not self._hidden_by_mouse:
-            return
-
-        is_edit_mode = False
-        if hasattr(self, '_edit_mode_enabled'):
-            is_edit_mode = self._edit_mode_enabled
-        elif hasattr(self, '_overlay_manager') and self._overlay_manager:
-            try:
-                parent = self._overlay_manager.parent
-                if parent and hasattr(parent, 'is_edit_mode_enabled'):
-                    is_edit_mode = parent.is_edit_mode_enabled()
-                elif parent and hasattr(parent, '_edit_mode_enabled'):
-                    is_edit_mode = parent._edit_mode_enabled
-            except:
-                pass
-
-        if is_edit_mode:
-            self._hidden_by_mouse = False
-            return
-
-        try:
-            import win32gui
-            import win32api
-
-            active_hwnd = win32gui.GetForegroundWindow()
-
-            cursor_pos = win32api.GetCursorPos()
-            cursor_x, cursor_y = cursor_pos
-
-            if self._last_window_rect:
-                x1, y1, x2, y2 = self._last_window_rect
-                if x1 <= cursor_x <= x2 and y1 <= cursor_y <= y2:
-                    self.logger.debug("[DEBUG] _on_mouse_leave: курсор всё ещё внутри области оверлея - не показываем")
-                    return
-
-            is_target_active = (active_hwnd == self._target_hwnd)
-
-            app_hwnd = None
-            try:
-                if hasattr(self.root, 'master'):
-                    master = self.root.master
-                    if master and master.winfo_exists():
-                        app_hwnd = int(master.winfo_id())
-            except:
-                pass
-
-            is_app_window = (active_hwnd == app_hwnd)
-
-            if is_target_active or is_app_window:
-                self.logger.info("[DEBUG] _on_mouse_leave: показываем оверлей (целевое окно активно, мышь вне области)")
-                self._hidden_by_mouse = False
-
-                if hasattr(self, '_show_timer') and self._show_timer is not None:
-                    try:
-                        self.root.after_cancel(self._show_timer)
-                    except:
-                        pass
-                    self._show_timer = None
-
-                def delayed_show():
-                    self._show_timer = None
-                    if self._last_image_path and self._last_window_rect:
-                        if not self.visible and not self._hidden_by_mouse:
-                            self.logger.info("[DEBUG] _on_mouse_leave: delayed_show - показываем оверлей")
-                            self._show_internal()
-
-                if self.root and self.root.winfo_exists():
-                    self._show_timer = self.root.after(150, delayed_show)
-            else:
-                self.logger.debug("[DEBUG] _on_mouse_leave: целевое окно не активно - не показываем оверлей")
-        except Exception as e:
-            self.logger.warning(f"[DEBUG] _on_mouse_leave: ошибка: {e}")
-            self._hidden_by_mouse = False
-            if self._last_image_path and self._last_window_rect:
-                if not self.visible:
-                    self._show_timer = self.root.after(200,
-                                                       lambda: self._show_internal() if not self._hidden_by_mouse else None)
-
-    def hide(self):
-        """Скрывает оверлей."""
-        self.logger.info(
-            f"[DEBUG][hide] НАЧАЛО: visible={self.visible}, _is_visible_by_user={self._is_visible_by_user}")
-
-        # Не сбрасываем _is_visible_by_user полностью, чтобы при повторном показе знать, что оверлей должен быть виден
-        # Но сохраняем флаг, что пользователь его не скрывал
-        # self._is_visible_by_user = False  # <-- НЕ СБРАСЫВАЕМ
-
-        self._stop_visibility_monitor()
-        self.visible = False
-        self._disable_esc_hook()
-
-        self._hide_close_button()
-
-        try:
-            self.root.withdraw()
-            self.logger.info("[DEBUG][hide] оверлей скрыт (withdraw выполнен)")
-        except Exception as e:
-            self.logger.error(f"[DEBUG][hide] ОШИБКА: {e}")
-
     def _update_close_button_visibility(self):
         """Обновляет видимость кнопки закрытия в зависимости от режима редактирования."""
         should_be_visible = self._edit_mode_enabled and self.visible and self._image_loaded
@@ -1582,28 +1664,6 @@ class OverlayWindow:
             self.logger.info("[DEBUG][_hide_internal] оверлей скрыт (withdraw выполнен)")
         except Exception as e:
             self.logger.error(f"[DEBUG][_hide_internal] ОШИБКА: {e}")
-
-    def toggle(self):
-        """Переключает видимость оверлея и возвращает фокус на целевое окно"""
-        self.logger.info(
-            f"[DEBUG][toggle] НАЧАЛО: visible={self.visible}, _is_visible_by_user={self._is_visible_by_user}")
-
-        if self.visible:
-            self.logger.info("[DEBUG][toggle] оверлей виден -> скрываем")
-            self.hide()
-        else:
-            self.logger.info("[DEBUG][toggle] оверлей скрыт -> показываем")
-            self._is_visible_by_user = True
-            if self._last_image_path and self._last_window_rect:
-                self.logger.info(
-                    f"[DEBUG][toggle] показываем оверлей с сохраненным изображением: {self._last_image_path}")
-                self._load_and_show_image(self._last_image_path, self._last_window_rect)
-            else:
-                self.logger.warning("[DEBUG][toggle] нет сохраненного изображения для показа")
-
-        self.logger.info("[DEBUG][toggle] возвращаем фокус на целевое окно")
-        self.restore_target_window_focus()
-        self.logger.info(f"[DEBUG][toggle] ЗАВЕРШЕНИЕ: visible={self.visible}")
 
     def restore_target_window_focus(self):
         """Возвращает фокус на целевое окно (игру)"""

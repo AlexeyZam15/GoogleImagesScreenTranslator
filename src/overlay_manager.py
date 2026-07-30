@@ -27,6 +27,40 @@ class OverlayManager:
         self._create_context_menu()
         self.logger.info("OverlayManager инициализирован")
 
+    def toggle_all_overlays(self):
+        """Переключает видимость всех оверлеев одновременно."""
+        if not self.overlays:
+            self.logger.warning("Нет оверлеев для переключения.")
+            return False
+
+        first_visible = False
+        for overlay in self.overlays:
+            if overlay.is_visible():
+                first_visible = True
+                break
+
+        new_state = not first_visible
+
+        self.logger.info(
+            f"Переключение всех {len(self.overlays)} оверлеев в состояние: {'показаны' if new_state else 'скрыты'}"
+        )
+
+        for overlay in self.overlays:
+            try:
+                if new_state:
+                    # Показываем оверлей — сбрасываем флаг скрытия пользователем
+                    overlay._hidden_by_user = False
+                    overlay.show()
+                else:
+                    # Скрываем оверлей — устанавливаем флаг скрытия пользователем
+                    overlay._hidden_by_user = True
+                    overlay.hide()
+            except Exception as e:
+                self.logger.error(f"Ошибка при переключении оверлея: {e}")
+
+        self.logger.info(f"Все {len(self.overlays)} оверлеев {'показаны' if new_state else 'скрыты'}")
+        return new_state
+
     def get_overlays_for_window(self, hwnd: int) -> List[OverlayWindow]:
         """Возвращает список оверлеев для конкретного окна."""
         return self.overlays_by_hwnd.get(hwnd, [])
@@ -335,36 +369,6 @@ class OverlayManager:
                     overlay.update_edit_mode(edit_mode_enabled)
             except Exception as e:
                 self.logger.warning(f"Ошибка обновления режима редактирования для оверлея: {e}")
-
-    def toggle_all_overlays(self):
-        """Переключает видимость всех оверлеев одновременно."""
-        if not self.overlays:
-            self.logger.warning("Нет оверлеев для переключения.")
-            return False
-
-        first_visible = False
-        for overlay in self.overlays:
-            if overlay.is_visible():
-                first_visible = True
-                break
-
-        new_state = not first_visible
-
-        self.logger.info(
-            f"Переключение всех {len(self.overlays)} оверлеев в состояние: {'показаны' if new_state else 'скрыты'}"
-        )
-
-        for overlay in self.overlays:
-            try:
-                if new_state:
-                    overlay.show()
-                else:
-                    overlay.hide()
-            except Exception as e:
-                self.logger.error(f"Ошибка при переключении оверлея: {e}")
-
-        self.logger.info(f"Все {len(self.overlays)} оверлеев {'показаны' if new_state else 'скрыты'}")
-        return new_state
 
     def _find_overlay_under_cursor(self) -> Optional[OverlayWindow]:
         """Находит оверлей, под которым находится курсор мыши."""

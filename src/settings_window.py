@@ -20,6 +20,10 @@ class SettingsWindow:
         self.settings = settings
         self.on_settings_changed = on_settings_changed
 
+        # Флаг для предотвращения множественных диалогов сброса
+        self._is_reset_dialog_open = False
+        self._reset_dialog = None
+
         self.window = tk.Toplevel(self.parent)
         self.window.title(self.get_string('settings_title'))
         # Увеличиваем размер окна для всех вкладок
@@ -90,6 +94,225 @@ class SettingsWindow:
         self.window.deiconify()
         self.window.lift()
         self.window.focus_force()
+
+    def reset_settings(self):
+        """Сбрасывает настройки к значениям по умолчанию"""
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # === ПРОВЕРКА: ЕСЛИ ОКНО УЖЕ ОТКРЫТО - ПОДНИМАЕМ ЕГО ===
+        if self._is_reset_dialog_open:
+            if self._reset_dialog and self._reset_dialog.winfo_exists():
+                logger.info("[SETTINGS] Диалог сброса уже открыт, поднимаем наверх")
+                self._reset_dialog.lift()
+                self._reset_dialog.focus_force()
+                return
+            else:
+                # Сбрасываем флаг, если окно было закрыто аномально
+                self._is_reset_dialog_open = False
+                self._reset_dialog = None
+
+        # === СОЗДАЕМ КАСТОМНОЕ ДИАЛОГОВОЕ ОКНО ===
+        self._is_reset_dialog_open = True
+
+        dialog = tk.Toplevel(self.window)
+        dialog.title(self.get_string('settings_title'))
+        dialog.geometry("500x200")
+        dialog.minsize(450, 180)
+        dialog.resizable(False, False)
+        dialog.configure(bg='#1e1e1e')
+        dialog.transient(self.window)  # Привязываем к родителю
+        dialog.attributes('-topmost', True)  # ПОВЕРХ всех окон
+        dialog.grab_set()  # Блокируем взаимодействие с родителем
+
+        self._reset_dialog = dialog
+
+        # Центрируем диалог относительно родителя
+        dialog.update_idletasks()
+        parent_x = self.window.winfo_x()
+        parent_y = self.window.winfo_y()
+        parent_w = self.window.winfo_width()
+        parent_h = self.window.winfo_height()
+        dlg_w = dialog.winfo_width()
+        dlg_h = dialog.winfo_height()
+        x = parent_x + (parent_w - dlg_w) // 2
+        y = parent_y + (parent_h - dlg_h) // 2
+        dialog.geometry(f"+{x}+{y}")
+
+        # Обработчик закрытия окна
+        def on_dialog_close():
+            self._is_reset_dialog_open = False
+            self._reset_dialog = None
+            dialog.destroy()
+
+        dialog.protocol("WM_DELETE_WINDOW", on_dialog_close)
+
+        # === ЗАГОЛОВОК И ИКОНКА ===
+        header_frame = tk.Frame(dialog, bg='#1e1e1e')
+        header_frame.pack(fill=tk.X, padx=20, pady=(20, 5))
+
+        tk.Label(
+            header_frame,
+            text="⚠️",
+            bg='#1e1e1e',
+            fg='#ff9800',
+            font=('Segoe UI', 24)
+        ).pack(pady=(0, 5))
+
+        tk.Label(
+            header_frame,
+            text=self.get_string('settings_reset_confirm'),
+            bg='#1e1e1e',
+            fg='white',
+            font=('Segoe UI', 12)
+        ).pack()
+
+        # === КНОПКИ ===
+        btn_frame = tk.Frame(dialog, bg='#1e1e1e')
+        btn_frame.pack(fill=tk.X, padx=20, pady=(20, 20))
+
+        def on_confirm():
+            # Закрываем диалог ДО выполнения сброса, чтобы не блокировать UI
+            self._is_reset_dialog_open = False
+            self._reset_dialog = None
+            dialog.destroy()
+
+            # Выполняем сброс
+            self._do_reset()
+
+        def on_cancel():
+            self._is_reset_dialog_open = False
+            self._reset_dialog = None
+            dialog.destroy()
+
+        confirm_btn = tk.Button(
+            btn_frame,
+            text=self.get_string('settings_reset'),
+            command=on_confirm,
+            bg='#d32f2f',
+            fg='white',
+            font=('Segoe UI', 10, 'bold'),
+            relief=tk.FLAT,
+            padx=20,
+            pady=8,
+            cursor='hand2'
+        )
+        confirm_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 5))
+
+        cancel_btn = tk.Button(
+            btn_frame,
+            text=self.get_string('settings_cancel'),
+            command=on_cancel,
+            bg='#3c3c3c',
+            fg='white',
+            font=('Segoe UI', 10),
+            relief=tk.FLAT,
+            padx=20,
+            pady=8,
+            cursor='hand2'
+        )
+        cancel_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(5, 0))
+
+        # === АВТОМАТИЧЕСКИЙ ФОКУС ===
+        dialog.focus_force()
+        confirm_btn.focus_set()  # Фокус на кнопке "Сбросить"
+
+        # Закрываем диалог по ESC
+        dialog.bind('<Escape>', lambda e: on_cancel())
+        dialog.bind('<Return>', lambda e: on_confirm())
+
+    def _do_reset(self):
+        """Реальная логика сброса настроек (вызывается после подтверждения)"""
+        import logging
+        logger = logging.getLogger(__name__)
+
+        from src.settings import Settings
+
+        # === СОХРАНЯЕМ ТЕКУЩИЕ ЗНАЧЕНИЯ, КОТОРЫЕ НЕ ДОЛЖНЫ СБРАСЫВАТЬСЯ ===
+        current_lang = self.settings.get_language()
+        current_show_browser = self.settings.get_show_browser()
+        logger.info(f"[SETTINGS] Текущий язык: {current_lang}, show_browser: {current_show_browser}")
+
+        # Сбрасываем все настройки к значениям по умолчанию
+        for key, value in Settings.DEFAULT_SETTINGS.items():
+            self.settings.set(key, value)
+
+        # === ВОССТАНАВЛИВАЕМ СОХРАНЁННЫЕ ЗНАЧЕНИЯ ===
+        self.settings.set_language(current_lang)
+        self.settings.set_show_browser(current_show_browser)
+        logger.info(f"[SETTINGS] Восстановлены: язык={current_lang}, show_browser={current_show_browser}")
+
+        # Сбрасываем горячие клавиши к значениям по умолчанию
+        default_hotkeys = {
+            "screenshot": "f2",
+            "area": "f3",
+            "toggle_overlay": "f1",
+            "clear_all": "f4",
+            "edit_mode": "f5",
+            "auto_replace": "f6"
+        }
+        for action, default_key in default_hotkeys.items():
+            self.settings.set_hotkey(action, default_key)
+
+        self.settings.save()
+
+        # Загружаем значения в интерфейс
+        self.load_values()
+
+        # Обновляем переменные для новых настроек
+        if hasattr(self, 'show_indicator_var'):
+            self.show_indicator_var.set(self.settings.get_show_translation_indicator())
+        if hasattr(self, 'auto_hide_var'):
+            self.auto_hide_var.set(self.settings.get_auto_hide_overlay())
+        if hasattr(self, 'edit_mode_var'):
+            self.edit_mode_var.set(self.settings.get_edit_mode_enabled())
+        if hasattr(self, 'hotkey_vars'):
+            for action, var in self.hotkey_vars.items():
+                default_key = default_hotkeys.get(action, "")
+                var.set(default_key)
+                if action in self.hotkey_buttons:
+                    self.hotkey_buttons[action].config(text=default_key.upper() if default_key else "—")
+
+        # Обновляем состояние режима редактирования в главном окне
+        if hasattr(self, 'app') and hasattr(self.app, '_edit_mode_enabled'):
+            edit_mode = self.settings.get_edit_mode_enabled()
+            self.app._edit_mode_enabled = edit_mode
+            if hasattr(self.app, 'btn_edit_mode'):
+                status_text = "ВКЛЮЧЕН" if edit_mode else "ВЫКЛЮЧЕН"
+                self.app.btn_edit_mode.config(
+                    text=f"✏️ Редактирование: {status_text} (F5)",
+                    bg='#4CAF50' if edit_mode else '#ff9800'
+                )
+
+        # Перерегистрируем горячие клавиши в приложении
+        if hasattr(self, 'app') and hasattr(self.app, 'setup_hotkeys'):
+            self.app.setup_hotkeys()
+
+        # Обновляем кнопки
+        if hasattr(self, 'app') and hasattr(self.app, 'update_hotkey_buttons'):
+            self.app.update_hotkey_buttons()
+
+        # Обновляем язык интерфейса в главном окне
+        if hasattr(self, 'app') and hasattr(self.app, 'update_ui_language'):
+            self.app.update_ui_language()
+
+        # Обновляем статус в главном окне
+        if hasattr(self, 'app'):
+            if hasattr(self.app, 'ready') and self.app.ready:
+                logger.info("[SETTINGS] Сброс настроек, перезапуск браузера...")
+                if hasattr(self.app, 'update_status'):
+                    self.app.update_status("● " + self.app.get_string('starting_browser'), '#ff9800')
+                if hasattr(self.app, '_restart_translator'):
+                    self.app._restart_translator()
+            else:
+                if hasattr(self.app, 'update_status'):
+                    self.app.update_status("● " + self.app.get_string('ready'), '#4CAF50')
+
+        if self.on_settings_changed:
+            self.on_settings_changed()
+
+        # Закрываем окно настроек
+        self.window.destroy()
 
     def create_widgets(self):
         main_container = tk.Frame(self.window, bg='#1e1e1e')
