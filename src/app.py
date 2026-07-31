@@ -1308,7 +1308,7 @@ class ScreenshotTranslatorApp:
             self.logger.info(f"[WINDOW] Сохранено {len(overlays)} оверлеев для HWND={hwnd}, was_visible={was_visible}")
 
     def _restore_window_state(self, hwnd: int):
-        """Восстанавливает состояние окна (показывает оверлеи, если они были видны)."""
+        """Восстанавливает состояние окна (показывает оверлеи, если они были видны и есть шаблоны)."""
         if hwnd is None or hwnd == 0:
             return
 
@@ -1329,14 +1329,29 @@ class ScreenshotTranslatorApp:
                     try:
                         overlay._is_visible_by_user = True
                         overlay._hidden_by_user = False
-                        # === ИСПРАВЛЕНИЕ: НЕ ПОКАЗЫВАЕМ ОВЕРЛЕЙ АВТОЗАМЕНЫ ПРИНУДИТЕЛЬНО ===
-                        # Они должны показываться только после того, как монитор найдёт шаблон
-                        if not overlay._is_auto_replace:
+
+                        # === ДЛЯ АВТОЗАМЕНЫ: ПОКАЗЫВАЕМ ТОЛЬКО ЕСЛИ ШАБЛОН НАЙДЕН ===
+                        if overlay._is_auto_replace:
+                            # Проверяем, найден ли шаблон для этого оверлея
+                            template_found = False
+                            if hasattr(self, 'translation_monitor') and self.translation_monitor:
+                                for template in self.translation_monitor.templates:
+                                    if template.get('hash') == overlay._template_id and template.get('found', False):
+                                        template_found = True
+                                        break
+
+                            if template_found:
+                                if not overlay.visible:
+                                    overlay.show()
+                                    self.logger.info(
+                                        f"[WINDOW] Показан оверлей автозамены {overlay._template_id[:8]} (шаблон найден)")
+                            else:
+                                self.logger.info(
+                                    f"[WINDOW] Оверлей автозамены {overlay._template_id[:8]} не показываем (шаблон не найден)")
+                        else:
+                            # Обычный оверлей — показываем сразу
                             if not overlay.visible:
                                 overlay.show()
-                        else:
-                            self.logger.info(
-                                f"[WINDOW] Оверлей автозамены {overlay._template_id[:8]} не показываем принудительно — будет показан монитором")
                     except Exception as e:
                         self.logger.warning(f"[WINDOW] Ошибка показа оверлея: {e}")
 

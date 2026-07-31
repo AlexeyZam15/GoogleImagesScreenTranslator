@@ -27,6 +27,64 @@ class OverlayManager:
         self._create_context_menu()
         self.logger.info("OverlayManager инициализирован")
 
+    def save_position(self, overlay_id, art_x, art_y, art_w, art_h, icon_x=None, icon_y=None,
+                      user_modified=False, offset_x=None, offset_y=None):
+        """Сохраняет позицию арта относительно иконки/шаблона."""
+
+        # Если offset передан, используем его
+        if offset_x is not None and offset_y is not None and icon_x is not None and icon_y is not None:
+            # Сохраняем смещение относительно шаблона
+            self.saved_positions[overlay_id] = {
+                'offset_x': offset_x,
+                'offset_y': offset_y,
+                'width': art_w,
+                'height': art_h,
+                'icon_x': icon_x,
+                'icon_y': icon_y,
+                'user_modified': user_modified
+            }
+            self.user_modified[overlay_id] = user_modified
+            self.save_positions_to_settings()
+            self.logger.info(f"[POSITION] Сохранено смещение для {overlay_id}: offset=({offset_x}, {offset_y})")
+            return
+
+        # Если icon_x/icon_y не переданы - получаем их через общий метод
+        if icon_x is None or icon_y is None:
+            icon_x, icon_y, found = self.get_icon_position(overlay_id)
+            if not found:
+                icon_x = art_x
+                icon_y = art_y
+
+        # Проверяем, изменилась ли позиция
+        saved = self.saved_positions.get(overlay_id)
+        if saved:
+            old_offset_x = saved.get('offset_x', 0)
+            old_offset_y = saved.get('offset_y', 0)
+            new_offset_x = art_x - icon_x
+            new_offset_y = art_y - icon_y
+            old_w = saved.get('width', 0)
+            old_h = saved.get('height', 0)
+
+            if (abs(old_offset_x - new_offset_x) < 3 and
+                    abs(old_offset_y - new_offset_y) < 3 and
+                    abs(old_w - art_w) < 3 and
+                    abs(old_h - art_h) < 3 and
+                    saved.get('user_modified', False) == user_modified):
+                return
+
+        self.saved_positions[overlay_id] = {
+            'offset_x': art_x - icon_x,
+            'offset_y': art_y - icon_y,
+            'width': art_w,
+            'height': art_h,
+            'icon_x': icon_x,
+            'icon_y': icon_y,
+            'user_modified': user_modified
+        }
+        self.user_modified[overlay_id] = user_modified
+        self.save_positions_to_settings()
+        self.logger.info(f"[POSITION] Сохранена позиция для {overlay_id}: offset=({art_x - icon_x}, {art_y - icon_y})")
+
     def save_overlay_state(self):
         """
         Сохраняет состояние всех оверлеев в JSON-файл.
@@ -139,6 +197,12 @@ class OverlayManager:
                 template_id = state.get('template_id')
                 region_path_str = state.get('region_path')
 
+                # Получаем сохранённую позицию
+                x = state.get('x', 0)
+                y = state.get('y', 0)
+                w = state.get('width', 300)
+                h = state.get('height', 200)
+
                 # Создаём оверлей, НО НЕ ПОКАЗЫВАЕМ ЕГО
                 overlay = self.create_overlay(
                     image_path=image_path,
@@ -153,25 +217,29 @@ class OverlayManager:
 
                 if overlay:
                     # Восстанавливаем позицию
-                    x = state.get('x', 0)
-                    y = state.get('y', 0)
-                    w = state.get('width', 300)
-                    h = state.get('height', 200)
-
                     try:
-                        overlay.root.geometry(f"{w}x{h}+{x}+{y}")
-                        overlay._saved_position = (x, y)
+                        if x != 0 or y != 0:
+                            overlay.root.geometry(f"{w}x{h}+{x}+{y}")
+                            overlay._saved_position = (x, y)
+                            self.logger.info(f"[STATE] Восстановлена позиция для {key}: ({x}, {y}) {w}x{h}")
+                        else:
+                            # Если позиция не сохранена (0,0), используем window_rect
+                            if window_rect:
+                                rx1, ry1, rx2, ry2 = window_rect
+                                if rx2 - rx1 > 10 and ry2 - ry1 > 10:
+                                    overlay.root.geometry(f"{rx2 - rx1}x{ry2 - ry1}+{rx1}+{ry1}")
+                                    self.logger.info(
+                                        f"[STATE] Установлена позиция из window_rect для {key}: ({rx1}, {ry1})")
                     except Exception as e:
                         self.logger.warning(f"[STATE] Ошибка восстановления позиции: {e}")
 
-                    # Устанавливаем, что оверлей должен быть виден (но не показываем!)
-                    overlay._is_visible_by_user = state.get('is_visible_by_user', True)
-                    overlay._hidden_by_user = state.get('hidden_by_user', False)
+                    # ВАЖНО: оверлей ОСТАЁТСЯ СКРЫТЫМ независимо от состояния visible
+                    overlay.visible = False
+                    overlay._is_visible_by_user = False  # Оверлей скрыт до нахождения шаблона
+                    overlay._hidden_by_user = False
                     overlay._hidden_by_mouse = False
                     overlay._mouse_over = False
 
-                    # ВАЖНО: оверлей остаётся скрытым
-                    overlay.visible = False
                     try:
                         overlay.root.withdraw()
                     except:
@@ -193,7 +261,7 @@ class OverlayManager:
                     self._sync_overlay_with_window_manager(parent_app, overlay, target_hwnd, state)
                     restored_count += 1
                     self.logger.info(
-                        f"[STATE] Восстановлен оверлей: {key} (auto_replace={is_auto_replace}, будет показан после поиска шаблона)")
+                        f"[STATE] Восстановлен оверлей: {key} (auto_replace={is_auto_replace}, скрыт до нахождения шаблона)")
 
             except Exception as e:
                 self.logger.error(f"[STATE] Ошибка восстановления оверлея {key}: {e}")
@@ -267,20 +335,14 @@ class OverlayManager:
             for target_hwnd in self.overlays_by_hwnd:
                 if target_hwnd in parent_app._window_states:
                     parent_app._window_states[target_hwnd]['overlays'] = self.overlays_by_hwnd[target_hwnd]
-                    # Сохраняем was_visible как True, если есть оверлеи с _is_visible_by_user=True
-                    was_visible = False
-                    for overlay in self.overlays_by_hwnd[target_hwnd]:
-                        if overlay._is_visible_by_user:
-                            was_visible = True
-                            break
-                    parent_app._window_states[target_hwnd]['was_visible'] = was_visible
-                    parent_app._window_states[target_hwnd]['visible'] = was_visible
-                    self.logger.info(f"[STATE] Обновлено состояние для HWND={target_hwnd}: was_visible={was_visible}")
+                    # Сохраняем was_visible как False, чтобы оверлеи не показывались принудительно
+                    parent_app._window_states[target_hwnd]['was_visible'] = False
+                    parent_app._window_states[target_hwnd]['visible'] = False
+                    self.logger.info(f"[STATE] Обновлено состояние для HWND={target_hwnd}: was_visible=False")
 
         self.logger.info(f"[STATE] Восстановлено {restored_count} оверлеев")
 
         # === НЕ ЗАПУСКАЕМ МОНИТОР СРАЗУ — он запустится при первом сканировании ===
-        # Монитор уже запущен или будет запущен при добавлении шаблонов
         if restored_count > 0 and parent_app and hasattr(parent_app, 'translation_monitor'):
             monitor = parent_app.translation_monitor
             if monitor and monitor.templates and not monitor.is_running():
@@ -289,8 +351,6 @@ class OverlayManager:
                     auto_replace_enabled = parent_app.settings.get_auto_replace_translated()
 
                 if auto_replace_enabled:
-                    # Монитор запустится автоматически при добавлении шаблонов
-                    # или уже запущен
                     if not monitor.is_running():
                         monitor.start()
                         self.logger.info("[STATE] ✅ Монитор автозамены запущен")

@@ -662,19 +662,19 @@ class OverlayWindow:
 
         try:
             if self.root and self.root.winfo_exists():
-                x = self.root.winfo_x()
-                y = self.root.winfo_y()
-                # Используем template_id (хеш) как ключ для сохранения позиции
-                if self._template_id:
-                    if hasattr(self, '_overlay_manager') and self._overlay_manager:
-                        self._overlay_manager._save_overlay_position(self._template_id, x, y)
-                        self.logger.info(
-                            f"[DEBUG] Сохранена позиция оверлея для шаблона {self._template_id[:8]}: ({x}, {y})")
-                elif self._last_image_path:
+                overlay_x = self.root.winfo_x()
+                overlay_y = self.root.winfo_y()
+
+                # Просто сохраняем абсолютную позицию через существующий метод
+                if self._template_id and hasattr(self, '_overlay_manager') and self._overlay_manager:
+                    self._overlay_manager._save_overlay_position(self._template_id, overlay_x, overlay_y)
+                    self.logger.info(
+                        f"[DEBUG] Сохранена позиция оверлея для шаблона {self._template_id[:8]}: ({overlay_x}, {overlay_y})")
+                elif self._last_image_path and hasattr(self, '_overlay_manager') and self._overlay_manager:
                     overlay_id = str(self._last_image_path)
-                    if hasattr(self, '_overlay_manager') and self._overlay_manager:
-                        self._overlay_manager._save_overlay_position(overlay_id, x, y)
-                        self.logger.info(f"[DEBUG] Сохранена позиция оверлея: {overlay_id} -> ({x}, {y})")
+                    self._overlay_manager._save_overlay_position(overlay_id, overlay_x, overlay_y)
+                    self.logger.info(f"[DEBUG] Сохранена позиция оверлея: {overlay_id} -> ({overlay_x}, {overlay_y})")
+
         except Exception as e:
             self.logger.warning(f"[DEBUG] Не удалось сохранить позицию оверлея: {e}")
 
