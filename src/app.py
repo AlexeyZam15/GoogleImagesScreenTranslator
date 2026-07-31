@@ -175,6 +175,671 @@ class ScreenshotTranslatorApp:
         # === ЗАПУСКАЕМ МОНИТОРИНГ ПЕРЕКЛЮЧЕНИЯ ОКОН ===
         self._start_window_monitor()
 
+    def _capture_window_for_area(self):
+        """Захватывает скриншот всего экрана и показывает для выделения области"""
+        self.logger.info("[DEBUG] _capture_window_for_area() - начало")
+
+        try:
+            import win32gui
+            from PIL import ImageGrab
+
+            if self.translation_overlay and self.translation_overlay.is_visible():
+                self.logger.info("[DEBUG] _capture_window_for_area: скрываем индикатор перевода")
+                self.translation_overlay.hide()
+                time.sleep(0.1)
+
+            current_hwnd = win32gui.GetForegroundWindow()
+
+            if not current_hwnd:
+                self.logger.error("[DEBUG] Не удалось получить активное окно")
+                self.update_status("● " + self.get_string('capture_error'), '#f44336')
+                self.translating = False
+                self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+                self.root.deiconify()
+                self._capture_mode = False
+                return
+
+            try:
+                window_text = win32gui.GetWindowText(current_hwnd)
+                if window_text == "Перевод скриншотов" or window_text == "Screen Translator":
+                    self.logger.info("[DEBUG] Активное окно - наше приложение, ждем 300мс...")
+                    time.sleep(0.3)
+                    current_hwnd = win32gui.GetForegroundWindow()
+                    if not current_hwnd:
+                        self.logger.error("[DEBUG] Не удалось получить активное окно после ожидания")
+                        self.update_status("● " + self.get_string('capture_error'), '#f44336')
+                        self.translating = False
+                        self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+                        self.root.deiconify()
+                        self._capture_mode = False
+                        return
+            except:
+                pass
+
+            target_hwnd = current_hwnd
+            self.logger.info(f"[DEBUG] Итоговый HWND для области: {target_hwnd}")
+
+            if not win32gui.IsWindow(target_hwnd):
+                self.logger.error(f"[DEBUG] Окно {target_hwnd} не существует")
+                self.update_status("● " + self.get_string('capture_error'), '#f44336')
+                self.translating = False
+                self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+                self.root.deiconify()
+                self._capture_mode = False
+                return
+
+            self.screenshot._last_hwnd = target_hwnd
+            self._area_target_hwnd = target_hwnd
+            self.screenshot._is_fullscreen = self.screenshot.is_window_fullscreen(target_hwnd)
+            self._area_is_fullscreen = self.screenshot._is_fullscreen
+
+            self.logger.info(f"[DEBUG] Сохранен HWND: {target_hwnd}, полноэкранный: {self._area_is_fullscreen}")
+
+            if self._area_is_fullscreen and self.settings.get_auto_windowed_fullscreen():
+                self.logger.info("[DEBUG] Преобразуем полноэкранный режим в windowed fullscreen")
+                try:
+                    from src.window_utils import send_alt_enter_to_window
+                    result = send_alt_enter_to_window(target_hwnd)
+                    if result:
+                        self.logger.info("[DEBUG] Преобразование УСПЕШНО")
+                        self.screenshot._is_fullscreen = False
+                        self._area_is_fullscreen = False
+                        time.sleep(0.3)
+                except Exception as e:
+                    self.logger.error(f"[DEBUG] Ошибка преобразования: {e}")
+
+            self.logger.info("[DEBUG] Захват всего экрана...")
+            img = ImageGrab.grab()
+            self.logger.info(f"[DEBUG] Скриншот: {img.size}")
+
+            if not img:
+                self.logger.error("[DEBUG] Не удалось захватить скриншот")
+                self.update_status("● " + self.get_string('capture_error'), '#f44336')
+                self.translating = False
+                self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+                self.root.deiconify()
+                self._capture_mode = False
+                return
+
+            screenshot_path = self.temp_dir / f"area_screenshot_{int(time.time())}.png"
+            img.save(screenshot_path)
+            self.logger.info(f"[DEBUG] Скриншот сохранен: {screenshot_path}")
+
+            # === ИСПОЛЬЗУЕМ НЕПРЕРЫВНОЕ ОКНО ВЫДЕЛЕНИЯ ===
+            self._show_continuous_area_selection_window(screenshot_path)
+
+        except Exception as e:
+            self.logger.error(f"[DEBUG] Ошибка захвата: {e}")
+            self.update_status("● " + self.get_string('capture_error'), '#f44336')
+            self.translating = False
+            self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+            self.root.deiconify()
+            self._capture_mode = False
+
+    def setup_hotkeys(self):
+        """Настройка глобальных горячих клавиш с использованием настроек."""
+        self.logger.info("=" * 60)
+        self.logger.info("[HOTKEYS] НАСТРОЙКА ГОРЯЧИХ КЛАВИШ")
+        self.logger.info("=" * 60)
+
+        try:
+            keyboard.unhook_all()
+            self.logger.info("[HOTKEYS] Старые хуки отключены")
+
+            self._capture_mode = False
+            self._area_selector = None
+            self._selection_window = None
+            self._hotkey_hook_active = True
+            self.logger.info(f"[HOTKEYS] _actions_blocked = {self._actions_blocked}")
+
+            hotkeys = self.settings.get_all_hotkeys()
+            self.logger.info(f"[HOTKEYS] Загружены настройки хоткеев: {hotkeys}")
+
+            self._hotkey_actions = {
+                'toggle_overlay': hotkeys.get('toggle_overlay', 'f1'),
+                'screenshot': hotkeys.get('screenshot', 'f2'),
+                'area': hotkeys.get('area', 'f3'),
+                'clear_all': hotkeys.get('clear_all', 'f4'),
+                'edit_mode': hotkeys.get('edit_mode', 'f5'),
+                'auto_replace': hotkeys.get('auto_replace', 'f6')
+            }
+            self.logger.info(f"[HOTKEYS] Назначенные действия: {self._hotkey_actions}")
+
+            # === ОДИНОЧНЫЕ КЛАВИШИ ===
+            single_keys = ['f1', 'f2', 'f3', 'f4', 'f5', 'f6']
+
+            def make_single_handler(action):
+                def handler(e):
+                    # _actions_blocked больше не проверяем - хуки физически отключаются
+                    current_time = time.time() * 1000
+                    if current_time - self._key_last_time.get(action, 0) >= self._debounce_ms:
+                        self._key_last_time[action] = current_time
+                        self.logger.info(f"[HOTKEYS] ДЕЙСТВИЕ: {action}")
+                        if action == 'toggle_overlay':
+                            self.root.after(0, self.toggle_overlay)
+                        elif action == 'screenshot':
+                            self.root.after(0, self.process)
+                        elif action == 'area':
+                            self.root.after(0, self.capture_area)
+                        elif action == 'clear_all':
+                            self.root.after(0, self.clear_all_overlays)
+                        elif action == 'edit_mode':
+                            self.root.after(0, self.toggle_edit_mode)
+                        elif action == 'auto_replace':
+                            self.root.after(0, self.toggle_auto_replace_mode)
+                    return False
+
+                return handler
+
+            for action, hotkey in self._hotkey_actions.items():
+                if hotkey in single_keys:
+                    keyboard.on_press_key(hotkey, make_single_handler(action), suppress=True)
+                    self.logger.info(f"[HOTKEYS] Зарегистрирована одиночная клавиша {hotkey} -> {action}")
+
+            # === СОЧЕТАНИЯ КЛАВИШ ===
+            combinations = {}
+            for action, hotkey in self._hotkey_actions.items():
+                if hotkey not in single_keys:
+                    combinations[action] = hotkey
+
+            if combinations:
+                self.logger.info(f"[HOTKEYS] Обнаружены комбинации: {combinations}")
+
+                self._pressed_keys = set()
+
+                def on_combination_key(event):
+                    if not self._hotkey_hook_active:
+                        return True
+
+                    if event.event_type == 'down':
+                        self._pressed_keys.add(event.name)
+                    elif event.event_type == 'up':
+                        self._pressed_keys.discard(event.name)
+                        return True
+
+                    if event.name == 'esc' and event.event_type == 'down':
+                        if self._capture_mode:
+                            # В режиме захвата ESC обрабатывается окном, не дублируем
+                            return False
+                        return True
+
+                    if event.event_type == 'down':
+                        current_pressed = set(self._pressed_keys)
+
+                        for action, hotkey in combinations.items():
+                            hotkey_parts = [p.lower().strip() for p in hotkey.split('+') if p.strip()]
+                            if not hotkey_parts:
+                                continue
+
+                            all_pressed = True
+                            pressed_lower = [p.lower() for p in current_pressed]
+
+                            for part in hotkey_parts:
+                                found = False
+                                for pressed in pressed_lower:
+                                    if part in pressed or pressed in part:
+                                        found = True
+                                        break
+                                if not found:
+                                    all_pressed = False
+                                    break
+
+                            if all_pressed:
+                                pressed_count = len(current_pressed)
+                                hotkey_count = len(hotkey_parts)
+                                if pressed_count > hotkey_count:
+                                    continue
+
+                                current_time = time.time() * 1000
+                                combo_key = f"{action}_{hotkey}"
+                                if current_time - self._key_last_time.get(combo_key, 0) >= self._debounce_ms:
+                                    self._key_last_time[combo_key] = current_time
+                                    self.logger.info(f"[HOTKEYS] ✅ Комбинация сработала: {action} ({hotkey})")
+                                    if action == 'toggle_overlay':
+                                        self.root.after(0, self.toggle_overlay)
+                                    elif action == 'screenshot':
+                                        self.root.after(0, self.process)
+                                    elif action == 'area':
+                                        self.root.after(0, self.capture_area)
+                                    elif action == 'clear_all':
+                                        self.root.after(0, self.clear_all_overlays)
+                                    elif action == 'edit_mode':
+                                        self.root.after(0, self.toggle_edit_mode)
+                                    elif action == 'auto_replace':
+                                        self.root.after(0, self.toggle_auto_replace_mode)
+                                    self._pressed_keys.clear()
+                                    return False
+
+                    return True
+
+                keyboard.hook(on_combination_key, suppress=True)
+                self.logger.info("[HOTKEYS] Хук для комбинаций установлен")
+
+            self._hotkey_hook_active = True
+            self.logger.info("=" * 60)
+            self.logger.info(
+                f"[HOTKEYS] ✅ Горячие клавиши зарегистрированы:\n"
+                f"  toggle_overlay: {self._hotkey_actions['toggle_overlay']}\n"
+                f"  screenshot:     {self._hotkey_actions['screenshot']}\n"
+                f"  area:           {self._hotkey_actions['area']}\n"
+                f"  clear_all:      {self._hotkey_actions['clear_all']}\n"
+                f"  edit_mode:      {self._hotkey_actions['edit_mode']}\n"
+                f"  auto_replace:   {self._hotkey_actions['auto_replace']}"
+            )
+            self.logger.info("=" * 60)
+
+        except Exception as e:
+            self.logger.error(f"[HOTKEYS] ❌ Ошибка регистрации горячих клавиш: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+            self._setup_tkinter_hotkeys()
+
+    def _start_continuous_area_capture(self):
+        """Запускает непрерывный режим захвата области - показываем окно с скриншотом."""
+        self.logger.info("[DEBUG] _start_continuous_area_capture() - начало")
+
+        try:
+            import win32gui
+            from PIL import ImageGrab
+
+            if self.translation_overlay and self.translation_overlay.is_visible():
+                self.logger.info("[DEBUG] _start_continuous_area_capture: скрываем индикатор перевода")
+                self.translation_overlay.hide()
+                time.sleep(0.1)
+
+            current_hwnd = win32gui.GetForegroundWindow()
+
+            if not current_hwnd:
+                self.logger.error("[DEBUG] Не удалось получить активное окно")
+                self.update_status("● " + self.get_string('capture_error'), '#f44336')
+                self.translating = False
+                self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+                self.root.deiconify()
+                self._capture_mode = False
+                self._area_capture_mode_active = False
+                if hasattr(self, 'set_actions_blocked'):
+                    self.set_actions_blocked(False)
+                return
+
+            try:
+                window_text = win32gui.GetWindowText(current_hwnd)
+                if window_text == "Перевод скриншотов" or window_text == "Screen Translator":
+                    self.logger.info("[DEBUG] Активное окно - наше приложение, ждем 300мс...")
+                    time.sleep(0.3)
+                    current_hwnd = win32gui.GetForegroundWindow()
+                    if not current_hwnd:
+                        self.logger.error("[DEBUG] Не удалось получить активное окно после ожидания")
+                        self.update_status("● " + self.get_string('capture_error'), '#f44336')
+                        self.translating = False
+                        self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+                        self.root.deiconify()
+                        self._capture_mode = False
+                        self._area_capture_mode_active = False
+                        if hasattr(self, 'set_actions_blocked'):
+                            self.set_actions_blocked(False)
+                        return
+            except:
+                pass
+
+            target_hwnd = current_hwnd
+            self.logger.info(f"[DEBUG] Итоговый HWND для области: {target_hwnd}")
+
+            if not win32gui.IsWindow(target_hwnd):
+                self.logger.error(f"[DEBUG] Окно {target_hwnd} не существует")
+                self.update_status("● " + self.get_string('capture_error'), '#f44336')
+                self.translating = False
+                self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+                self.root.deiconify()
+                self._capture_mode = False
+                self._area_capture_mode_active = False
+                if hasattr(self, 'set_actions_blocked'):
+                    self.set_actions_blocked(False)
+                return
+
+            self.screenshot._last_hwnd = target_hwnd
+            self._area_target_hwnd = target_hwnd
+            self.screenshot._is_fullscreen = self.screenshot.is_window_fullscreen(target_hwnd)
+            self._area_is_fullscreen = self.screenshot._is_fullscreen
+
+            self.logger.info(f"[DEBUG] Сохранен HWND: {target_hwnd}, полноэкранный: {self._area_is_fullscreen}")
+
+            if self._area_is_fullscreen and self.settings.get_auto_windowed_fullscreen():
+                self.logger.info("[DEBUG] Преобразуем полноэкранный режим в windowed fullscreen")
+                try:
+                    from src.window_utils import send_alt_enter_to_window
+                    result = send_alt_enter_to_window(target_hwnd)
+                    if result:
+                        self.logger.info("[DEBUG] Преобразование УСПЕШНО")
+                        self.screenshot._is_fullscreen = False
+                        self._area_is_fullscreen = False
+                        time.sleep(0.3)
+                except Exception as e:
+                    self.logger.error(f"[DEBUG] Ошибка преобразования: {e}")
+
+            self.logger.info("[DEBUG] Захват всего экрана...")
+            img = ImageGrab.grab()
+            self.logger.info(f"[DEBUG] Скриншот: {img.size}")
+
+            if not img:
+                self.logger.error("[DEBUG] Не удалось захватить скриншот")
+                self.update_status("● " + self.get_string('capture_error'), '#f44336')
+                self.translating = False
+                self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+                self.root.deiconify()
+                self._capture_mode = False
+                self._area_capture_mode_active = False
+                if hasattr(self, 'set_actions_blocked'):
+                    self.set_actions_blocked(False)
+                return
+
+            screenshot_path = self.temp_dir / f"area_screenshot_{int(time.time())}.png"
+            img.save(screenshot_path)
+            self.logger.info(f"[DEBUG] Скриншот сохранен: {screenshot_path}")
+
+            # Запускаем непрерывное окно выделения
+            self._show_continuous_area_selection_window(screenshot_path)
+
+        except Exception as e:
+            self.logger.error(f"[DEBUG] Ошибка захвата: {e}")
+            self.update_status("● " + self.get_string('capture_error'), '#f44336')
+            self.translating = False
+            self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+            self.root.deiconify()
+            self._capture_mode = False
+            self._area_capture_mode_active = False
+            if hasattr(self, 'set_actions_blocked'):
+                self.set_actions_blocked(False)
+
+    def _show_continuous_area_selection_window(self, screenshot_path):
+        """Показывает ПОСТОЯННОЕ полноэкранное окно с изображением для выделения областей."""
+        self.logger.info("[DEBUG] _show_continuous_area_selection_window()")
+
+        from PIL import Image, ImageTk
+        import tkinter as tk
+
+        img = Image.open(screenshot_path)
+        img_width, img_height = img.size
+
+        selection_window = tk.Toplevel()
+        selection_window.attributes('-fullscreen', True)
+        selection_window.attributes('-topmost', True)
+        selection_window.configure(bg='black')
+        selection_window.focus_force()
+
+        canvas = tk.Canvas(selection_window, cursor="cross", bg='black', highlightthickness=0)
+        canvas.pack(fill=tk.BOTH, expand=True)
+
+        screen_width = selection_window.winfo_screenwidth()
+        screen_height = selection_window.winfo_screenheight()
+
+        scale = min(screen_width / img_width, screen_height / img_height)
+        display_w = int(img_width * scale)
+        display_h = int(img_height * scale)
+
+        resized = img.resize((display_w, display_h), Image.Resampling.LANCZOS)
+        photo = ImageTk.PhotoImage(resized)
+
+        img_x = (screen_width - display_w) // 2
+        img_y = (screen_height - display_h) // 2
+
+        canvas.create_image(img_x, img_y, anchor=tk.NW, image=photo)
+        canvas.image = photo
+
+        # Сохраняем данные для выделения
+        selection_data = {
+            'img': img,
+            'screenshot_path': screenshot_path,
+            'scale_x': img_width / display_w,
+            'scale_y': img_height / display_h,
+            'img_x': img_x,
+            'img_y': img_y,
+            'start_x': None,
+            'start_y': None,
+            'rect': None,
+            'selection_window': selection_window,
+            'canvas': canvas
+        }
+
+        self._area_selection_data = selection_data
+
+        # Текст-инструкция
+        instruction_text = "Выделите область для перевода (ПКМ/ESC/Enter - выход)"
+        instruction_id = canvas.create_text(
+            screen_width // 2,
+            50,
+            text=instruction_text,
+            fill="white",
+            font=("Arial", 16, "bold")
+        )
+
+        # Счетчик выделенных областей
+        counter_id = canvas.create_text(
+            screen_width // 2,
+            90,
+            text="Выделено: 0",
+            fill="#4CAF50",
+            font=("Arial", 14)
+        )
+        selection_data['counter_id'] = counter_id
+        selection_data['area_count'] = 0
+
+        def on_mouse_down(event):
+            selection_data['start_x'] = event.x
+            selection_data['start_y'] = event.y
+            if selection_data['rect']:
+                canvas.delete(selection_data['rect'])
+
+        def on_mouse_drag(event):
+            if selection_data['start_x'] is not None:
+                if selection_data['rect']:
+                    canvas.delete(selection_data['rect'])
+                selection_data['rect'] = canvas.create_rectangle(
+                    selection_data['start_x'],
+                    selection_data['start_y'],
+                    event.x,
+                    event.y,
+                    outline='red',
+                    width=2,
+                    fill='blue',
+                    stipple='gray50'
+                )
+
+        def on_mouse_up(event):
+            if selection_data['start_x'] is not None:
+                x1, y1 = min(selection_data['start_x'], event.x), min(selection_data['start_y'], event.y)
+                x2, y2 = max(selection_data['start_x'], event.x), max(selection_data['start_y'], event.y)
+
+                min_size = 10
+                if x2 - x1 > min_size and y2 - y1 > min_size:
+                    orig_x1 = int((x1 - selection_data['img_x']) * selection_data['scale_x'])
+                    orig_y1 = int((y1 - selection_data['img_y']) * selection_data['scale_y'])
+                    orig_x2 = int((x2 - selection_data['img_x']) * selection_data['scale_x'])
+                    orig_y2 = int((y2 - selection_data['img_y']) * selection_data['scale_y'])
+
+                    orig_x1 = max(0, min(orig_x1, img_width))
+                    orig_y1 = max(0, min(orig_y1, img_height))
+                    orig_x2 = max(0, min(orig_x2, img_width))
+                    orig_y2 = max(0, min(orig_y2, img_height))
+
+                    self.logger.info(f"[DEBUG] Выделена область: ({orig_x1},{orig_y1})-({orig_x2},{orig_y2})")
+
+                    # Увеличиваем счетчик
+                    selection_data['area_count'] += 1
+                    canvas.itemconfig(counter_id, text=f"Выделено: {selection_data['area_count']}")
+
+                    # Удаляем старый прямоугольник
+                    if selection_data['rect']:
+                        canvas.delete(selection_data['rect'])
+                        selection_data['rect'] = None
+
+                    # Сбрасываем состояние для следующего выделения
+                    selection_data['start_x'] = None
+                    selection_data['start_y'] = None
+
+                    # Отправляем область в очередь (НЕ ЗАКРЫВАЯ ОКНО)
+                    self._process_area_selection_continuous(
+                        orig_x1, orig_y1, orig_x2, orig_y2,
+                        screenshot_path,
+                        selection_window
+                    )
+                else:
+                    # Слишком маленькая область - просто сбрасываем
+                    if selection_data['rect']:
+                        canvas.delete(selection_data['rect'])
+                        selection_data['rect'] = None
+                    selection_data['start_x'] = None
+                    selection_data['start_y'] = None
+
+        def exit_area_mode():
+            """Выход из режима захвата области."""
+            self.logger.info("[DEBUG] exit_area_mode() - выход из режима захвата")
+            self._capture_mode = False
+            self._area_capture_mode_active = False
+            self._area_selection_data = None
+            self.translating = False
+            self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+            self.root.deiconify()
+            if hasattr(self, 'set_actions_blocked'):
+                self.set_actions_blocked(False)
+            try:
+                selection_window.destroy()
+            except:
+                pass
+
+        def on_escape(event):
+            self.logger.info("[DEBUG] ESC - выход из режима захвата")
+            exit_area_mode()
+
+        def on_right_click(event):
+            self.logger.info("[DEBUG] ПКМ - выход из режима захвата")
+            exit_area_mode()
+
+        def on_enter(event):
+            self.logger.info("[DEBUG] Enter - выход из режима захвата")
+            exit_area_mode()
+
+        # Привязываем события
+        canvas.bind("<ButtonPress-1>", on_mouse_down)
+        canvas.bind("<B1-Motion>", on_mouse_drag)
+        canvas.bind("<ButtonRelease-1>", on_mouse_up)
+        canvas.bind("<Button-3>", on_right_click)  # ПКМ
+        selection_window.bind("<Escape>", on_escape)
+        canvas.bind("<Escape>", on_escape)
+        selection_window.bind("<Return>", on_enter)
+        canvas.bind("<Return>", on_enter)
+
+        # Сохраняем обработчик выхода
+        self._selection_window_on_escape = exit_area_mode
+        self._selection_window = selection_window
+        self._capture_mode = True
+
+        # Принудительно устанавливаем фокус
+        selection_window.focus_force()
+        selection_window.lift()
+        selection_window.attributes('-topmost', True)
+
+        def ensure_focus():
+            try:
+                if selection_window and selection_window.winfo_exists():
+                    selection_window.focus_force()
+                    selection_window.lift()
+                    self.logger.info("[DEBUG] ensure_focus: фокус принудительно установлен на окно выделения")
+            except:
+                pass
+
+        selection_window.after(300, ensure_focus)
+
+        def on_close():
+            self.logger.info("[DEBUG] Закрытие окна выделения")
+            self._capture_mode = False
+            self._area_capture_mode_active = False
+            self._area_selection_data = None
+            self._selection_window = None
+            self._selection_window_on_escape = None
+            self.translating = False
+            self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+            self.root.deiconify()
+            if hasattr(self, 'set_actions_blocked'):
+                self.set_actions_blocked(False)
+            try:
+                selection_window.destroy()
+            except:
+                pass
+
+        selection_window.protocol("WM_DELETE_WINDOW", on_close)
+
+    def _process_area_selection_continuous(self, x1, y1, x2, y2, screenshot_path, selection_window):
+        """
+        Обрабатывает выделенную область - добавляет задачу в очередь, НЕ ЗАКРЫВАЯ ОКНО.
+        """
+        self.logger.info(f"[DEBUG] _process_area_selection_continuous: ({x1},{y1})-({x2},{y2})")
+
+        self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+
+        self._area_rect = (x1, y1, x2, y2)
+
+        def process_task():
+            try:
+                from PIL import Image
+
+                full_img = Image.open(screenshot_path)
+                cropped = full_img.crop((x1, y1, x2, y2))
+
+                if not cropped:
+                    self.logger.error("[DEBUG] Не удалось вырезать область")
+                    self.update_status("● " + self.get_string('capture_error'), '#f44336')
+                    return
+
+                self.logger.info(f"[DEBUG] Область вырезана: {cropped.size}")
+
+                region_path = self.temp_dir / f"region_{int(time.time())}.png"
+                cropped.save(region_path)
+                self.logger.info(f"[DEBUG] Область сохранена как шаблон: {region_path}")
+
+                path = self.temp_dir / f"area_{int(time.time())}.png"
+                cropped.save(path)
+                self.logger.info(f"[DEBUG] Область сохранена: {path}")
+
+                target_hwnd = getattr(self, '_area_target_hwnd', None)
+                is_fullscreen = getattr(self, '_area_is_fullscreen', False)
+
+                if target_hwnd is None:
+                    target_hwnd = self.screenshot.get_last_hwnd()
+                    self.logger.info(f"[DEBUG] _area_target_hwnd отсутствует, используем из screenshot: {target_hwnd}")
+
+                if target_hwnd:
+                    self.logger.info(
+                        f"[DEBUG] Для оверлея будет использован HWND: {target_hwnd}, полноэкранный: {is_fullscreen}"
+                    )
+                    self.screenshot._last_hwnd = target_hwnd
+                    self.screenshot._is_fullscreen = is_fullscreen
+                else:
+                    self.logger.warning("[DEBUG] Нет HWND для оверлея!")
+
+                self._area_rect_for_overlay = (x1, y1, x2, y2)
+
+                task = {
+                    'type': 'area',
+                    'image_path': path,
+                    'area_rect': (x1, y1, x2, y2),
+                    'target_hwnd': target_hwnd,
+                    'is_fullscreen': is_fullscreen,
+                    'region_path': region_path
+                }
+                self.translation_queue.append(task)
+                self.logger.info(f"[QUEUE] Задача добавлена в очередь. Размер очереди: {len(self.translation_queue)}")
+
+                if not self.is_processing_queue:
+                    self._process_next_in_queue()
+
+            except Exception as e:
+                self.logger.error(f"Ошибка обработки области: {e}")
+                self.update_status("● " + self.get_string('error'), '#f44336')
+                self._capture_mode = False
+                self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+
+        threading.Thread(target=process_task, daemon=True).start()
+
     def _start_window_monitor(self):
         """Запускает мониторинг переключения активного окна."""
         self.logger.info("[WINDOW] Запуск монитора переключения окон")
@@ -275,106 +940,6 @@ class ScreenshotTranslatorApp:
                 self.logger.info(f"[WINDOW] Оверлеи для HWND={new_hwnd} были скрыты, не показываем")
         else:
             self.logger.info(f"[WINDOW] Нет сохраненного состояния для HWND={new_hwnd}")
-
-    def _capture_window_for_area(self):
-        """Захватывает скриншот всего экрана и показывает для выделения области"""
-        self.logger.info("[DEBUG] _capture_window_for_area() - начало")
-
-        try:
-            import win32gui
-            from PIL import ImageGrab
-
-            if self.translation_overlay and self.translation_overlay.is_visible():
-                self.logger.info("[DEBUG] _capture_window_for_area: скрываем индикатор перевода")
-                self.translation_overlay.hide()
-                time.sleep(0.1)
-
-            current_hwnd = win32gui.GetForegroundWindow()
-
-            if not current_hwnd:
-                self.logger.error("[DEBUG] Не удалось получить активное окно")
-                self.update_status("● " + self.get_string('capture_error'), '#f44336')
-                self.translating = False
-                self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
-                self.root.deiconify()
-                self._capture_mode = False
-                return
-
-            try:
-                window_text = win32gui.GetWindowText(current_hwnd)
-                if window_text == "Перевод скриншотов" or window_text == "Screen Translator":
-                    self.logger.info("[DEBUG] Активное окно - наше приложение, ждем 300мс...")
-                    time.sleep(0.3)
-                    current_hwnd = win32gui.GetForegroundWindow()
-                    if not current_hwnd:
-                        self.logger.error("[DEBUG] Не удалось получить активное окно после ожидания")
-                        self.update_status("● " + self.get_string('capture_error'), '#f44336')
-                        self.translating = False
-                        self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
-                        self.root.deiconify()
-                        self._capture_mode = False
-                        return
-            except:
-                pass
-
-            target_hwnd = current_hwnd
-            self.logger.info(f"[DEBUG] Итоговый HWND для области: {target_hwnd}")
-
-            if not win32gui.IsWindow(target_hwnd):
-                self.logger.error(f"[DEBUG] Окно {target_hwnd} не существует")
-                self.update_status("● " + self.get_string('capture_error'), '#f44336')
-                self.translating = False
-                self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
-                self.root.deiconify()
-                self._capture_mode = False
-                return
-
-            self.screenshot._last_hwnd = target_hwnd
-            self._area_target_hwnd = target_hwnd
-            self.screenshot._is_fullscreen = self.screenshot.is_window_fullscreen(target_hwnd)
-            self._area_is_fullscreen = self.screenshot._is_fullscreen
-
-            self.logger.info(f"[DEBUG] Сохранен HWND: {target_hwnd}, полноэкранный: {self._area_is_fullscreen}")
-
-            if self._area_is_fullscreen and self.settings.get_auto_windowed_fullscreen():
-                self.logger.info("[DEBUG] Преобразуем полноэкранный режим в windowed fullscreen")
-                try:
-                    from src.window_utils import send_alt_enter_to_window
-                    result = send_alt_enter_to_window(target_hwnd)
-                    if result:
-                        self.logger.info("[DEBUG] Преобразование УСПЕШНО")
-                        self.screenshot._is_fullscreen = False
-                        self._area_is_fullscreen = False
-                        time.sleep(0.3)
-                except Exception as e:
-                    self.logger.error(f"[DEBUG] Ошибка преобразования: {e}")
-
-            self.logger.info("[DEBUG] Захват всего экрана...")
-            img = ImageGrab.grab()
-            self.logger.info(f"[DEBUG] Скриншот: {img.size}")
-
-            if not img:
-                self.logger.error("[DEBUG] Не удалось захватить скриншот")
-                self.update_status("● " + self.get_string('capture_error'), '#f44336')
-                self.translating = False
-                self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
-                self.root.deiconify()
-                self._capture_mode = False
-                return
-
-            screenshot_path = self.temp_dir / f"area_screenshot_{int(time.time())}.png"
-            img.save(screenshot_path)
-            self.logger.info(f"[DEBUG] Скриншот сохранен: {screenshot_path}")
-
-            self._show_area_selection_window(screenshot_path)
-
-        except Exception as e:
-            self.logger.error(f"[DEBUG] Ошибка захвата: {e}")
-            self.update_status("● " + self.get_string('capture_error'), '#f44336')
-            self.translating = False
-            self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
-            self.root.deiconify()
-            self._capture_mode = False
 
     def capture_area(self):
         """Захват области экрана (F3)."""
@@ -1774,166 +2339,6 @@ class ScreenshotTranslatorApp:
                 )
 
         self.logger.info(f"[HOTKEYS] Кнопки обновлены: {hotkeys}")
-
-    def setup_hotkeys(self):
-        """Настройка глобальных горячих клавиш с использованием настроек."""
-        self.logger.info("=" * 60)
-        self.logger.info("[HOTKEYS] НАСТРОЙКА ГОРЯЧИХ КЛАВИШ")
-        self.logger.info("=" * 60)
-
-        try:
-            keyboard.unhook_all()
-            self.logger.info("[HOTKEYS] Старые хуки отключены")
-
-            self._capture_mode = False
-            self._area_selector = None
-            self._selection_window = None
-            self._hotkey_hook_active = True
-            self.logger.info(f"[HOTKEYS] _actions_blocked = {self._actions_blocked}")
-
-            hotkeys = self.settings.get_all_hotkeys()
-            self.logger.info(f"[HOTKEYS] Загружены настройки хоткеев: {hotkeys}")
-
-            self._hotkey_actions = {
-                'toggle_overlay': hotkeys.get('toggle_overlay', 'f1'),
-                'screenshot': hotkeys.get('screenshot', 'f2'),
-                'area': hotkeys.get('area', 'f3'),
-                'clear_all': hotkeys.get('clear_all', 'f4'),
-                'edit_mode': hotkeys.get('edit_mode', 'f5'),
-                'auto_replace': hotkeys.get('auto_replace', 'f6')  # <-- НОВЫЙ ХОТКЕЙ
-            }
-            self.logger.info(f"[HOTKEYS] Назначенные действия: {self._hotkey_actions}")
-
-            # === ОДИНОЧНЫЕ КЛАВИШИ ===
-            single_keys = ['f1', 'f2', 'f3', 'f4', 'f5', 'f6']
-
-            def make_single_handler(action):
-                def handler(e):
-                    # _actions_blocked больше не проверяем - хуки физически отключаются
-                    current_time = time.time() * 1000
-                    if current_time - self._key_last_time.get(action, 0) >= self._debounce_ms:
-                        self._key_last_time[action] = current_time
-                        self.logger.info(f"[HOTKEYS] ДЕЙСТВИЕ: {action}")
-                        if action == 'toggle_overlay':
-                            self.root.after(0, self.toggle_overlay)
-                        elif action == 'screenshot':
-                            self.root.after(0, self.process)
-                        elif action == 'area':
-                            self.root.after(0, self.capture_area)
-                        elif action == 'clear_all':
-                            self.root.after(0, self.clear_all_overlays)
-                        elif action == 'edit_mode':
-                            self.root.after(0, self.toggle_edit_mode)
-                        elif action == 'auto_replace':  # <-- НОВОЕ ДЕЙСТВИЕ
-                            self.root.after(0, self.toggle_auto_replace_mode)
-                    return False
-
-                return handler
-
-            for action, hotkey in self._hotkey_actions.items():
-                if hotkey in single_keys:
-                    keyboard.on_press_key(hotkey, make_single_handler(action), suppress=True)
-                    self.logger.info(f"[HOTKEYS] Зарегистрирована одиночная клавиша {hotkey} -> {action}")
-
-            # === СОЧЕТАНИЯ КЛАВИШ ===
-            combinations = {}
-            for action, hotkey in self._hotkey_actions.items():
-                if hotkey not in single_keys:
-                    combinations[action] = hotkey
-
-            if combinations:
-                self.logger.info(f"[HOTKEYS] Обнаружены комбинации: {combinations}")
-
-                self._pressed_keys = set()
-
-                def on_combination_key(event):
-                    if not self._hotkey_hook_active:
-                        return True
-
-                    # _actions_blocked больше не проверяем - хуки физически отключаются
-
-                    if event.event_type == 'down':
-                        self._pressed_keys.add(event.name)
-                    elif event.event_type == 'up':
-                        self._pressed_keys.discard(event.name)
-                        return True
-
-                    if event.name == 'esc' and event.event_type == 'down':
-                        if self._capture_mode:
-                            # ... обработка ESC ...
-                            return False
-                        return True
-
-                    if event.event_type == 'down':
-                        current_pressed = set(self._pressed_keys)
-
-                        for action, hotkey in combinations.items():
-                            hotkey_parts = [p.lower().strip() for p in hotkey.split('+') if p.strip()]
-                            if not hotkey_parts:
-                                continue
-
-                            all_pressed = True
-                            pressed_lower = [p.lower() for p in current_pressed]
-
-                            for part in hotkey_parts:
-                                found = False
-                                for pressed in pressed_lower:
-                                    if part in pressed or pressed in part:
-                                        found = True
-                                        break
-                                if not found:
-                                    all_pressed = False
-                                    break
-
-                            if all_pressed:
-                                pressed_count = len(current_pressed)
-                                hotkey_count = len(hotkey_parts)
-                                if pressed_count > hotkey_count:
-                                    continue
-
-                                current_time = time.time() * 1000
-                                combo_key = f"{action}_{hotkey}"
-                                if current_time - self._key_last_time.get(combo_key, 0) >= self._debounce_ms:
-                                    self._key_last_time[combo_key] = current_time
-                                    self.logger.info(f"[HOTKEYS] ✅ Комбинация сработала: {action} ({hotkey})")
-                                    if action == 'toggle_overlay':
-                                        self.root.after(0, self.toggle_overlay)
-                                    elif action == 'screenshot':
-                                        self.root.after(0, self.process)
-                                    elif action == 'area':
-                                        self.root.after(0, self.capture_area)
-                                    elif action == 'clear_all':
-                                        self.root.after(0, self.clear_all_overlays)
-                                    elif action == 'edit_mode':
-                                        self.root.after(0, self.toggle_edit_mode)
-                                    elif action == 'auto_replace':  # <-- НОВОЕ ДЕЙСТВИЕ
-                                        self.root.after(0, self.toggle_auto_replace_mode)
-                                    self._pressed_keys.clear()
-                                    return False
-
-                    return True
-
-                keyboard.hook(on_combination_key, suppress=True)
-                self.logger.info("[HOTKEYS] Хук для комбинаций установлен")
-
-            self._hotkey_hook_active = True
-            self.logger.info("=" * 60)
-            self.logger.info(
-                f"[HOTKEYS] ✅ Горячие клавиши зарегистрированы:\n"
-                f"  toggle_overlay: {self._hotkey_actions['toggle_overlay']}\n"
-                f"  screenshot:     {self._hotkey_actions['screenshot']}\n"
-                f"  area:           {self._hotkey_actions['area']}\n"
-                f"  clear_all:      {self._hotkey_actions['clear_all']}\n"
-                f"  edit_mode:      {self._hotkey_actions['edit_mode']}\n"
-                f"  auto_replace:   {self._hotkey_actions['auto_replace']}"  # <-- НОВЫЙ
-            )
-            self.logger.info("=" * 60)
-
-        except Exception as e:
-            self.logger.error(f"[HOTKEYS] ❌ Ошибка регистрации горячих клавиш: {e}")
-            import traceback
-            self.logger.error(traceback.format_exc())
-            self._setup_tkinter_hotkeys()
 
     def toggle_auto_replace(self):
         """Включает/выключает режим автозамены переведенных областей."""
