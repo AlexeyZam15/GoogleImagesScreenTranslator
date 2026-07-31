@@ -175,6 +175,243 @@ class ScreenshotTranslatorApp:
         # === ЗАПУСКАЕМ МОНИТОРИНГ ПЕРЕКЛЮЧЕНИЯ ОКОН ===
         self._start_window_monitor()
 
+    def _show_continuous_area_selection_window(self, screenshot_path):
+        """Показывает ПОСТОЯННОЕ полноэкранное окно с изображением для выделения областей."""
+        self.logger.info("[DEBUG] _show_continuous_area_selection_window()")
+
+        from PIL import Image, ImageTk
+        import tkinter as tk
+
+        img = Image.open(screenshot_path)
+        img_width, img_height = img.size
+
+        selection_window = tk.Toplevel()
+        selection_window.attributes('-fullscreen', True)
+        selection_window.attributes('-topmost', True)
+        selection_window.configure(bg='black')
+        selection_window.focus_force()
+
+        canvas = tk.Canvas(selection_window, cursor="cross", bg='black', highlightthickness=0)
+        canvas.pack(fill=tk.BOTH, expand=True)
+
+        screen_width = selection_window.winfo_screenwidth()
+        screen_height = selection_window.winfo_screenheight()
+
+        scale = min(screen_width / img_width, screen_height / img_height)
+        display_w = int(img_width * scale)
+        display_h = int(img_height * scale)
+
+        resized = img.resize((display_w, display_h), Image.Resampling.LANCZOS)
+        photo = ImageTk.PhotoImage(resized)
+
+        img_x = (screen_width - display_w) // 2
+        img_y = (screen_height - display_h) // 2
+
+        canvas.create_image(img_x, img_y, anchor=tk.NW, image=photo)
+        canvas.image = photo
+
+        # Сохраняем данные для выделения
+        selection_data = {
+            'img': img,
+            'screenshot_path': screenshot_path,
+            'scale_x': img_width / display_w,
+            'scale_y': img_height / display_h,
+            'img_x': img_x,
+            'img_y': img_y,
+            'start_x': None,
+            'start_y': None,
+            'rect': None,
+            'selection_window': selection_window,
+            'canvas': canvas
+        }
+
+        self._area_selection_data = selection_data
+
+        # Текст-инструкция
+        instruction_text = "Выделите область для перевода (ПКМ/ESC/Enter - выход)"
+        instruction_id = canvas.create_text(
+            screen_width // 2,
+            50,
+            text=instruction_text,
+            fill="white",
+            font=("Arial", 16, "bold")
+        )
+
+        # Счетчик выделенных областей
+        counter_id = canvas.create_text(
+            screen_width // 2,
+            90,
+            text="Выделено: 0",
+            fill="#4CAF50",
+            font=("Arial", 14)
+        )
+        selection_data['counter_id'] = counter_id
+        selection_data['area_count'] = 0
+
+        # Сохраняем целевой HWND для возврата фокуса при выходе
+        target_hwnd_for_exit = getattr(self, '_area_target_hwnd', None)
+        self.logger.info(f"[DEBUG] Сохранен target_hwnd для выхода из захвата: {target_hwnd_for_exit}")
+
+        def on_mouse_down(event):
+            selection_data['start_x'] = event.x
+            selection_data['start_y'] = event.y
+            if selection_data['rect']:
+                canvas.delete(selection_data['rect'])
+
+        def on_mouse_drag(event):
+            if selection_data['start_x'] is not None:
+                if selection_data['rect']:
+                    canvas.delete(selection_data['rect'])
+                selection_data['rect'] = canvas.create_rectangle(
+                    selection_data['start_x'],
+                    selection_data['start_y'],
+                    event.x,
+                    event.y,
+                    outline='red',
+                    width=2,
+                    fill='blue',
+                    stipple='gray50'
+                )
+
+        def on_mouse_up(event):
+            if selection_data['start_x'] is not None:
+                x1, y1 = min(selection_data['start_x'], event.x), min(selection_data['start_y'], event.y)
+                x2, y2 = max(selection_data['start_x'], event.x), max(selection_data['start_y'], event.y)
+
+                min_size = 10
+                if x2 - x1 > min_size and y2 - y1 > min_size:
+                    orig_x1 = int((x1 - selection_data['img_x']) * selection_data['scale_x'])
+                    orig_y1 = int((y1 - selection_data['img_y']) * selection_data['scale_y'])
+                    orig_x2 = int((x2 - selection_data['img_x']) * selection_data['scale_x'])
+                    orig_y2 = int((y2 - selection_data['img_y']) * selection_data['scale_y'])
+
+                    orig_x1 = max(0, min(orig_x1, img_width))
+                    orig_y1 = max(0, min(orig_y1, img_height))
+                    orig_x2 = max(0, min(orig_x2, img_width))
+                    orig_y2 = max(0, min(orig_y2, img_height))
+
+                    self.logger.info(f"[DEBUG] Выделена область: ({orig_x1},{orig_y1})-({orig_x2},{orig_y2})")
+
+                    # Увеличиваем счетчик
+                    selection_data['area_count'] += 1
+                    canvas.itemconfig(counter_id, text=f"Выделено: {selection_data['area_count']}")
+
+                    # Удаляем старый прямоугольник
+                    if selection_data['rect']:
+                        canvas.delete(selection_data['rect'])
+                        selection_data['rect'] = None
+
+                    # Сбрасываем состояние для следующего выделения
+                    selection_data['start_x'] = None
+                    selection_data['start_y'] = None
+
+                    # Отправляем область в очередь (НЕ ЗАКРЫВАЯ ОКНО)
+                    self._process_area_selection_continuous(
+                        orig_x1, orig_y1, orig_x2, orig_y2,
+                        screenshot_path,
+                        selection_window
+                    )
+                else:
+                    # Слишком маленькая область - просто сбрасываем
+                    if selection_data['rect']:
+                        canvas.delete(selection_data['rect'])
+                        selection_data['rect'] = None
+                    selection_data['start_x'] = None
+                    selection_data['start_y'] = None
+
+        def exit_area_mode():
+            """Выход из режима захвата области с возвратом фокуса на целевое окно."""
+            self.logger.info("[DEBUG] exit_area_mode() - выход из режима захвата")
+            self._capture_mode = False
+            self._area_capture_mode_active = False
+            self._area_selection_data = None
+            self.translating = False
+            self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+            # НЕ показываем главное окно - возвращаем фокус на целевое окно
+            if hasattr(self, 'set_actions_blocked'):
+                self.set_actions_blocked(False)
+
+            # Возвращаем фокус на целевое окно
+            if target_hwnd_for_exit:
+                try:
+                    import win32gui
+                    import win32con
+                    self.logger.info(f"[DEBUG] Возврат фокуса на целевое окно: {target_hwnd_for_exit}")
+                    win32gui.ShowWindow(target_hwnd_for_exit, win32con.SW_RESTORE)
+                    win32gui.SetForegroundWindow(target_hwnd_for_exit)
+                    self.logger.info("[DEBUG] Фокус возвращен на целевое окно")
+                except Exception as e:
+                    self.logger.warning(f"[DEBUG] Не удалось вернуть фокус на целевое окно: {e}")
+                    # Fallback: показываем главное окно, если не удалось вернуть фокус
+                    try:
+                        self.root.deiconify()
+                        self.root.lift()
+                        self.root.focus_force()
+                    except:
+                        pass
+            else:
+                # Если целевое окно не известно - показываем главное
+                try:
+                    self.root.deiconify()
+                    self.root.lift()
+                    self.root.focus_force()
+                except:
+                    pass
+
+            try:
+                selection_window.destroy()
+            except:
+                pass
+
+        def on_escape(event):
+            self.logger.info("[DEBUG] ESC - выход из режима захвата")
+            exit_area_mode()
+
+        def on_right_click(event):
+            self.logger.info("[DEBUG] ПКМ - выход из режима захвата")
+            exit_area_mode()
+
+        def on_enter(event):
+            self.logger.info("[DEBUG] Enter - выход из режима захвата")
+            exit_area_mode()
+
+        # Привязываем события
+        canvas.bind("<ButtonPress-1>", on_mouse_down)
+        canvas.bind("<B1-Motion>", on_mouse_drag)
+        canvas.bind("<ButtonRelease-1>", on_mouse_up)
+        canvas.bind("<Button-3>", on_right_click)  # ПКМ
+        selection_window.bind("<Escape>", on_escape)
+        canvas.bind("<Escape>", on_escape)
+        selection_window.bind("<Return>", on_enter)
+        canvas.bind("<Return>", on_enter)
+
+        # Сохраняем обработчик выхода
+        self._selection_window_on_escape = exit_area_mode
+        self._selection_window = selection_window
+        self._capture_mode = True
+
+        # Принудительно устанавливаем фокус
+        selection_window.focus_force()
+        selection_window.lift()
+        selection_window.attributes('-topmost', True)
+
+        def ensure_focus():
+            try:
+                if selection_window and selection_window.winfo_exists():
+                    selection_window.focus_force()
+                    selection_window.lift()
+                    self.logger.info("[DEBUG] ensure_focus: фокус принудительно установлен на окно выделения")
+            except:
+                pass
+
+        selection_window.after(300, ensure_focus)
+
+        def on_close():
+            self.logger.info("[DEBUG] Закрытие окна выделения")
+            exit_area_mode()
+
+        selection_window.protocol("WM_DELETE_WINDOW", on_close)
+
     def _capture_window_for_area(self):
         """Захватывает скриншот всего экрана и показывает для выделения области"""
         self.logger.info("[DEBUG] _capture_window_for_area() - начало")
@@ -549,224 +786,6 @@ class ScreenshotTranslatorApp:
             self._area_capture_mode_active = False
             if hasattr(self, 'set_actions_blocked'):
                 self.set_actions_blocked(False)
-
-    def _show_continuous_area_selection_window(self, screenshot_path):
-        """Показывает ПОСТОЯННОЕ полноэкранное окно с изображением для выделения областей."""
-        self.logger.info("[DEBUG] _show_continuous_area_selection_window()")
-
-        from PIL import Image, ImageTk
-        import tkinter as tk
-
-        img = Image.open(screenshot_path)
-        img_width, img_height = img.size
-
-        selection_window = tk.Toplevel()
-        selection_window.attributes('-fullscreen', True)
-        selection_window.attributes('-topmost', True)
-        selection_window.configure(bg='black')
-        selection_window.focus_force()
-
-        canvas = tk.Canvas(selection_window, cursor="cross", bg='black', highlightthickness=0)
-        canvas.pack(fill=tk.BOTH, expand=True)
-
-        screen_width = selection_window.winfo_screenwidth()
-        screen_height = selection_window.winfo_screenheight()
-
-        scale = min(screen_width / img_width, screen_height / img_height)
-        display_w = int(img_width * scale)
-        display_h = int(img_height * scale)
-
-        resized = img.resize((display_w, display_h), Image.Resampling.LANCZOS)
-        photo = ImageTk.PhotoImage(resized)
-
-        img_x = (screen_width - display_w) // 2
-        img_y = (screen_height - display_h) // 2
-
-        canvas.create_image(img_x, img_y, anchor=tk.NW, image=photo)
-        canvas.image = photo
-
-        # Сохраняем данные для выделения
-        selection_data = {
-            'img': img,
-            'screenshot_path': screenshot_path,
-            'scale_x': img_width / display_w,
-            'scale_y': img_height / display_h,
-            'img_x': img_x,
-            'img_y': img_y,
-            'start_x': None,
-            'start_y': None,
-            'rect': None,
-            'selection_window': selection_window,
-            'canvas': canvas
-        }
-
-        self._area_selection_data = selection_data
-
-        # Текст-инструкция
-        instruction_text = "Выделите область для перевода (ПКМ/ESC/Enter - выход)"
-        instruction_id = canvas.create_text(
-            screen_width // 2,
-            50,
-            text=instruction_text,
-            fill="white",
-            font=("Arial", 16, "bold")
-        )
-
-        # Счетчик выделенных областей
-        counter_id = canvas.create_text(
-            screen_width // 2,
-            90,
-            text="Выделено: 0",
-            fill="#4CAF50",
-            font=("Arial", 14)
-        )
-        selection_data['counter_id'] = counter_id
-        selection_data['area_count'] = 0
-
-        def on_mouse_down(event):
-            selection_data['start_x'] = event.x
-            selection_data['start_y'] = event.y
-            if selection_data['rect']:
-                canvas.delete(selection_data['rect'])
-
-        def on_mouse_drag(event):
-            if selection_data['start_x'] is not None:
-                if selection_data['rect']:
-                    canvas.delete(selection_data['rect'])
-                selection_data['rect'] = canvas.create_rectangle(
-                    selection_data['start_x'],
-                    selection_data['start_y'],
-                    event.x,
-                    event.y,
-                    outline='red',
-                    width=2,
-                    fill='blue',
-                    stipple='gray50'
-                )
-
-        def on_mouse_up(event):
-            if selection_data['start_x'] is not None:
-                x1, y1 = min(selection_data['start_x'], event.x), min(selection_data['start_y'], event.y)
-                x2, y2 = max(selection_data['start_x'], event.x), max(selection_data['start_y'], event.y)
-
-                min_size = 10
-                if x2 - x1 > min_size and y2 - y1 > min_size:
-                    orig_x1 = int((x1 - selection_data['img_x']) * selection_data['scale_x'])
-                    orig_y1 = int((y1 - selection_data['img_y']) * selection_data['scale_y'])
-                    orig_x2 = int((x2 - selection_data['img_x']) * selection_data['scale_x'])
-                    orig_y2 = int((y2 - selection_data['img_y']) * selection_data['scale_y'])
-
-                    orig_x1 = max(0, min(orig_x1, img_width))
-                    orig_y1 = max(0, min(orig_y1, img_height))
-                    orig_x2 = max(0, min(orig_x2, img_width))
-                    orig_y2 = max(0, min(orig_y2, img_height))
-
-                    self.logger.info(f"[DEBUG] Выделена область: ({orig_x1},{orig_y1})-({orig_x2},{orig_y2})")
-
-                    # Увеличиваем счетчик
-                    selection_data['area_count'] += 1
-                    canvas.itemconfig(counter_id, text=f"Выделено: {selection_data['area_count']}")
-
-                    # Удаляем старый прямоугольник
-                    if selection_data['rect']:
-                        canvas.delete(selection_data['rect'])
-                        selection_data['rect'] = None
-
-                    # Сбрасываем состояние для следующего выделения
-                    selection_data['start_x'] = None
-                    selection_data['start_y'] = None
-
-                    # Отправляем область в очередь (НЕ ЗАКРЫВАЯ ОКНО)
-                    self._process_area_selection_continuous(
-                        orig_x1, orig_y1, orig_x2, orig_y2,
-                        screenshot_path,
-                        selection_window
-                    )
-                else:
-                    # Слишком маленькая область - просто сбрасываем
-                    if selection_data['rect']:
-                        canvas.delete(selection_data['rect'])
-                        selection_data['rect'] = None
-                    selection_data['start_x'] = None
-                    selection_data['start_y'] = None
-
-        def exit_area_mode():
-            """Выход из режима захвата области."""
-            self.logger.info("[DEBUG] exit_area_mode() - выход из режима захвата")
-            self._capture_mode = False
-            self._area_capture_mode_active = False
-            self._area_selection_data = None
-            self.translating = False
-            self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
-            self.root.deiconify()
-            if hasattr(self, 'set_actions_blocked'):
-                self.set_actions_blocked(False)
-            try:
-                selection_window.destroy()
-            except:
-                pass
-
-        def on_escape(event):
-            self.logger.info("[DEBUG] ESC - выход из режима захвата")
-            exit_area_mode()
-
-        def on_right_click(event):
-            self.logger.info("[DEBUG] ПКМ - выход из режима захвата")
-            exit_area_mode()
-
-        def on_enter(event):
-            self.logger.info("[DEBUG] Enter - выход из режима захвата")
-            exit_area_mode()
-
-        # Привязываем события
-        canvas.bind("<ButtonPress-1>", on_mouse_down)
-        canvas.bind("<B1-Motion>", on_mouse_drag)
-        canvas.bind("<ButtonRelease-1>", on_mouse_up)
-        canvas.bind("<Button-3>", on_right_click)  # ПКМ
-        selection_window.bind("<Escape>", on_escape)
-        canvas.bind("<Escape>", on_escape)
-        selection_window.bind("<Return>", on_enter)
-        canvas.bind("<Return>", on_enter)
-
-        # Сохраняем обработчик выхода
-        self._selection_window_on_escape = exit_area_mode
-        self._selection_window = selection_window
-        self._capture_mode = True
-
-        # Принудительно устанавливаем фокус
-        selection_window.focus_force()
-        selection_window.lift()
-        selection_window.attributes('-topmost', True)
-
-        def ensure_focus():
-            try:
-                if selection_window and selection_window.winfo_exists():
-                    selection_window.focus_force()
-                    selection_window.lift()
-                    self.logger.info("[DEBUG] ensure_focus: фокус принудительно установлен на окно выделения")
-            except:
-                pass
-
-        selection_window.after(300, ensure_focus)
-
-        def on_close():
-            self.logger.info("[DEBUG] Закрытие окна выделения")
-            self._capture_mode = False
-            self._area_capture_mode_active = False
-            self._area_selection_data = None
-            self._selection_window = None
-            self._selection_window_on_escape = None
-            self.translating = False
-            self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
-            self.root.deiconify()
-            if hasattr(self, 'set_actions_blocked'):
-                self.set_actions_blocked(False)
-            try:
-                selection_window.destroy()
-            except:
-                pass
-
-        selection_window.protocol("WM_DELETE_WINDOW", on_close)
 
     def _process_area_selection_continuous(self, x1, y1, x2, y2, screenshot_path, selection_window):
         """

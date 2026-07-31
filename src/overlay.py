@@ -90,6 +90,220 @@ class OverlayWindow:
 
         self.logger.info("OverlayWindow инициализирован")
 
+    def _on_mouse_enter(self, event):
+        """Обработчик входа мыши в область оверлея."""
+        self._mouse_over = True
+
+        # ДЛЯ F2 (СКРИНШОТ ОКНА) НИКОГДА НЕ СКРЫВАЕМ ПРИ НАВЕДЕНИИ
+        if self._is_window_screenshot:
+            self.logger.debug("[DEBUG] _on_mouse_enter: F2-оверлей, не скрываем")
+            if self._edit_mode_enabled and self.visible:
+                self._show_close_button()
+            return
+
+        # Для F3 (область) проверяем режим редактирования
+        is_edit_mode = False
+        if hasattr(self, '_edit_mode_enabled'):
+            is_edit_mode = self._edit_mode_enabled
+        elif hasattr(self, '_overlay_manager') and self._overlay_manager:
+            try:
+                parent = self._overlay_manager.parent
+                if parent and hasattr(parent, 'is_edit_mode_enabled'):
+                    is_edit_mode = parent.is_edit_mode_enabled()
+                elif parent and hasattr(parent, '_edit_mode_enabled'):
+                    is_edit_mode = parent._edit_mode_enabled
+            except:
+                pass
+
+        if is_edit_mode and self.visible:
+            self._show_close_button()
+            # В режиме редактирования НЕ СКРЫВАЕМ оверлей и НЕ устанавливаем флаг _hidden_by_mouse
+            self.logger.debug("[DEBUG] _on_mouse_enter: режим редактирования включен - оверлей не скрываем")
+            return
+
+        if is_edit_mode:
+            self.logger.debug("[DEBUG] _on_mouse_enter: режим редактирования включен - оверлей не скрываем")
+            return
+
+        if not self.visible:
+            return
+
+        if hasattr(self, '_show_timer') and self._show_timer is not None:
+            try:
+                self.root.after_cancel(self._show_timer)
+                self._show_timer = None
+                self.logger.debug("[DEBUG] _on_mouse_enter: отменен запланированный показ оверлея")
+            except:
+                pass
+
+        if self.visible and self._is_visible_by_user:
+            self.logger.info("[DEBUG] _on_mouse_enter: скрываем оверлей (режим просмотра)")
+            self._hidden_by_mouse = True
+            self._hide_internal()
+            if not self._monitor_timer and self.auto_hide_enabled:
+                self.logger.info("[DEBUG] _on_mouse_enter: запускаем монитор для отслеживания выхода мыши")
+                self._start_visibility_monitor()
+
+    def _check_and_update_visibility(self):
+        """
+        Проверяет видимость оверлея.
+        Теперь с защитой от рекурсивных вызовов и проверкой состояния мыши.
+        """
+        # Защита от рекурсии
+        if hasattr(self, '_updating_visibility') and self._updating_visibility:
+            return
+        self._updating_visibility = True
+
+        try:
+            # ===== РЕЖИМ 1: КОНТЕКСТНОЕ МЕНЮ =====
+            if self._context_menu_visible:
+                if self._is_visible_by_user and not self.visible and not self._hidden_by_mouse:
+                    self._show_internal()
+                return
+
+            # ===== РЕЖИМ 2: БАЗОВЫЕ ПРОВЕРКИ =====
+            if not self.auto_hide_enabled or not self._is_visible_by_user:
+                return
+
+            if self._hidden_by_user:
+                return
+
+            if hasattr(self, '_overlay_manager') and self._overlay_manager:
+                if self._overlay_manager.is_dragging():
+                    return
+
+            if time.time() < self._monitor_stable_time:
+                return
+
+            # ===== ВАЖНО: ПРОВЕРЯЕМ, ЧТО МЫШЬ НЕ В ЗОНЕ ОВЕРЛЕЯ =====
+            # Если мышь в зоне или оверлей скрыт мышью, НЕ ПОКАЗЫВАЕМ
+            # НО ЕСЛИ РЕЖИМ РЕДАКТИРОВАНИЯ ВКЛЮЧЕН - НЕ СКРЫВАЕМ ОВЕРЛЕЙ
+            if self._mouse_over or self._hidden_by_mouse:
+                # Проверяем режим редактирования
+                is_edit_mode = False
+                if hasattr(self, '_edit_mode_enabled'):
+                    is_edit_mode = self._edit_mode_enabled
+                elif hasattr(self, '_overlay_manager') and self._overlay_manager:
+                    try:
+                        parent = self._overlay_manager.parent
+                        if parent and hasattr(parent, 'is_edit_mode_enabled'):
+                            is_edit_mode = parent.is_edit_mode_enabled()
+                        elif parent and hasattr(parent, '_edit_mode_enabled'):
+                            is_edit_mode = parent._edit_mode_enabled
+                    except:
+                        pass
+
+                # В режиме редактирования НЕ СКРЫВАЕМ оверлей, даже если мышь внутри
+                if is_edit_mode:
+                    # Если оверлей скрыт мышью, но режим редактирования включен - показываем его
+                    if not self.visible and self._is_visible_by_user and not self._hidden_by_user:
+                        self._hidden_by_mouse = False
+                        self._show_internal()
+                    return
+
+                # Если режим редактирования выключен - скрываем как обычно
+                if self.visible:
+                    self._hide_internal()
+                return
+
+            try:
+                import win32gui
+                import win32api
+
+                active_hwnd = win32gui.GetForegroundWindow()
+                if active_hwnd == 0:
+                    return
+
+                # ===== ПРОВЕРКА: АКТИВНО ЛИ ОКНО ВЫДЕЛЕНИЯ ОБЛАСТИ =====
+                if self._is_selection_window_active(active_hwnd):
+                    if not self.visible and self._is_visible_by_user and not self._hidden_by_user:
+                        self._show_internal()
+                    return
+
+                # ===== ОСНОВНАЯ ПРОВЕРКА: активно ли окно этого оверлея =====
+                target_hwnd = self.get_target_hwnd()
+
+                # === ЕСЛИ ОКНО НЕ АКТИВНО — СКРЫВАЕМ ===
+                if target_hwnd is None or active_hwnd != target_hwnd:
+                    if self.visible:
+                        self._hide_internal()
+                    return
+
+                # ===== МЫ НА ЦЕЛЕВОМ ОКНЕ =====
+                cursor_pos = win32api.GetCursorPos()
+                cursor_x, cursor_y = cursor_pos
+
+                # Проверяем статус шаблона для оверлея автозамены
+                overlay_type, template_found = self._get_overlay_status()
+
+                if overlay_type == 'auto_replace':
+                    if template_found:
+                        # Проверяем, что мышь НЕ в зоне оверлея
+                        is_cursor_inside = False
+                        if self._last_window_rect:
+                            x1, y1, x2, y2 = self._last_window_rect
+                            if x1 <= cursor_x <= x2 and y1 <= cursor_y <= y2:
+                                is_cursor_inside = True
+
+                        # Если мышь внутри, скрываем
+                        if is_cursor_inside and self.visible:
+                            self._hidden_by_mouse = True
+                            self._hide_internal()
+                            return
+
+                        # Если мышь вне зоны и оверлей не виден — показываем
+                        if not is_cursor_inside and not self.visible and self._is_visible_by_user and not self._hidden_by_user:
+                            self._hidden_by_mouse = False
+                            self._show_internal()
+                    else:
+                        if self.visible:
+                            self._hide_internal()
+                            self._is_visible_by_user = False
+                    return
+
+                # ===== ОБЫЧНЫЙ ОВЕРЛЕЙ =====
+                # Проверяем, что мышь НЕ в зоне оверлея
+                is_cursor_inside = False
+                if self._last_window_rect:
+                    x1, y1, x2, y2 = self._last_window_rect
+                    if x1 <= cursor_x <= x2 and y1 <= cursor_y <= y2:
+                        is_cursor_inside = True
+
+                # Если мышь внутри, скрываем оверлей (только если режим редактирования выключен)
+                if is_cursor_inside and self.visible:
+                    # Проверяем режим редактирования еще раз
+                    is_edit_mode = False
+                    if hasattr(self, '_edit_mode_enabled'):
+                        is_edit_mode = self._edit_mode_enabled
+                    elif hasattr(self, '_overlay_manager') and self._overlay_manager:
+                        try:
+                            parent = self._overlay_manager.parent
+                            if parent and hasattr(parent, 'is_edit_mode_enabled'):
+                                is_edit_mode = parent.is_edit_mode_enabled()
+                            elif parent and hasattr(parent, '_edit_mode_enabled'):
+                                is_edit_mode = parent._edit_mode_enabled
+                        except:
+                            pass
+
+                    if not is_edit_mode:
+                        self._hidden_by_mouse = True
+                        self._hide_internal()
+                        return
+                    # Если режим редактирования включен - не скрываем
+                    return
+
+                # Если мышь вне зоны и оверлей не виден — показываем
+                if not is_cursor_inside and not self.visible and self._is_visible_by_user and not self._hidden_by_user:
+                    self._hidden_by_mouse = False
+                    self._show_internal()
+                    return
+
+            except Exception as e:
+                self.logger.warning(f"Ошибка в _check_and_update_visibility: {e}")
+
+        finally:
+            self._updating_visibility = False
+
     def _start_visibility_monitor(self):
         """Запускает монитор видимости - унифицированная логика с защитой от дублирования."""
         if not self.auto_hide_enabled:
@@ -255,125 +469,6 @@ class OverlayWindow:
             if self._last_image_path and self._last_window_rect:
                 if not self.visible:
                     self._show_internal()
-
-    def _check_and_update_visibility(self):
-        """
-        Проверяет видимость оверлея.
-        Теперь с защитой от рекурсивных вызовов и проверкой состояния мыши.
-        """
-        # Защита от рекурсии
-        if hasattr(self, '_updating_visibility') and self._updating_visibility:
-            return
-        self._updating_visibility = True
-
-        try:
-            # ===== РЕЖИМ 1: КОНТЕКСТНОЕ МЕНЮ =====
-            if self._context_menu_visible:
-                if self._is_visible_by_user and not self.visible and not self._hidden_by_mouse:
-                    self._show_internal()
-                return
-
-            # ===== РЕЖИМ 2: БАЗОВЫЕ ПРОВЕРКИ =====
-            if not self.auto_hide_enabled or not self._is_visible_by_user:
-                return
-
-            if self._hidden_by_user:
-                return
-
-            if hasattr(self, '_overlay_manager') and self._overlay_manager:
-                if self._overlay_manager.is_dragging():
-                    return
-
-            if time.time() < self._monitor_stable_time:
-                return
-
-            # ===== ВАЖНО: ПРОВЕРЯЕМ, ЧТО МЫШЬ НЕ В ЗОНЕ ОВЕРЛЕЯ =====
-            # Если мышь в зоне или оверлей скрыт мышью, НЕ ПОКАЗЫВАЕМ
-            if self._mouse_over or self._hidden_by_mouse:
-                if self.visible:
-                    self._hide_internal()
-                return
-
-            try:
-                import win32gui
-                import win32api
-
-                active_hwnd = win32gui.GetForegroundWindow()
-                if active_hwnd == 0:
-                    return
-
-                # ===== ПРОВЕРКА: АКТИВНО ЛИ ОКНО ВЫДЕЛЕНИЯ ОБЛАСТИ =====
-                if self._is_selection_window_active(active_hwnd):
-                    if not self.visible and self._is_visible_by_user and not self._hidden_by_user:
-                        self._show_internal()
-                    return
-
-                # ===== ОСНОВНАЯ ПРОВЕРКА: активно ли окно этого оверлея =====
-                target_hwnd = self.get_target_hwnd()
-
-                # === ЕСЛИ ОКНО НЕ АКТИВНО — СКРЫВАЕМ ===
-                if target_hwnd is None or active_hwnd != target_hwnd:
-                    if self.visible:
-                        self._hide_internal()
-                    return
-
-                # ===== МЫ НА ЦЕЛЕВОМ ОКНЕ =====
-                cursor_pos = win32api.GetCursorPos()
-                cursor_x, cursor_y = cursor_pos
-
-                # Проверяем статус шаблона для оверлея автозамены
-                overlay_type, template_found = self._get_overlay_status()
-
-                if overlay_type == 'auto_replace':
-                    if template_found:
-                        # Проверяем, что мышь НЕ в зоне оверлея
-                        is_cursor_inside = False
-                        if self._last_window_rect:
-                            x1, y1, x2, y2 = self._last_window_rect
-                            if x1 <= cursor_x <= x2 and y1 <= cursor_y <= y2:
-                                is_cursor_inside = True
-
-                        # Если мышь внутри, скрываем
-                        if is_cursor_inside and self.visible:
-                            self._hidden_by_mouse = True
-                            self._hide_internal()
-                            return
-
-                        # Если мышь вне зоны и оверлей не виден — показываем
-                        if not is_cursor_inside and not self.visible and self._is_visible_by_user and not self._hidden_by_user:
-                            self._hidden_by_mouse = False
-                            self._show_internal()
-                    else:
-                        if self.visible:
-                            self._hide_internal()
-                            self._is_visible_by_user = False
-                    return
-
-                # ===== ОБЫЧНЫЙ ОВЕРЛЕЙ =====
-                # Проверяем, что мышь НЕ в зоне оверлея
-                is_cursor_inside = False
-                if self._last_window_rect:
-                    x1, y1, x2, y2 = self._last_window_rect
-                    if x1 <= cursor_x <= x2 and y1 <= cursor_y <= y2:
-                        is_cursor_inside = True
-
-                # Если мышь внутри, скрываем оверлей
-                if is_cursor_inside and self.visible:
-                    self._hidden_by_mouse = True
-                    self._hide_internal()
-                    return
-
-                # Если мышь вне зоны и оверлей не виден — показываем
-                if not is_cursor_inside and not self.visible and self._is_visible_by_user and not self._hidden_by_user:
-                    self._hidden_by_mouse = False
-                    self._show_internal()
-                    return
-
-            except Exception as e:
-                self.logger.warning(f"Ошибка в _check_and_update_visibility: {e}")
-
-        finally:
-            self._updating_visibility = False
 
     def _show_internal(self):
         """Внутренний метод для показа оверлея (без изменения _is_visible_by_user) с защитой от рекурсии."""
@@ -696,57 +791,6 @@ class OverlayWindow:
 
         if self._edit_mode_enabled and self._mouse_over:
             self._show_close_button()
-
-    def _on_mouse_enter(self, event):
-        """Обработчик входа мыши в область оверлея."""
-        self._mouse_over = True
-
-        # ДЛЯ F2 (СКРИНШОТ ОКНА) НИКОГДА НЕ СКРЫВАЕМ ПРИ НАВЕДЕНИИ
-        if self._is_window_screenshot:
-            self.logger.debug("[DEBUG] _on_mouse_enter: F2-оверлей, не скрываем")
-            if self._edit_mode_enabled and self.visible:
-                self._show_close_button()
-            return
-
-        # Для F3 (область) проверяем режим редактирования
-        is_edit_mode = False
-        if hasattr(self, '_edit_mode_enabled'):
-            is_edit_mode = self._edit_mode_enabled
-        elif hasattr(self, '_overlay_manager') and self._overlay_manager:
-            try:
-                parent = self._overlay_manager.parent
-                if parent and hasattr(parent, 'is_edit_mode_enabled'):
-                    is_edit_mode = parent.is_edit_mode_enabled()
-                elif parent and hasattr(parent, '_edit_mode_enabled'):
-                    is_edit_mode = parent._edit_mode_enabled
-            except:
-                pass
-
-        if is_edit_mode and self.visible:
-            self._show_close_button()
-
-        if is_edit_mode:
-            self.logger.debug("[DEBUG] _on_mouse_enter: режим редактирования включен - оверлей не скрываем")
-            return
-
-        if not self.visible:
-            return
-
-        if hasattr(self, '_show_timer') and self._show_timer is not None:
-            try:
-                self.root.after_cancel(self._show_timer)
-                self._show_timer = None
-                self.logger.debug("[DEBUG] _on_mouse_enter: отменен запланированный показ оверлея")
-            except:
-                pass
-
-        if self.visible and self._is_visible_by_user:
-            self.logger.info("[DEBUG] _on_mouse_enter: скрываем оверлей (режим просмотра)")
-            self._hidden_by_mouse = True
-            self._hide_internal()
-            if not self._monitor_timer and self.auto_hide_enabled:
-                self.logger.info("[DEBUG] _on_mouse_enter: запускаем монитор для отслеживания выхода мыши")
-                self._start_visibility_monitor()
 
     def _load_and_show_image(self, image_path: Path, window_rect: tuple):
         """Загружает изображение и показывает его в оверлее."""
