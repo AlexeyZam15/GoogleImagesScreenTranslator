@@ -175,6 +175,172 @@ class ScreenshotTranslatorApp:
         # === ЗАПУСКАЕМ МОНИТОРИНГ ПЕРЕКЛЮЧЕНИЯ ОКОН ===
         self._start_window_monitor()
 
+    def _on_translate_finished(self, result, error):
+        """Обработчик завершения перевода - запускает следующую задачу из очереди."""
+        self.logger.info(f"_on_translate_finished вызван: result={result}, error={error}")
+
+        self._translation_in_progress = False
+        self._total_tasks_processed += 1
+
+        try:
+            if error and "отменен" in str(error):
+                self.logger.info("[DEBUG] _on_translate_finished: перевод был отменен")
+                self.translating = False
+                self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+                self._pending_command_ids = {}
+                self._pending_area_rect = None
+                self.is_processing_queue = False
+                self._process_next_in_queue()
+                return
+
+            if error:
+                self.logger.error(f"Ошибка перевода: {error}")
+                self._on_translate_error(error)
+                return
+
+            if result:
+                self.logger.info(f"Результат перевода получен: {result}")
+
+                region_path = getattr(self, '_pending_region_path', None)
+                self.logger.info(f"[MONITOR] Проверка region_path: {region_path}")
+
+                if region_path and region_path.exists() and self.translation_monitor:
+                    self.logger.info(f"[MONITOR] Добавляем шаблон в монитор: {region_path} -> {result}")
+                    target_hwnd = self.screenshot.get_last_hwnd()
+                    self.logger.info(f"[MONITOR] Получен HWND для шаблона: {target_hwnd}")
+
+                    add_result = self.translation_monitor.add_template(
+                        region_path,
+                        result,
+                        target_hwnd=target_hwnd
+                    )
+
+                    if add_result is not None and len(add_result) == 2:
+                        pair_index, file_hash = add_result
+                    else:
+                        pair_index, file_hash = -1, None
+
+                    if pair_index >= 0 and file_hash:
+                        self.logger.info(f"[MONITOR] Шаблон добавлен с индексом {pair_index}, хеш: {file_hash[:8]}")
+
+                        area_rect = getattr(self, '_pending_area_rect', None)
+                        is_fullscreen = self.screenshot.is_last_window_fullscreen()
+
+                        if area_rect:
+                            x1, y1, x2, y2 = area_rect
+                            window_rect = (x1, y1, x2, y2)
+                        else:
+                            window_rect = self.screenshot.get_last_window_rect()
+
+                        template_id = file_hash
+                        overlay = self.overlay_manager.create_overlay(
+                            image_path=result,
+                            window_rect=window_rect,
+                            target_hwnd=target_hwnd,
+                            is_fullscreen=is_fullscreen,
+                            show_immediately=True,
+                            is_window_screenshot=False,
+                            is_auto_replace=True,
+                            template_id=template_id
+                        )
+
+                        if overlay:
+                            overlay._is_visible_by_user = True
+                            overlay._hidden_by_user = False
+                            overlay._is_auto_replace = True
+                            overlay._creation_time = time.time()
+                            overlay._monitor_stable_time = time.time() + 3.0
+
+                            saved_position = self.overlay_manager.get_saved_position(template_id)
+                            if saved_position:
+                                saved_x, saved_y = saved_position
+                                overlay.root.geometry(f"+{saved_x}+{saved_y}")
+                                self.logger.info(
+                                    f"[MONITOR] Оверлей #{pair_index} размещен в сохраненной позиции ({saved_x}, {saved_y})")
+
+                            if not overlay.visible:
+                                overlay.show()
+                            else:
+                                overlay.root.lift()
+                                overlay.root.attributes('-topmost', True)
+
+                            for template in self.translation_monitor.templates:
+                                if template.get('pair_index') == pair_index:
+                                    template['overlay'] = overlay
+                                    template['found'] = True
+                                    overlay._is_visible_by_user = True
+                                    self.logger.info(f"[MONITOR] Оверлей привязан к шаблону #{pair_index}")
+                                    break
+
+                        if self.settings and self.settings.get_auto_replace_translated():
+                            if not self.translation_monitor.is_running():
+                                self.translation_monitor.start()
+                                self.logger.info("[MONITOR] Мониторинг запущен")
+
+                        self._translated_templates[file_hash] = {
+                            'region_path': region_path,
+                            'translated_path': result,
+                            'pair_index': pair_index,
+                            'target_hwnd': target_hwnd,
+                            'file_hash': file_hash
+                        }
+                    else:
+                        self.logger.warning("[MONITOR] Не удалось добавить шаблон")
+                else:
+                    if region_path is None:
+                        self.logger.warning("[MONITOR] region_path is None, не добавляем шаблон")
+                    else:
+                        self.logger.warning(f"[MONITOR] region_path не существует: {region_path}")
+
+                    self.logger.info("[MONITOR] F2: показываем оверлей без добавления шаблона")
+
+                    target_hwnd = self.screenshot.get_last_hwnd()
+                    window_rect = self.screenshot.get_last_window_rect()
+                    is_fullscreen = self.screenshot.is_last_window_fullscreen()
+
+                    if target_hwnd and window_rect:
+                        self.logger.info(f"[MONITOR] Создаем оверлей для F2: HWND={target_hwnd}, rect={window_rect}")
+                        overlay = self.overlay_manager.create_overlay(
+                            image_path=result,
+                            window_rect=window_rect,
+                            target_hwnd=target_hwnd,
+                            is_fullscreen=is_fullscreen,
+                            show_immediately=True,
+                            is_window_screenshot=True,
+                            is_auto_replace=False
+                        )
+                        if overlay:
+                            overlay._is_visible_by_user = True
+                            overlay._hidden_by_user = False
+                            if not overlay.visible:
+                                overlay.show()
+
+                self._pending_region_path = None
+
+                if self.translation_overlay:
+                    self.logger.info("Закрываем окно прогресса ДО показа основного оверлея")
+                    self.translation_overlay.finish()
+                    self.translation_overlay = None
+
+                self.status.config(fg='#4CAF50')
+            else:
+                self.logger.warning("Результат перевода пустой (None)")
+                self.update_status("● " + self.get_string('translate_error'), '#f44336')
+
+        except Exception as e:
+            self.logger.error(f"Ошибка показа результата: {e}")
+            import traceback
+            traceback.print_exc()
+            self.update_status("● " + self.get_string('error'), '#f44336')
+        finally:
+            self.translating = False
+            self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+            self._pending_command_ids = {}
+            self._pending_area_rect = None
+
+            self.is_processing_queue = False
+            self._process_next_in_queue()
+
     def _show_continuous_area_selection_window(self, screenshot_path):
         """Показывает ПОСТОЯННОЕ полноэкранное окно с изображением для выделения областей."""
         self.logger.info("[DEBUG] _show_continuous_area_selection_window()")
@@ -1139,162 +1305,6 @@ class ScreenshotTranslatorApp:
 
             self._restarting = False
         self._pending_command_ids = {}
-
-    def _on_translate_finished(self, result, error):
-        """Обработчик завершения перевода - запускает следующую задачу из очереди."""
-        self.logger.info(f"_on_translate_finished вызван: result={result}, error={error}")
-
-        self._translation_in_progress = False
-        self._total_tasks_processed += 1
-
-        try:
-            if error and "отменен" in str(error):
-                self.logger.info("[DEBUG] _on_translate_finished: перевод был отменен")
-                self.translating = False
-                self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
-                self._pending_command_ids = {}
-                self._pending_area_rect = None
-                self.is_processing_queue = False
-                self._process_next_in_queue()
-                return
-
-            if error:
-                self.logger.error(f"Ошибка перевода: {error}")
-                self._on_translate_error(error)
-                return
-
-            if result:
-                self.logger.info(f"Результат перевода получен: {result}")
-
-                region_path = getattr(self, '_pending_region_path', None)
-                self.logger.info(f"[MONITOR] Проверка region_path: {region_path}")
-
-                if region_path and region_path.exists() and self.translation_monitor:
-                    self.logger.info(f"[MONITOR] Добавляем шаблон в монитор: {region_path} -> {result}")
-                    target_hwnd = self.screenshot.get_last_hwnd()
-                    self.logger.info(f"[MONITOR] Получен HWND для шаблона: {target_hwnd}")
-
-                    pair_index = self.translation_monitor.add_template(
-                        region_path,
-                        result,
-                        target_hwnd=target_hwnd
-                    )
-
-                    if pair_index >= 0:
-                        self.logger.info(f"[MONITOR] Шаблон добавлен с индексом {pair_index}")
-
-                        area_rect = getattr(self, '_pending_area_rect', None)
-                        is_fullscreen = self.screenshot.is_last_window_fullscreen()
-
-                        if area_rect:
-                            x1, y1, x2, y2 = area_rect
-                            window_rect = (x1, y1, x2, y2)
-                        else:
-                            window_rect = self.screenshot.get_last_window_rect()
-
-                        overlay = self.overlay_manager.create_overlay(
-                            image_path=result,
-                            window_rect=window_rect,
-                            target_hwnd=target_hwnd,
-                            is_fullscreen=is_fullscreen,
-                            show_immediately=True,
-                            is_window_screenshot=False,
-                            is_auto_replace=True
-                        )
-
-                        if overlay:
-                            overlay._is_visible_by_user = True
-                            overlay._hidden_by_user = False
-                            overlay._is_auto_replace = True
-                            overlay._creation_time = time.time()
-                            overlay._monitor_stable_time = time.time() + 3.0
-
-                            if not overlay.visible:
-                                overlay.show()
-                            else:
-                                overlay.root.lift()
-                                overlay.root.attributes('-topmost', True)
-
-                            for template in self.translation_monitor.templates:
-                                if template.get('pair_index') == pair_index:
-                                    template['overlay'] = overlay
-                                    template['found'] = True
-                                    overlay._is_visible_by_user = True
-                                    self.logger.info(f"[MONITOR] Оверлей привязан к шаблону #{pair_index}")
-                                    break
-
-                        if self.settings and self.settings.get_auto_replace_translated():
-                            if not self.translation_monitor.is_running():
-                                self.translation_monitor.start()
-                                self.logger.info("[MONITOR] Мониторинг запущен")
-
-                        import hashlib
-                        with open(region_path, 'rb') as f:
-                            file_hash = hashlib.md5(f.read()).hexdigest()
-                        self._translated_templates[file_hash] = {
-                            'region_path': region_path,
-                            'translated_path': result,
-                            'pair_index': pair_index,
-                            'target_hwnd': target_hwnd
-                        }
-                    else:
-                        self.logger.warning("[MONITOR] Не удалось добавить шаблон")
-                else:
-                    if region_path is None:
-                        self.logger.warning("[MONITOR] region_path is None, не добавляем шаблон")
-                    else:
-                        self.logger.warning(f"[MONITOR] region_path не существует: {region_path}")
-
-                    self.logger.info("[MONITOR] F2: показываем оверлей без добавления шаблона")
-
-                    target_hwnd = self.screenshot.get_last_hwnd()
-                    window_rect = self.screenshot.get_last_window_rect()
-                    is_fullscreen = self.screenshot.is_last_window_fullscreen()
-
-                    if target_hwnd and window_rect:
-                        self.logger.info(f"[MONITOR] Создаем оверлей для F2: HWND={target_hwnd}, rect={window_rect}")
-                        overlay = self.overlay_manager.create_overlay(
-                            image_path=result,
-                            window_rect=window_rect,
-                            target_hwnd=target_hwnd,
-                            is_fullscreen=is_fullscreen,
-                            show_immediately=True,
-                            is_window_screenshot=True,
-                            is_auto_replace=False
-                        )
-                        if overlay:
-                            overlay._is_visible_by_user = True
-                            overlay._hidden_by_user = False
-                            if not overlay.visible:
-                                overlay.show()
-
-                self._pending_region_path = None
-
-                if self.translation_overlay:
-                    self.logger.info("Закрываем окно прогресса ДО показа основного оверлея")
-                    self.translation_overlay.finish()
-                    self.translation_overlay = None
-
-                # === НЕ ПОКАЗЫВАЕМ "Готов" КАЖДЫЙ РАЗ ===
-                # Просто меняем цвет статуса на зеленый, но текст оставляем "Перевод..."
-                self.status.config(fg='#4CAF50')
-            else:
-                self.logger.warning("Результат перевода пустой (None)")
-                self.update_status("● " + self.get_string('translate_error'), '#f44336')
-
-        except Exception as e:
-            self.logger.error(f"Ошибка показа результата: {e}")
-            import traceback
-            traceback.print_exc()
-            self.update_status("● " + self.get_string('error'), '#f44336')
-        finally:
-            self.translating = False
-            self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
-            self._pending_command_ids = {}
-            self._pending_area_rect = None
-
-            self.is_processing_queue = False
-            self._process_next_in_queue()
 
     def _process_next_in_queue(self):
         """Обрабатывает следующую задачу в очереди переводов."""

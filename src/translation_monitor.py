@@ -42,6 +42,63 @@ class TranslationMonitor:
 
         self.logger.info("TranslationMonitor инициализирован")
 
+    def add_template(self, region_image: Path, translated_image: Path, target_hwnd: int = None):
+        """Добавляет новый шаблон для мониторинга. Возвращает (pair_index, file_hash)."""
+        if not region_image.exists():
+            self.logger.error(f"Шаблон не найден: {region_image}")
+            return -1, None
+
+        if not translated_image.exists():
+            self.logger.error(f"Перевод не найден: {translated_image}")
+            return -1, None
+
+        try:
+            template = cv2.imread(str(region_image))
+            if template is None:
+                self.logger.error(f"Не удалось загрузить шаблон: {region_image}")
+                return -1, None
+
+            import hashlib
+            with open(region_image, 'rb') as f:
+                file_hash = hashlib.md5(f.read()).hexdigest()
+
+            # Проверяем, существует ли уже шаблон с таким хешем
+            for template_data in self.templates:
+                if template_data.get('hash') == file_hash:
+                    self.logger.info(f"Шаблон с хешем {file_hash[:8]} уже существует, обновляем перевод")
+                    template_data['translated_path'] = translated_image
+                    template_data['target_hwnd'] = target_hwnd
+                    return template_data['pair_index'], file_hash
+
+            pair_index = self._template_counter
+            self._template_counter += 1
+
+            template_data = {
+                'pair_index': pair_index,
+                'template_path': region_image,
+                'translated_path': translated_image,
+                'template': template,
+                'hash': file_hash,
+                'found': False,
+                'last_position': None,
+                'overlay': None,
+                'enabled': True,
+                'target_hwnd': target_hwnd
+            }
+
+            self.templates.append(template_data)
+            self.logger.info(f"Добавлен шаблон #{pair_index} (хеш: {file_hash[:8]}) для окна HWND={target_hwnd}")
+
+            if self.settings and self.settings.get_auto_replace_translated():
+                if not self.monitoring:
+                    self.start()
+
+            return pair_index, file_hash
+
+        except Exception as e:
+            self.logger.error(f"Ошибка добавления шаблона: {e}")
+            return -1, None
+
     def _update_overlay(self, template_data: Dict, x: int, y: int, w: int, h: int):
         """Обновляет или создает оверлей для шаблона."""
         translated_path = template_data.get('translated_path')
@@ -49,16 +106,31 @@ class TranslationMonitor:
             return
 
         pair_index = template_data['pair_index']
+        template_id = f"pair_{pair_index}"
+
+        saved_position = None
+        if self.overlay_manager:
+            saved_position = self.overlay_manager.get_saved_position(template_id)
 
         if template_data.get('overlay'):
             try:
                 overlay = template_data['overlay']
                 if overlay.root and overlay.root.winfo_exists():
-                    current_x = overlay.root.winfo_x()
-                    current_y = overlay.root.winfo_y()
-                    if abs(current_x - x) > 5 or abs(current_y - y) > 5:
-                        overlay.root.geometry(f"+{x}+{y}")
-                    # === ПОКАЗЫВАЕМ ТОЛЬКО ЕСЛИ ПОЛЬЗОВАТЕЛЬ НЕ СКРЫЛ ОВЕРЛЕЙ ===
+                    if saved_position:
+                        saved_x, saved_y = saved_position
+                        current_x = overlay.root.winfo_x()
+                        current_y = overlay.root.winfo_y()
+                        if abs(current_x - saved_x) > 5 or abs(current_y - saved_y) > 5:
+                            overlay.root.geometry(f"+{saved_x}+{saved_y}")
+                            self.logger.info(
+                                f"[MONITOR] Оверлей #{pair_index} перемещен в сохраненную позицию ({saved_x}, {saved_y})")
+                    else:
+                        current_x = overlay.root.winfo_x()
+                        current_y = overlay.root.winfo_y()
+                        if abs(current_x - x) > 5 or abs(current_y - y) > 5:
+                            overlay.root.geometry(f"+{x}+{y}")
+                            self.logger.info(f"[MONITOR] Оверлей #{pair_index} перемещен в позицию шаблона ({x}, {y})")
+
                     if not overlay.visible and not overlay._hidden_by_user:
                         overlay._is_visible_by_user = True
                         overlay.root.after(0,
@@ -74,6 +146,12 @@ class TranslationMonitor:
 
         if self.overlay_manager:
             window_rect = (x, y, x + w, y + h)
+            if saved_position:
+                saved_x, saved_y = saved_position
+                window_rect = (saved_x, saved_y, saved_x + w, saved_y + h)
+                self.logger.info(
+                    f"[MONITOR] Используем сохраненную позицию для оверлея #{pair_index}: ({saved_x}, {saved_y})")
+
             overlay = self.overlay_manager.create_overlay(
                 image_path=translated_path,
                 window_rect=window_rect,
@@ -81,7 +159,8 @@ class TranslationMonitor:
                 is_fullscreen=False,
                 show_immediately=True,
                 is_window_screenshot=False,
-                is_auto_replace=True
+                is_auto_replace=True,
+                template_id=template_id
             )
             if overlay:
                 template_data['overlay'] = overlay
@@ -89,8 +168,6 @@ class TranslationMonitor:
                 overlay._is_auto_replace = True
                 overlay._creation_time = time.time()
                 overlay._monitor_stable_time = time.time() + 3.0
-                # НЕ сбрасываем _hidden_by_user — если пользователь скрыл оверлей, не показываем
-                # Но если создается новый оверлей, он должен быть виден (пользователь его еще не скрывал)
                 if not overlay._hidden_by_user:
                     overlay.show()
                 self.logger.info(f"[MONITOR] Создан новый оверлей для шаблона #{pair_index}")
@@ -314,62 +391,6 @@ class TranslationMonitor:
 
         except Exception as e:
             self.logger.warning(f"Ошибка поиска шаблона #{idx}: {e}")
-
-    def add_template(self, region_image: Path, translated_image: Path, target_hwnd: int = None) -> int:
-        """Добавляет новый шаблон для мониторинга."""
-        if not region_image.exists():
-            self.logger.error(f"Шаблон не найден: {region_image}")
-            return -1
-
-        if not translated_image.exists():
-            self.logger.error(f"Перевод не найден: {translated_image}")
-            return -1
-
-        try:
-            template = cv2.imread(str(region_image))
-            if template is None:
-                self.logger.error(f"Не удалось загрузить шаблон: {region_image}")
-                return -1
-
-            import hashlib
-            with open(region_image, 'rb') as f:
-                file_hash = hashlib.md5(f.read()).hexdigest()
-
-            for template_data in self.templates:
-                if template_data.get('hash') == file_hash:
-                    self.logger.info(f"Шаблон уже существует, обновляем перевод")
-                    template_data['translated_path'] = translated_image
-                    template_data['target_hwnd'] = target_hwnd
-                    return template_data['pair_index']
-
-            pair_index = self._template_counter
-            self._template_counter += 1
-
-            template_data = {
-                'pair_index': pair_index,
-                'template_path': region_image,
-                'translated_path': translated_image,
-                'template': template,
-                'hash': file_hash,
-                'found': False,
-                'last_position': None,
-                'overlay': None,
-                'enabled': True,
-                'target_hwnd': target_hwnd
-            }
-
-            self.templates.append(template_data)
-            self.logger.info(f"Добавлен шаблон #{pair_index} для окна HWND={target_hwnd}")
-
-            if self.settings and self.settings.get_auto_replace_translated():
-                if not self.monitoring:
-                    self.start()
-
-            return pair_index
-
-        except Exception as e:
-            self.logger.error(f"Ошибка добавления шаблона: {e}")
-            return -1
 
     def remove_template(self, pair_index: int):
         """Удаляет шаблон по индексу."""
