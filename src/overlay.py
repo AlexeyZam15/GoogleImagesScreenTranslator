@@ -1028,9 +1028,11 @@ class OverlayWindow:
         Устанавливает режим автозамены для оверлея.
         В этом режиме оверлей не скрывается при наведении мыши.
         """
+        self.logger.info(
+            f"[DEBUG] set_auto_replace_mode: enabled={enabled}, overlay={self}, template_id={self._template_id}, image_path={self._last_image_path}")
         self._is_auto_replace = enabled
         self._creation_time = time.time()
-        self.logger.info(f"[DEBUG] set_auto_replace_mode: enabled={enabled}, creation_time={self._creation_time}")
+        self.logger.info(f"[DEBUG] set_auto_replace_mode: _is_auto_replace установлен в {self._is_auto_replace}")
         if enabled:
             # Для автозамены увеличиваем стабильное время, чтобы дать монитору найти шаблон
             self._monitor_stable_time = time.time() + 3.0

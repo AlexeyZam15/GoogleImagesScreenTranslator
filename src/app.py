@@ -150,7 +150,6 @@ class ScreenshotTranslatorApp:
         self._total_tasks_processed = 0
 
         # === СОСТОЯНИЕ ДЛЯ КАЖДОГО ОКНА ===
-        # {hwnd: {'overlays': [overlay1, overlay2], 'templates': [template1, template2], 'visible': True/False}}
         self._window_states = {}
         self._current_active_hwnd = None
         self._window_switch_in_progress = False
@@ -174,6 +173,180 @@ class ScreenshotTranslatorApp:
 
         # === ЗАПУСКАЕМ МОНИТОРИНГ ПЕРЕКЛЮЧЕНИЯ ОКОН ===
         self._start_window_monitor()
+
+        # УБИРАЕМ ЭТОТ ВЫЗОВ - восстановление будет выполнено в _on_init_complete
+        # self.root.after(2000, self._restore_overlays)
+
+    def _on_window_switch(self, new_hwnd: int):
+        """Обработчик переключения окна — сохраняет состояние и переключается."""
+        self.logger.info(f"[WINDOW] === ПЕРЕКЛЮЧЕНИЕ НА HWND={new_hwnd} ===")
+
+        old_hwnd = self._current_active_hwnd
+
+        # === 1. СОХРАНЯЕМ СОСТОЯНИЕ СТАРОГО ОКНА (если есть) ===
+        if old_hwnd is not None and old_hwnd != new_hwnd:
+            self._save_window_state(old_hwnd)
+            self.logger.info(f"[WINDOW] Сохранено состояние для HWND={old_hwnd}")
+
+        # === 2. ОСТАНАВЛИВАЕМ МОНИТОР АВТОЗАМЕНЫ ===
+        if self.translation_monitor and self.translation_monitor.is_running():
+            self.logger.info("[WINDOW] Останавливаем монитор автозамены")
+            self.translation_monitor.stop()
+
+        # === 3. СКРЫВАЕМ ВСЕ ОВЕРЛЕИ СТАРОГО ОКНА (НО НЕ УДАЛЯЕМ) ===
+        if self.overlay_manager and old_hwnd is not None:
+            overlays = self.overlay_manager.get_overlays_for_window(old_hwnd)
+            if overlays:
+                self.logger.info(f"[WINDOW] Скрываем {len(overlays)} оверлеев для HWND={old_hwnd}")
+                for overlay in overlays:
+                    try:
+                        overlay._is_visible_by_user = False
+                        overlay._hidden_by_user = True
+                        if overlay.visible:
+                            overlay.visible = False
+                            overlay.root.withdraw()
+                    except Exception as e:
+                        self.logger.warning(f"[WINDOW] Ошибка скрытия оверлея: {e}")
+
+        # === 4. ОБНОВЛЯЕМ ТЕКУЩЕЕ ОКНО ===
+        self._current_active_hwnd = new_hwnd
+
+        # === 5. ВОССТАНАВЛИВАЕМ СОСТОЯНИЕ НОВОГО ОКНА ===
+        if new_hwnd in self._window_states:
+            state = self._window_states[new_hwnd]
+            if state.get('was_visible', False):
+                self.logger.info(f"[WINDOW] Показываем оверлеи для HWND={new_hwnd}")
+                if self.overlay_manager:
+                    overlays = self.overlay_manager.get_overlays_for_window(new_hwnd)
+                    for overlay in overlays:
+                        try:
+                            overlay._is_visible_by_user = True
+                            overlay._hidden_by_user = False
+                            # НЕ ПОКАЗЫВАЕМ ОВЕРЛЕЙ ПРИНУДИТЕЛЬНО!
+                            # Оверлей будет показан монитором, когда шаблон будет найден
+                            # if not overlay.visible:
+                            #     overlay.show()  # <-- УБРАНО!
+                        except Exception as e:
+                            self.logger.warning(f"[WINDOW] Ошибка показа оверлея: {e}")
+            else:
+                self.logger.info(f"[WINDOW] Оверлеи для HWND={new_hwnd} были скрыты, не показываем")
+        else:
+            self.logger.info(f"[WINDOW] Нет сохраненного состояния для HWND={new_hwnd}")
+
+        # === 6. ЗАПУСКАЕМ МОНИТОР АВТОЗАМЕНЫ, ЕСЛИ ЕСТЬ ШАБЛОНЫ ===
+        if self.translation_monitor and self.translation_monitor.templates:
+            auto_replace_enabled = self.settings.get_auto_replace_translated() if hasattr(self, 'settings') else False
+            if auto_replace_enabled and not self.translation_monitor.is_running():
+                self.logger.info("[WINDOW] Запускаем монитор автозамены для нового окна")
+                self.translation_monitor.start()
+
+    def _on_init_complete(self, result, error):
+        """Обработчик завершения инициализации."""
+        self.logger.info(f"_on_init_complete вызван: result={result}, error={error}")
+        if error:
+            self.logger.error(f"Ошибка инициализации: {error}")
+            self._on_init_error(error)
+            self.logger.info(f"Планируем повторную попытку через {self._init_retry_delay}мс...")
+            self.root.after(self._init_retry_delay, self._init_translator_step)
+        else:
+            self.logger.info("Инициализация завершена успешно, обновляем UI")
+            self.ready = True
+            self.initializing = False
+            self._init_done = True
+            self._init_attempts = 0
+
+            if self.overlay_manager is None:
+                self.logger.info("Создание OverlayManager")
+                from src.overlay_manager import OverlayManager
+                self.overlay_manager = OverlayManager(self)
+                self.logger.info(f"OverlayManager создан: {self.overlay_manager}")
+            else:
+                self.logger.info(f"OverlayManager уже существует: {self.overlay_manager}")
+
+            # === РАЗБЛОКИРУЕМ ВЫБОР ЯЗЫКА ПЕРЕВОДА ===
+            if hasattr(self, 'target_lang_combo'):
+                self.target_lang_combo.config(state="normal")
+                self.logger.info("Выбор языка перевода разблокирован")
+
+            # === РАЗБЛОКИРУЕМ ВСЕ КНОПКИ ===
+            self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
+            self.btn_clear_all.config(state=NORMAL, bg='#d32f2f', fg='white')
+            self.btn_toggle.config(state=NORMAL, bg='#2196F3', fg='white')
+
+            auto_enabled = self.settings.get_auto_replace_translated()
+            auto_status = "ВКЛ" if auto_enabled else "ВЫКЛ"
+            hotkeys = self.settings.get_all_hotkeys()
+            auto_key = hotkeys.get('auto_replace', 'f6').upper()
+            self.btn_auto_replace.config(
+                state=NORMAL,
+                text=f"🔄 Автозамена: {auto_status} ({auto_key})",
+                bg='#4CAF50' if auto_enabled else '#ff9800',
+                fg='white'
+            )
+
+            if hasattr(self, 'settings_btn'):
+                self.settings_btn.config(state=NORMAL, bg='#3c3c3c', fg='#cccccc')
+
+            self.set_settings_menu_enabled(True)
+
+            status_text = self.get_string('edit_mode_on') if self._edit_mode_enabled else self.get_string(
+                'edit_mode_off')
+            edit_key = hotkeys.get('edit_mode', 'f5').upper()
+            self.btn_edit_mode.config(
+                state=NORMAL,
+                text=f"✏️ {self.get_string('edit_mode')}: {status_text} ({edit_key})",
+                bg='#4CAF50' if self._edit_mode_enabled else '#ff9800',
+                fg='white'
+            )
+
+            # === ТОЛЬКО ЗДЕСЬ ПОКАЗЫВАЕМ "Готов" ===
+            self.update_status("● " + self.get_string('ready'), '#4CAF50')
+
+            self._restarting = False
+
+            # === ВОССТАНАВЛИВАЕМ ОВЕРЛЕИ ПОСЛЕ ИНИЦИАЛИЗАЦИИ ===
+            # Вызываем с небольшой задержкой, чтобы все компоненты успели инициализироваться
+            self.root.after(500, self._restore_overlays)
+
+        self._pending_command_ids = {}
+
+    def _restore_overlays(self):
+        """
+        Восстанавливает оверлеи из сохранённого состояния после инициализации.
+        """
+        if not self.overlay_manager:
+            self.logger.warning("[RESTORE] OverlayManager не инициализирован, откладываем восстановление")
+            self.root.after(1000, self._restore_overlays)
+            return
+
+        if not self.ready:
+            self.logger.info("[RESTORE] Приложение ещё не готово, откладываем восстановление")
+            self.root.after(1000, self._restore_overlays)
+            return
+
+        self.logger.info("[RESTORE] Начинаем восстановление оверлеев из состояния...")
+
+        try:
+            # Загружаем состояние и восстанавливаем оверлеи
+            restored_count = self.overlay_manager.restore_overlays_from_state(self)
+            self.logger.info(f"[RESTORE] Восстановлено {restored_count} оверлеев")
+
+            if restored_count > 0:
+                # === ЗАПУСКАЕМ МОНИТОР АВТОЗАМЕНЫ, ЕСЛИ ЕСТЬ ШАБЛОНЫ ===
+                if self.translation_monitor and self.translation_monitor.templates:
+                    auto_replace_enabled = self.settings.get_auto_replace_translated()
+                    if auto_replace_enabled and not self.translation_monitor.is_running():
+                        self.translation_monitor.start()
+                        self.logger.info("[RESTORE] ✅ Монитор автозамены запущен")
+
+                self.logger.info(f"[RESTORE] ✅ Восстановлено {restored_count} оверлеев")
+            else:
+                self.logger.info("[RESTORE] Нет сохранённых оверлеев для восстановления")
+
+        except Exception as e:
+            self.logger.error(f"[RESTORE] Ошибка восстановления оверлеев: {e}")
+            import traceback
+            traceback.print_exc()
 
     def _on_translate_finished(self, result, error):
         """Обработчик завершения перевода - запускает следующую задачу из очереди."""
@@ -1072,60 +1245,6 @@ class ScreenshotTranslatorApp:
 
         self.root.after(500, check_window)
 
-    def _on_window_switch(self, new_hwnd: int):
-        """Обработчик переключения окна — сохраняет состояние и переключается."""
-        self.logger.info(f"[WINDOW] === ПЕРЕКЛЮЧЕНИЕ НА HWND={new_hwnd} ===")
-
-        old_hwnd = self._current_active_hwnd
-
-        # === 1. СОХРАНЯЕМ СОСТОЯНИЕ СТАРОГО ОКНА (если есть) ===
-        if old_hwnd is not None and old_hwnd != new_hwnd:
-            self._save_window_state(old_hwnd)
-            self.logger.info(f"[WINDOW] Сохранено состояние для HWND={old_hwnd}")
-
-        # === 2. ОСТАНАВЛИВАЕМ МОНИТОР АВТОЗАМЕНЫ ===
-        if self.translation_monitor and self.translation_monitor.is_running():
-            self.logger.info("[WINDOW] Останавливаем монитор автозамены")
-            self.translation_monitor.stop()
-
-        # === 3. СКРЫВАЕМ ВСЕ ОВЕРЛЕИ СТАРОГО ОКНА (НО НЕ УДАЛЯЕМ) ===
-        if self.overlay_manager and old_hwnd is not None:
-            overlays = self.overlay_manager.get_overlays_for_window(old_hwnd)
-            if overlays:
-                self.logger.info(f"[WINDOW] Скрываем {len(overlays)} оверлеев для HWND={old_hwnd}")
-                for overlay in overlays:
-                    try:
-                        overlay._is_visible_by_user = False
-                        overlay._hidden_by_user = True
-                        if overlay.visible:
-                            overlay.visible = False
-                            overlay.root.withdraw()
-                    except Exception as e:
-                        self.logger.warning(f"[WINDOW] Ошибка скрытия оверлея: {e}")
-
-        # === 4. ОБНОВЛЯЕМ ТЕКУЩЕЕ ОКНО ===
-        self._current_active_hwnd = new_hwnd
-
-        # === 5. ВОССТАНАВЛИВАЕМ СОСТОЯНИЕ НОВОГО ОКНА (если есть) ===
-        if new_hwnd in self._window_states:
-            state = self._window_states[new_hwnd]
-            if state.get('was_visible', False):
-                self.logger.info(f"[WINDOW] Показываем оверлеи для HWND={new_hwnd}")
-                if self.overlay_manager:
-                    overlays = self.overlay_manager.get_overlays_for_window(new_hwnd)
-                    for overlay in overlays:
-                        try:
-                            overlay._is_visible_by_user = True
-                            overlay._hidden_by_user = False
-                            if not overlay.visible:
-                                overlay.show()
-                        except Exception as e:
-                            self.logger.warning(f"[WINDOW] Ошибка показа оверлея: {e}")
-            else:
-                self.logger.info(f"[WINDOW] Оверлеи для HWND={new_hwnd} были скрыты, не показываем")
-        else:
-            self.logger.info(f"[WINDOW] Нет сохраненного состояния для HWND={new_hwnd}")
-
     def capture_area(self):
         """Захват области экрана (F3)."""
         self.logger.info("[DEBUG] capture_area() вызван")
@@ -1210,8 +1329,14 @@ class ScreenshotTranslatorApp:
                     try:
                         overlay._is_visible_by_user = True
                         overlay._hidden_by_user = False
-                        if not overlay.visible:
-                            overlay.show()
+                        # === ИСПРАВЛЕНИЕ: НЕ ПОКАЗЫВАЕМ ОВЕРЛЕЙ АВТОЗАМЕНЫ ПРИНУДИТЕЛЬНО ===
+                        # Они должны показываться только после того, как монитор найдёт шаблон
+                        if not overlay._is_auto_replace:
+                            if not overlay.visible:
+                                overlay.show()
+                        else:
+                            self.logger.info(
+                                f"[WINDOW] Оверлей автозамены {overlay._template_id[:8]} не показываем принудительно — будет показан монитором")
                     except Exception as e:
                         self.logger.warning(f"[WINDOW] Ошибка показа оверлея: {e}")
 
@@ -1240,71 +1365,6 @@ class ScreenshotTranslatorApp:
         if ready_text in text and color == '#4CAF50':
             notification_text = self.get_string('ready_notification')
             self._show_notification(notification_text, 2500)
-
-    def _on_init_complete(self, result, error):
-        """Обработчик завершения инициализации."""
-        self.logger.info(f"_on_init_complete вызван: result={result}, error={error}")
-        if error:
-            self.logger.error(f"Ошибка инициализации: {error}")
-            self._on_init_error(error)
-            self.logger.info(f"Планируем повторную попытку через {self._init_retry_delay}мс...")
-            self.root.after(self._init_retry_delay, self._init_translator_step)
-        else:
-            self.logger.info("Инициализация завершена успешно, обновляем UI")
-            self.ready = True
-            self.initializing = False
-            self._init_done = True
-            self._init_attempts = 0
-
-            if self.overlay_manager is None:
-                self.logger.info("Создание OverlayManager")
-                from src.overlay_manager import OverlayManager
-                self.overlay_manager = OverlayManager(self)
-                self.logger.info(f"OverlayManager создан: {self.overlay_manager}")
-            else:
-                self.logger.info(f"OverlayManager уже существует: {self.overlay_manager}")
-
-            # === РАЗБЛОКИРУЕМ ВЫБОР ЯЗЫКА ПЕРЕВОДА ===
-            if hasattr(self, 'target_lang_combo'):
-                self.target_lang_combo.config(state="normal")
-                self.logger.info("Выбор языка перевода разблокирован")
-
-            # === РАЗБЛОКИРУЕМ ВСЕ КНОПКИ ===
-            self.btn_capture.config(state=NORMAL, bg='#4CAF50', fg='white')
-            self.btn_clear_all.config(state=NORMAL, bg='#d32f2f', fg='white')
-            self.btn_toggle.config(state=NORMAL, bg='#2196F3', fg='white')
-
-            auto_enabled = self.settings.get_auto_replace_translated()
-            auto_status = "ВКЛ" if auto_enabled else "ВЫКЛ"
-            hotkeys = self.settings.get_all_hotkeys()
-            auto_key = hotkeys.get('auto_replace', 'f6').upper()
-            self.btn_auto_replace.config(
-                state=NORMAL,
-                text=f"🔄 Автозамена: {auto_status} ({auto_key})",
-                bg='#4CAF50' if auto_enabled else '#ff9800',
-                fg='white'
-            )
-
-            if hasattr(self, 'settings_btn'):
-                self.settings_btn.config(state=NORMAL, bg='#3c3c3c', fg='#cccccc')
-
-            self.set_settings_menu_enabled(True)
-
-            status_text = self.get_string('edit_mode_on') if self._edit_mode_enabled else self.get_string(
-                'edit_mode_off')
-            edit_key = hotkeys.get('edit_mode', 'f5').upper()
-            self.btn_edit_mode.config(
-                state=NORMAL,
-                text=f"✏️ {self.get_string('edit_mode')}: {status_text} ({edit_key})",
-                bg='#4CAF50' if self._edit_mode_enabled else '#ff9800',
-                fg='white'
-            )
-
-            # === ТОЛЬКО ЗДЕСЬ ПОКАЗЫВАЕМ "Готов" ===
-            self.update_status("● " + self.get_string('ready'), '#4CAF50')
-
-            self._restarting = False
-        self._pending_command_ids = {}
 
     def _process_next_in_queue(self):
         """Обрабатывает следующую задачу в очереди переводов."""

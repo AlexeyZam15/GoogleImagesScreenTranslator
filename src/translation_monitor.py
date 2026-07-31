@@ -42,6 +42,24 @@ class TranslationMonitor:
 
         self.logger.info("TranslationMonitor инициализирован")
 
+    def start(self):
+        """Запускает мониторинг."""
+        if self.monitoring:
+            return
+
+        if not self.templates:
+            self.logger.info("Нет шаблонов для мониторинга")
+            return
+
+        self.monitoring = True
+        self.monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
+        self.monitor_thread.start()
+        self.logger.info(f"Мониторинг запущен для {len(self.templates)} шаблонов")
+
+        # === УБИРАЕМ ПРИНУДИТЕЛЬНЫЙ ПОКАЗ ОВЕРЛЕЕВ ПРИ ЗАПУСКЕ ===
+        # Оверлеи будут показаны только когда шаблоны будут найдены при сканировании
+        # Это устраняет "мигание" при восстановлении
+
     def add_template(self, region_image: Path, translated_image: Path, target_hwnd: int = None):
         """Добавляет новый шаблон для мониторинга. Возвращает (pair_index, file_hash)."""
         if not region_image.exists():
@@ -171,54 +189,6 @@ class TranslationMonitor:
                 if not overlay._hidden_by_user:
                     overlay.show()
                 self.logger.info(f"[MONITOR] Создан новый оверлей для шаблона #{pair_index}")
-
-    def start(self):
-        """Запускает мониторинг."""
-        if self.monitoring:
-            return
-
-        if not self.templates:
-            self.logger.info("Нет шаблонов для мониторинга")
-            return
-
-        self.monitoring = True
-        self.monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
-        self.monitor_thread.start()
-        self.logger.info(f"Мониторинг запущен для {len(self.templates)} шаблонов")
-
-        # === ПОСЛЕ ЗАПУСКА МОНИТОРА — ПРОВЕРЯЕМ ВСЕ ШАБЛОНЫ ===
-        # Это нужно, чтобы сразу показать оверлеи для уже найденных шаблонов
-        def check_existing_templates():
-            try:
-                import win32gui
-                active_hwnd = win32gui.GetForegroundWindow()
-                for template_data in self.templates:
-                    if not template_data.get('enabled', True):
-                        continue
-                    target_hwnd = template_data.get('target_hwnd')
-                    if target_hwnd != active_hwnd:
-                        continue
-                    if template_data.get('found', False):
-                        overlay = template_data.get('overlay')
-                        if overlay:
-                            try:
-                                if not overlay.visible:
-                                    overlay._is_visible_by_user = True
-                                    overlay._hidden_by_user = False
-                                    overlay.show()
-                                    self.logger.info(
-                                        f"[MONITOR] Оверлей для шаблона #{template_data['pair_index']} показан при запуске монитора")
-                            except Exception as e:
-                                self.logger.warning(f"[MONITOR] Ошибка показа оверлея при запуске: {e}")
-            except Exception as e:
-                self.logger.warning(f"[MONITOR] Ошибка проверки шаблонов при запуске: {e}")
-
-        # Запускаем проверку с небольшой задержкой, чтобы монитор успел инициализироваться
-        if hasattr(self, 'parent') and hasattr(self.parent, 'root'):
-            self.parent.root.after(500, check_existing_templates)
-        else:
-            # Fallback: запускаем в отдельном потоке
-            threading.Thread(target=check_existing_templates, daemon=True).start()
 
     def _capture_window(self, hwnd: int) -> Optional[np.ndarray]:
         """Захватывает скриншот окна через PrintWindow (для браузеров)."""
