@@ -25,6 +25,7 @@ def get_russian_main_strings():
         'overlay_remove_hint': "Наведите на оверлей и нажмите ESC для удаления",
         'edit_mode_on': "ВКЛЮЧЕН",
         'edit_mode_off': "ВЫКЛЮЧЕН",
+        'windows_with_translations': "📋 Окна с переводами:",
     }
 
 
@@ -48,7 +49,87 @@ def get_english_main_strings():
         'overlay_remove_hint': "Hover over overlay and press ESC to remove",
         'edit_mode_on': "ON",
         'edit_mode_off': "OFF",
+        'windows_with_translations': "📋 Windows with translations:",
     }
+
+def get_russian_hotkeys_strings():
+    """Возвращает русские строки для окна горячих клавиш"""
+    return {
+        'menu_hotkeys': "Хоткеи",
+        'menu_hotkeys_show': "Показать горячие клавиши",
+        'hotkeys_title': "Горячие клавиши",
+        'hotkeys_change_in_settings': "⚙️ Изменить горячие клавиши",
+        'hotkeys_close': "Закрыть",
+        'hotkey_toggle_overlay': "Показать/скрыть оверлей",
+        'hotkey_toggle_overlay_desc': "Переключает видимость всех оверлеев (переводов) на экране",
+        'hotkey_screenshot': "Скриншот окна",
+        'hotkey_screenshot_desc': "Делает скриншот активного окна и переводит его",
+        'hotkey_area': "Выделение области",
+        'hotkey_area_desc': "Позволяет выбрать произвольную область экрана для перевода",
+        'hotkey_clear_all': "Удалить все оверлеи",
+        'hotkey_clear_all_desc': "Удаляет все оверлеи с экрана и очищает историю переводов",
+        'hotkey_edit_mode': "Режим редактирования",
+        'hotkey_edit_mode_desc': "Включает/выключает режим, в котором оверлеи можно перемещать и удалять",
+        'hotkey_auto_replace': "Автозамена областей",
+        'hotkey_auto_replace_desc': "Включает/выключает автоматический поиск и замену уже переведённых областей",
+        'hotkey_esc': "ESC - удалить оверлей",
+        'hotkey_esc_desc': "В режиме редактирования удаляет оверлей под курсором",
+    }
+
+
+def get_english_hotkeys_strings():
+    """Возвращает английские строки для окна горячих клавиш"""
+    return {
+        'menu_hotkeys': "Hotkeys",
+        'menu_hotkeys_show': "Show hotkeys",
+        'hotkeys_title': "Hotkeys",
+        'hotkeys_change_in_settings': "⚙️ Change hotkeys",
+        'hotkeys_close': "Close",
+        'hotkey_toggle_overlay': "Show/Hide overlay",
+        'hotkey_toggle_overlay_desc': "Toggles visibility of all overlays (translations) on screen",
+        'hotkey_screenshot': "Window screenshot",
+        'hotkey_screenshot_desc': "Takes a screenshot of the active window and translates it",
+        'hotkey_area': "Area selection",
+        'hotkey_area_desc': "Allows selecting any area of the screen for translation",
+        'hotkey_clear_all': "Clear all overlays",
+        'hotkey_clear_all_desc': "Removes all overlays from screen and clears translation history",
+        'hotkey_edit_mode': "Edit mode",
+        'hotkey_edit_mode_desc': "Toggles edit mode where overlays can be moved and removed",
+        'hotkey_auto_replace': "Auto-replace areas",
+        'hotkey_auto_replace_desc': "Toggles automatic detection and replacement of already translated areas",
+        'hotkey_esc': "ESC - remove overlay",
+        'hotkey_esc_desc': "In edit mode, removes the overlay under the mouse cursor",
+    }
+
+
+def get_russian_all_strings():
+    """Объединяет все русские строки в один словарь"""
+    strings = {}
+    strings.update(get_russian_main_strings())
+    strings.update(get_russian_button_strings())
+    strings.update(get_russian_settings_strings())
+    strings.update(get_russian_menu_strings())
+    strings.update(get_russian_settings_window_strings())
+    strings.update(get_russian_about_strings())
+    strings.update(get_russian_shortcuts_strings())
+    strings.update(get_russian_help_strings())
+    strings.update(get_russian_hotkeys_strings())  # <-- ИСПРАВЛЕНО: УБРАН КОММЕНТАРИЙ
+    return strings
+
+
+def get_english_all_strings():
+    """Объединяет все английские строки в один словарь"""
+    strings = {}
+    strings.update(get_english_main_strings())
+    strings.update(get_english_button_strings())
+    strings.update(get_english_settings_strings())
+    strings.update(get_english_menu_strings())
+    strings.update(get_english_settings_window_strings())
+    strings.update(get_english_about_strings())
+    strings.update(get_english_shortcuts_strings())
+    strings.update(get_english_help_strings())
+    strings.update(get_english_hotkeys_strings())  # <-- ИСПРАВЛЕНО: УБРАН КОММЕНТАРИЙ
+    return strings
 
 
 def get_russian_settings_window_strings():
@@ -263,34 +344,6 @@ def get_russian_shortcuts_strings():
     }
 
 
-def get_russian_all_strings():
-    """Объединяет все русские строки в один словарь"""
-    strings = {}
-    strings.update(get_russian_main_strings())
-    strings.update(get_russian_button_strings())
-    strings.update(get_russian_settings_strings())
-    strings.update(get_russian_menu_strings())
-    strings.update(get_russian_settings_window_strings())
-    strings.update(get_russian_about_strings())
-    strings.update(get_russian_shortcuts_strings())
-    strings.update(get_russian_help_strings())  # <-- ДОБАВЛЯЕМ
-    return strings
-
-
-def get_english_all_strings():
-    """Объединяет все английские строки в один словарь"""
-    strings = {}
-    strings.update(get_english_main_strings())
-    strings.update(get_english_button_strings())
-    strings.update(get_english_settings_strings())
-    strings.update(get_english_menu_strings())
-    strings.update(get_english_settings_window_strings())
-    strings.update(get_english_about_strings())
-    strings.update(get_english_shortcuts_strings())
-    strings.update(get_english_help_strings())  # <-- ДОБАВЛЯЕМ
-    return strings
-
-
 def get_russian_help_strings():
     """Возвращает русские строки для окна помощи"""
     return {
@@ -360,7 +413,6 @@ def get_strings(language_code='ru'):
 
 
 # Для обратной совместимости сохраняем STRINGS словарь
-
 STRINGS = {
     'ru': get_russian_all_strings(),
     'en': get_english_all_strings(),

@@ -49,9 +49,8 @@ class AreaSelector:
         self.root = tk.Toplevel()
         self.root.attributes('-fullscreen', True)
         self.root.attributes('-alpha', self.selection_alpha)
-        # ВАЖНО: НЕ используем -topmost для окна выделения области,
-        # чтобы оверлей перевода мог быть поверх него
-        # self.root.attributes('-topmost', True)  # УБРАНО!
+        # ВАЖНО: Устанавливаем topmost чтобы окно было поверх всех и получало события клавиатуры
+        self.root.attributes('-topmost', True)
         self.root.focus_force()
         self.root.configure(bg='gray')
 
@@ -68,10 +67,10 @@ class AreaSelector:
         self.root.bind("<Escape>", on_escape)
         self.canvas.bind("<Escape>", on_escape)
 
+        # Принудительно захватываем фокус и все события
         self.canvas.focus_set()
         self.root.focus_force()
-
-        self.root.grab_set()
+        self.root.grab_set()  # <-- ДОБАВЛЕНО: захват всех событий
         self.root.lift()
 
         # Показываем инструкцию

@@ -101,6 +101,10 @@ class HotkeyManager:
 
     def _execute_action(self, action):
         """Выполняет действие по горячей клавише"""
+        if self._actions_blocked:
+            self.logger.info(f"[HOTKEYS] Действие {action} заблокировано")
+            return
+
         if action == 'toggle_overlay':
             self.app.toggle_overlay()
         elif action == 'screenshot':
@@ -135,5 +139,7 @@ class HotkeyManager:
         """Очищает хуки"""
         try:
             keyboard.unhook_all()
+            self._hotkey_hook_active = False
+            self.logger.info("[HOTKEYS] Хуки очищены")
         except:
             pass

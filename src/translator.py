@@ -142,8 +142,7 @@ class GoogleTranslateDebug:
 
             self.logger.info("Открытие Google Translate...")
             try:
-                # ТАЙМАУТ 4 СЕКУНДЫ
-                timeout_ms = 4000
+                timeout_ms = 6000
                 self.logger.info(f"Загрузка страницы (таймаут {timeout_ms}мс): {self.base_url}")
                 self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=timeout_ms)
                 self.logger.info(f"✅ Google Translate открыт: {self.base_url}")

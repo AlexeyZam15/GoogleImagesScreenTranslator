@@ -224,7 +224,6 @@ class ScreenshotTranslatorApp:
         if not self.overlay_manager:
             self.overlay_manager = OverlayManager(self)
 
-        # === СНАЧАЛА СОЗДАЁМ МОНИТОР ===
         if not self.translation_monitor:
             self.translation_monitor = TranslationMonitor(self, self.overlay_manager, self.settings)
             self.logger.info("TranslationMonitor создан")
@@ -232,7 +231,6 @@ class ScreenshotTranslatorApp:
             if self.settings.get_auto_replace_translated():
                 self.logger.info("Автозамена включена, монитор будет запущен при добавлении шаблонов")
 
-        # === ПОТОМ ВОССТАНАВЛИВАЕМ ОВЕРЛЕИ (ТЕПЕРЬ МОНИТОР ЕСТЬ) ===
         restored_count = 0
         if self.overlay_manager:
             restored_count = self.overlay_manager.restore_overlays_from_state(self)
@@ -241,9 +239,6 @@ class ScreenshotTranslatorApp:
                 self.window_list.refresh()
             else:
                 self.logger.info("[STATE] Нет сохранённых оверлеев для восстановления")
-
-        if hasattr(self.ui, 'target_lang_combo'):
-            self.ui.target_lang_combo.config(state="normal")
 
         if hasattr(self.ui, 'settings_btn'):
             self.ui.settings_btn.config(state=tk.NORMAL, bg='#3c3c3c', fg='#cccccc')
@@ -562,6 +557,7 @@ class ScreenshotTranslatorApp:
                 self.ui.root.focus_force()
 
             try:
+                selection_window.grab_release()  # <-- ДОБАВЛЕНО: освобождаем захват
                 selection_window.destroy()
             except:
                 pass
@@ -573,6 +569,12 @@ class ScreenshotTranslatorApp:
         selection_window.bind("<Escape>", lambda e: exit_area_mode())
         canvas.bind("<Escape>", lambda e: exit_area_mode())
         selection_window.bind("<Return>", lambda e: exit_area_mode())
+
+        # Принудительно захватываем фокус
+        canvas.focus_set()
+        selection_window.focus_force()
+        selection_window.grab_set()  # <-- ДОБАВЛЕНО: захват всех событий
+        selection_window.lift()
 
         self.hotkeys.set_actions_blocked(True)
 

@@ -3,13 +3,9 @@
 """
 
 import tkinter as tk
-from tkinter import ttk, Menu, Frame, Label, Button, Listbox, StringVar, BooleanVar, END, DISABLED, NORMAL, FLAT
+from tkinter import ttk, Menu, Frame, Label, Button, Listbox, StringVar, BooleanVar, END, DISABLED, NORMAL, FLAT, Canvas
 from pathlib import Path
 import logging
-
-from src.settings import Settings
-from src.browser_worker import BrowserWorker
-from src.screenshot import ScreenshotCapturer
 
 LANGUAGES = {
     "af": "Afrikaans", "sq": "Albanian", "am": "Amharic", "ar": "Arabic", "hy": "Armenian",
@@ -46,9 +42,9 @@ class MainWindow:
         self.root = tk.Tk()
         self.root.title(self.get_string('app_title'))
         self.root.withdraw()
-        self.root.geometry("500x500")
-        self.root.minsize(450, 400)
-        self.root.maxsize(550, 600)
+        self.root.geometry("720x500")
+        self.root.minsize(500, 380)
+        self.root.maxsize(900, 700)
         self.root.resizable(True, True)
         self.root.configure(bg='#1e1e1e')
 
@@ -74,6 +70,221 @@ class MainWindow:
         self.root.deiconify()
         self.root.lift()
         self.root.focus_force()
+
+    def create_menu(self):
+        """Создает главное меню"""
+        menubar = Menu(self.root, bg='#1e1e1e', fg='white', activebackground='#333333', activeforeground='white')
+        self.root.config(menu=menubar)
+
+        file_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
+                         activeforeground='white')
+        menubar.add_cascade(label=self.get_string('menu_file'), menu=file_menu)
+        file_menu.add_command(label=self.get_string('menu_open_folder'), command=self.app.open_app_folder)
+        file_menu.add_separator()
+        file_menu.add_command(label=self.get_string('menu_exit'), command=self.app.on_close)
+
+        settings_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
+                             activeforeground='white')
+        menubar.add_cascade(label=self.get_string('menu_settings'), menu=settings_menu, state=DISABLED)
+        settings_menu.add_command(label=self.get_string('menu_settings_item'), command=self.app.open_settings)
+        settings_menu.add_separator()
+        settings_menu.add_command(label=self.get_string('menu_reset_settings'), command=self.app.reset_settings)
+
+        hotkeys_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
+                            activeforeground='white')
+        menubar.add_cascade(label=self.get_string('menu_hotkeys'), menu=hotkeys_menu, state=DISABLED)
+        hotkeys_menu.add_command(label=self.get_string('menu_hotkeys_show'), command=self.show_hotkeys_window)
+
+        help_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
+                         activeforeground='white')
+        menubar.add_cascade(label=self.get_string('menu_help'), menu=help_menu)
+        help_menu.add_command(label=self.get_string('menu_help_instruction'), command=self.app.show_help)
+
+        self._menubar = menubar
+
+    def create_widgets(self):
+        """Создает все виджеты главного окна - упрощенный интерфейс"""
+        main = Frame(self.root, bg='#1a1a1a')
+        main.pack(expand=True, fill=tk.BOTH, padx=0, pady=0)
+
+        header_frame = Frame(main, bg='#1a1a1a', height=70)
+        header_frame.pack(fill=tk.X, pady=(0, 0))
+        header_frame.pack_propagate(False)
+
+        left_header = Frame(header_frame, bg='#1a1a1a')
+        left_header.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(20, 0))
+
+        icon_label = Label(
+            left_header,
+            text="📸",
+            bg='#1a1a1a',
+            fg='#4CAF50',
+            font=("Segoe UI", 28)
+        )
+        icon_label.pack(side=tk.LEFT, padx=(0, 12))
+
+        self.title_label = Label(
+            left_header,
+            text=self.get_string('app_title'),
+            bg='#1a1a1a',
+            fg='#4CAF50',
+            font=("Segoe UI", 18, "bold"),
+            anchor='w'
+        )
+        self.title_label.pack(side=tk.LEFT)
+
+        right_header = Frame(header_frame, bg='#1a1a1a')
+        right_header.pack(side=tk.RIGHT, padx=(0, 20))
+
+        current_lang = self.settings.get_language()
+        lang_text = "EN" if current_lang == "ru" else "RU"
+
+        self.lang_btn = Button(
+            right_header,
+            text=lang_text,
+            command=self.app.toggle_language,
+            font=("Segoe UI", 12, "bold"),
+            bg='#2d2d2d',
+            fg='#4CAF50',
+            relief=FLAT,
+            width=3,
+            padx=8,
+            pady=6,
+            cursor="hand2",
+            state=tk.NORMAL,
+            borderwidth=0,
+            highlightthickness=0
+        )
+        self.lang_btn.pack(side=tk.RIGHT, padx=(0, 10))
+
+        def on_lang_enter(e):
+            if self.lang_btn['state'] != DISABLED:
+                self.lang_btn.config(bg='#3c3c3c', fg='white')
+
+        def on_lang_leave(e):
+            if self.lang_btn['state'] != DISABLED:
+                self.lang_btn.config(bg='#2d2d2d', fg='#4CAF50')
+
+        self.lang_btn.bind('<Enter>', on_lang_enter)
+        self.lang_btn.bind('<Leave>', on_lang_leave)
+
+        self.settings_btn = Button(
+            right_header,
+            text="⚙️",
+            command=self.app.open_settings,
+            font=("Segoe UI", 12),
+            bg='#2d2d2d',
+            fg='#888888',
+            relief=FLAT,
+            width=3,
+            padx=8,
+            pady=6,
+            cursor="hand2",
+            state=DISABLED,
+            borderwidth=0,
+            highlightthickness=0
+        )
+        self.settings_btn.pack(side=tk.RIGHT, padx=(0, 0))
+
+        def on_settings_enter(e):
+            if self.settings_btn['state'] != DISABLED:
+                self.settings_btn.config(bg='#3c3c3c', fg='#4CAF50')
+
+        def on_settings_leave(e):
+            if self.settings_btn['state'] != DISABLED:
+                self.settings_btn.config(bg='#2d2d2d', fg='#888888')
+            else:
+                self.settings_btn.config(bg='#2d2d2d', fg='#444444')
+
+        def on_settings_click(e):
+            if self.settings_btn['state'] != DISABLED:
+                self.settings_btn.config(text="🔧")
+                self.root.after(150, lambda: self.settings_btn.config(text="⚙️"))
+
+        self.settings_btn.bind('<Enter>', on_settings_enter)
+        self.settings_btn.bind('<Leave>', on_settings_leave)
+        self.settings_btn.bind('<Button-1>', on_settings_click)
+
+        separator = Frame(main, bg='#2d2d2d', height=1)
+        separator.pack(fill=tk.X, padx=20)
+
+        content_frame = Frame(main, bg='#1a1a1a')
+        content_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=12)
+
+        status_frame = Frame(content_frame, bg='#1a1a1a')
+        status_frame.pack(fill=tk.X, pady=(0, 10))
+
+        self.status = Label(
+            status_frame,
+            text="● " + self.get_string('starting'),
+            fg='#ff9800',
+            bg='#1a1a1a',
+            font=("Segoe UI", 11),
+            height=1
+        )
+        self.status.pack(anchor=tk.W)
+
+        windows_header = Frame(content_frame, bg='#1a1a1a')
+        windows_header.pack(fill=tk.X, pady=(5, 5))
+
+        self.windows_label = Label(
+            windows_header,
+            text=self.get_string('windows_with_translations'),
+            bg='#1a1a1a',
+            fg='#aaaaaa',
+            font=("Segoe UI", 10),
+            anchor='w'
+        )
+        self.windows_label.pack(side=tk.LEFT)
+
+        listbox_frame = Frame(content_frame, bg='#2d2d2d', bd=1, relief=tk.SOLID, highlightbackground='#3c3c3c',
+                              highlightthickness=1)
+        listbox_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 0))
+
+        self.window_listbox = Listbox(
+            listbox_frame,
+            bg='#2d2d2d',
+            fg='#cccccc',
+            selectbackground='#4CAF50',
+            selectforeground='white',
+            font=("Segoe UI", 10),
+            height=12,
+            relief=FLAT,
+            bd=0,
+            highlightthickness=0
+        )
+        self.window_listbox.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
+
+        self.window_listbox.bind('<Double-Button-1>', self._on_listbox_double_click)
+
+    def update_ui_language(self):
+        """Обновляет язык интерфейса"""
+        self.root.title(self.get_string('app_title'))
+        if self.title_label:
+            self.title_label.config(text=self.get_string('app_title'))
+        if self.windows_label:
+            self.windows_label.config(text=self.get_string('windows_with_translations'))
+
+        # Сохраняем состояние готовности приложения
+        is_ready = False
+        if hasattr(self.app, 'ready') and self.app.ready:
+            is_ready = True
+
+        self.create_menu()
+
+        # Восстанавливаем состояние меню в зависимости от готовности приложения
+        if is_ready:
+            self.set_settings_menu_enabled(True)
+
+        current_lang = self.settings.get_language()
+        if self.lang_btn:
+            lang_text = "EN" if current_lang == "ru" else "RU"
+            self.lang_btn.config(text=lang_text)
+
+    def update_windows_count(self, count):
+        """Обновляет счетчик окон с переводами"""
+        if hasattr(self, 'windows_count_label'):
+            self.windows_count_label.config(text=f"({count})")
 
     def _setup_icon(self):
         """Устанавливает иконку приложения"""
@@ -114,122 +325,87 @@ class MainWindow:
         except Exception as e:
             self.logger.warning(f"Не удалось установить иконку: {e}")
 
-    def create_menu(self):
-        """Создает главное меню"""
-        menubar = Menu(self.root, bg='#1e1e1e', fg='white')
-        self.root.config(menu=menubar)
+    def show_hotkeys_window(self):
+        """Показывает окно с информацией о горячих клавишах"""
+        if hasattr(self.app, '_hotkeys_window') and self.app._hotkeys_window:
+            try:
+                self.app._hotkeys_window.window.lift()
+                self.app._hotkeys_window.window.focus_force()
+                return
+            except:
+                self.app._hotkeys_window = None
 
-        file_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white')
-        menubar.add_cascade(label=self.get_string('menu_file'), menu=file_menu)
-        file_menu.add_command(label=self.get_string('menu_open_folder'), command=self.app.open_app_folder)
-        file_menu.add_separator()
-        file_menu.add_command(label=self.get_string('menu_exit'), command=self.app.on_close)
+        from src.hotkeys_window import HotkeysWindow
+        HotkeysWindow(self.app)
 
-        settings_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white')
-        menubar.add_cascade(label=self.get_string('menu_settings'), menu=settings_menu, state=DISABLED)
-        settings_menu.add_command(label=self.get_string('menu_settings_item'), command=self.app.open_settings)
-        settings_menu.add_separator()
-        settings_menu.add_command(label=self.get_string('menu_reset_settings'), command=self.app.reset_settings)
+    def _on_listbox_double_click(self, event):
+        """Обработчик двойного клика по списку окон - переключает видимость оверлеев"""
+        selection = self.window_listbox.curselection()
+        if not selection:
+            return
+        hwnd = self._window_hwnd_map.get(selection[0])
+        if not hwnd or not self.app.overlay_manager:
+            return
 
-        help_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white')
-        menubar.add_cascade(label=self.get_string('menu_help'), menu=help_menu)
-        help_menu.add_command(label=self.get_string('menu_help_instruction'), command=self.app.show_help)
+        overlays = self.app.overlay_manager.get_overlays_for_window(hwnd)
+        if not overlays:
+            return
 
-        self._menubar = menubar
+        any_visible = any(o.visible for o in overlays)
 
-    def create_widgets(self):
-        """Создает все виджеты главного окна"""
-        main = Frame(self.root, bg='#1e1e1e')
-        main.pack(expand=True, fill=tk.BOTH, padx=20, pady=15)
+        if any_visible:
+            for overlay in overlays:
+                try:
+                    overlay.visible = False
+                    overlay.root.withdraw()
+                    overlay._is_visible_by_user = False
+                    overlay._hidden_by_user = True
+                except:
+                    pass
+        else:
+            for overlay in overlays:
+                try:
+                    overlay._is_visible_by_user = True
+                    overlay._hidden_by_user = False
+                    overlay._hidden_by_mouse = False
+                    if not overlay.visible:
+                        overlay.show()
+                except:
+                    pass
 
-        # Заголовок
-        header_frame = Frame(main, bg='#1e1e1e', height=50)
-        header_frame.pack(fill=tk.X, pady=(0, 10))
-        header_frame.pack_propagate(False)
+    def _center_window(self):
+        """Центрирует окно"""
+        self.root.update_idletasks()
+        w, h = self.root.winfo_width(), self.root.winfo_height()
+        x = (self.root.winfo_screenwidth() - w) // 2
+        y = (self.root.winfo_screenheight() - h) // 2
+        self.root.geometry(f"{w}x{h}+{x}+{y}")
 
-        title_frame = Frame(header_frame, bg='#1e1e1e')
-        title_frame.pack(side=tk.LEFT, expand=True, fill=tk.X)
+    def get_string(self, key):
+        """Возвращает локализованную строку"""
+        return self.settings.get_string(key)
 
-        icon_label = Label(title_frame, text="📸", bg='#1e1e1e', fg='white', font=("Arial", 20))
-        icon_label.pack(side=tk.LEFT, padx=(0, 8))
+    def update_status(self, text, color='white'):
+        """Обновляет статус"""
+        if self.status:
+            self.status.config(text=text, fg=color)
 
-        self.title_label = Label(title_frame, text=self.get_string('app_title'),
-                                 bg='#1e1e1e', fg='#4CAF50', font=("Arial", 13, "bold"))
-        self.title_label.pack(side=tk.LEFT)
-
-        header_right = Frame(header_frame, bg='#1e1e1e')
-        header_right.pack(side=tk.RIGHT, padx=(5, 0))
-
-        # Кнопка языка
-        current_lang = self.settings.get_language()
-        lang_text = "EN" if current_lang == "ru" else "RU"
-        self.lang_btn = Button(header_right, text=lang_text, command=self.app.toggle_language,
-                               font=("Arial", 10, "bold"), bg='#3c3c3c', fg='#4CAF50',
-                               relief=FLAT, width=3, padx=0, pady=4, cursor="hand2", state=tk.NORMAL)
-        self.lang_btn.pack(side=tk.RIGHT, padx=(0, 3))
-
-        # Кнопка настроек
-        self.settings_btn = Button(header_right, text="⚙️", command=self.app.open_settings,
-                                   font=("Arial", 12), bg='#3c3c3c', fg='#cccccc',
-                                   relief=FLAT, width=3, padx=0, pady=4, cursor="hand2", state=DISABLED)
-        self.settings_btn.pack(side=tk.RIGHT, padx=(0, 5))
-
-        def on_settings_enter(e):
-            if self.settings_btn['state'] != DISABLED:
-                self.settings_btn.config(bg='#4CAF50', fg='white')
-
-        def on_settings_leave(e):
-            if self.settings_btn['state'] != DISABLED:
-                self.settings_btn.config(bg='#3c3c3c', fg='#cccccc')
-            else:
-                self.settings_btn.config(bg='#3c3c3c', fg='#666666')
-
-        self.settings_btn.bind('<Enter>', on_settings_enter)
-        self.settings_btn.bind('<Leave>', on_settings_leave)
-
-        # Статус
-        self.status = Label(main, text="● " + self.get_string('starting'),
-                            fg='#ff9800', bg='#1e1e1e', font=("Arial", 10), height=1)
-        self.status.pack(pady=(2, 8), fill=tk.X)
-
-        # Выбор языка перевода
-        lang_select_frame = Frame(main, bg='#1e1e1e')
-        lang_select_frame.pack(fill=tk.X, pady=(0, 10))
-
-        self.target_lang_label = Label(lang_select_frame, text=self.get_string('target_language'),
-                                       bg='#1e1e1e', fg='#cccccc', font=("Arial", 9), anchor='w')
-        self.target_lang_label.pack(anchor=tk.W, fill=tk.X)
-
-        lang_combo_frame = Frame(lang_select_frame, bg='#1e1e1e')
-        lang_combo_frame.pack(fill=tk.X, pady=(3, 0))
-
-        lang_codes = sorted(LANGUAGES.keys())
-        self._all_lang_items = [f"{LANGUAGES[code]} ({code})" for code in lang_codes]
-
-        self.target_lang_combo = ttk.Combobox(lang_combo_frame, textvariable=self.target_lang_var,
-                                              values=self._all_lang_items, font=("Arial", 9),
-                                              state="disabled", width=45)
-        self.target_lang_combo.pack(fill=tk.X)
-        self.target_lang_combo.bind('<KeyRelease>', self._on_lang_search)
-        self.target_lang_combo.bind('<Return>', self._on_lang_enter)
-        self.target_lang_combo.bind('<<ComboboxSelected>>', self._on_target_lang_changed)
-
-        current_lang_code = self.settings.get_target_language()
-        current_display = f"{LANGUAGES.get(current_lang_code, 'Russian')} ({current_lang_code})"
-        self.target_lang_combo.set(current_display)
-
-        # Список окон
-        windows_label = Label(main, text="Окна с переводами:",
-                              bg='#1e1e1e', fg='#cccccc', font=("Arial", 9), anchor='w')
-        windows_label.pack(anchor=tk.W, fill=tk.X, pady=(5, 3))
-
-        self.window_listbox = Listbox(main, bg='#2d2d2d', fg='#cccccc',
-                                      selectbackground='#4CAF50', selectforeground='white',
-                                      font=("Arial", 10), height=12, relief=FLAT)
-        self.window_listbox.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
-
-        # Создаем контекстное меню
-        self._create_context_menu()
+    def set_settings_menu_enabled(self, enabled):
+        """Блокирует/разблокирует меню настроек и хоткеев"""
+        try:
+            state = tk.NORMAL if enabled else DISABLED
+            if hasattr(self, '_menubar') and self._menubar:
+                for index in range(self._menubar.index('end') + 1):
+                    try:
+                        label = self._menubar.entrycget(index, 'label')
+                        if label == self.get_string('menu_settings'):
+                            self._menubar.entryconfig(index, state=state)
+                        elif label == self.get_string('menu_hotkeys'):
+                            self._menubar.entryconfig(index, state=state)
+                    except:
+                        pass
+        except Exception as e:
+            self.logger.warning(f"[MENU] Ошибка при блокировке меню: {e}")
 
     def _create_context_menu(self):
         """Создает контекстное меню для списка окон"""
@@ -305,50 +481,3 @@ class MainWindow:
     def _on_target_lang_changed(self, event):
         """Обработчик изменения языка"""
         self._apply_language(self.target_lang_combo.get())
-
-    def _center_window(self):
-        """Центрирует окно"""
-        self.root.update_idletasks()
-        w, h = self.root.winfo_width(), self.root.winfo_height()
-        x = (self.root.winfo_screenwidth() - w) // 2
-        y = (self.root.winfo_screenheight() - h) // 2
-        self.root.geometry(f"{w}x{h}+{x}+{y}")
-
-    def update_ui_language(self):
-        """Обновляет язык интерфейса"""
-        self.root.title(self.get_string('app_title'))
-        if self.title_label:
-            self.title_label.config(text=self.get_string('app_title'))
-        if self.target_lang_label:
-            self.target_lang_label.config(text=self.get_string('target_language'))
-        # Обновляем меню
-        self.create_menu()
-        # Обновляем кнопку языка
-        current_lang = self.settings.get_language()
-        if self.lang_btn:
-            self.lang_btn.config(text="EN" if current_lang == "ru" else "RU")
-
-    def get_string(self, key):
-        """Возвращает локализованную строку"""
-        return self.settings.get_string(key)
-
-    def update_status(self, text, color='white'):
-        """Обновляет статус"""
-        if self.status:
-            self.status.config(text=text, fg=color)
-
-    def set_settings_menu_enabled(self, enabled):
-        """Блокирует/разблокирует меню настроек"""
-        try:
-            state = tk.NORMAL if enabled else DISABLED
-            if hasattr(self, '_menubar') and self._menubar:
-                for index in range(self._menubar.index('end') + 1):
-                    try:
-                        label = self._menubar.entrycget(index, 'label')
-                        if label == self.get_string('menu_settings'):
-                            self._menubar.entryconfig(index, state=state)
-                            break
-                    except:
-                        pass
-        except Exception as e:
-            self.logger.warning(f"[MENU] Ошибка при блокировке меню: {e}")
