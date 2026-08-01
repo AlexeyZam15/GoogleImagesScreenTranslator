@@ -24,7 +24,8 @@ class Settings:
         "browser_path": "",
         "auto_hide_overlay": True,
         "auto_windowed_fullscreen": True,
-        "edit_mode_enabled": False
+        "edit_mode_enabled": False,
+        "auto_replace_translated": True
     }
 
     # Значения горячих клавиш по умолчанию
@@ -45,6 +46,15 @@ class Settings:
         self._config_file = self._config_dir / "settings.json"
         self.load()
 
+    def get_auto_replace_translated(self) -> bool:
+        """Возвращает настройку автозамены уже переведенных областей."""
+        return self.settings.get("auto_replace_translated", True)
+
+    def set_auto_replace_translated(self, enabled: bool):
+        """Устанавливает настройку автозамены уже переведенных областей."""
+        self.settings["auto_replace_translated"] = enabled
+        self.save()
+
     def get_edit_mode_enabled(self) -> bool:
         """Возвращает настройку режима редактирования."""
         return self.settings.get("edit_mode_enabled", False)
@@ -61,15 +71,6 @@ class Settings:
     def set_auto_windowed_fullscreen(self, enabled: bool):
         """Устанавливает настройку автоматического преобразования в оконный полноэкранный режим"""
         self.settings["auto_windowed_fullscreen"] = enabled
-        self.save()
-
-    def get_auto_replace_translated(self) -> bool:
-        """Возвращает настройку автозамены уже переведенных областей."""
-        return self.settings.get("auto_replace_translated", True)
-
-    def set_auto_replace_translated(self, enabled: bool):
-        """Устанавливает настройку автозамены уже переведенных областей."""
-        self.settings["auto_replace_translated"] = enabled
         self.save()
 
     def get_confidence_threshold(self) -> float:

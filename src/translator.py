@@ -112,7 +112,6 @@ class GoogleTranslateDebug:
             self.logger.info("Ожидание инициализации браузера (2с)...")
             time.sleep(2)
 
-            # Проверяем, есть ли уже страницы
             pages = self._context.pages
             if pages:
                 self.logger.info(f"Найдено {len(pages)} существующих страниц")
@@ -131,7 +130,6 @@ class GoogleTranslateDebug:
                         self.logger.error(f"Не удалось создать страницу даже с no_viewport: {e2}")
                         raise
 
-            # Закрываем лишние страницы
             pages = self._context.pages
             if len(pages) > 1:
                 self.logger.info(f"Закрытие {len(pages) - 1} лишних страниц...")
@@ -144,14 +142,13 @@ class GoogleTranslateDebug:
 
             self.logger.info("Открытие Google Translate...")
             try:
-                # УМЕНЬШЕННЫЙ ТАЙМАУТ: 12с → 8с
-                timeout_ms = 8000
+                # ТАЙМАУТ 4 СЕКУНДЫ
+                timeout_ms = 4000
                 self.logger.info(f"Загрузка страницы (таймаут {timeout_ms}мс): {self.base_url}")
                 self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=timeout_ms)
                 self.logger.info(f"✅ Google Translate открыт: {self.base_url}")
             except Exception as e:
                 self.logger.error(f"Ошибка загрузки страницы: {e}")
-                # Полностью закрываем всё и выбрасываем исключение
                 try:
                     if self._context:
                         self._context.close()

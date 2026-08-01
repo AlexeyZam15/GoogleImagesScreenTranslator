@@ -5,6 +5,7 @@
 import tkinter as tk
 from tkinter import ttk
 import time
+import logging  # <-- ДОБАВЛЯЕМ
 import win32gui
 import win32con
 import win32api
@@ -22,12 +23,78 @@ class TranslationOverlay:
         self._stop_animation = False
         self._status_text = "Перевод..."
         self._close_after = None
+        self.logger = logging.getLogger(__name__)  # <-- ДОБАВЛЯЕМ ЛОГГЕР
 
-    def hide(self):
-        """Скрывает оверлей с полной очисткой"""
+    def show(self, text="Перевод..."):
+        """Показывает оверлей с индикатором"""
+        try:
+            if self.visible:
+                # Если уже виден - просто обновляем текст
+                self._status_text = text
+                if self.status_label:
+                    self.status_label.config(text=text)
+                self.logger.info("[DEBUG] Индикатор уже виден, обновлен текст")
+                return
+
+            self._stop_animation = False
+            self._status_text = text
+            self.visible = True
+
+            # Если окно уже существует - просто показываем его
+            if self.root:
+                try:
+                    if self.root.winfo_exists():
+                        self.logger.info("[DEBUG] Используем существующее окно индикатора")
+                        if self.status_label:
+                            self.status_label.config(text=text)
+                        self.root.deiconify()
+                        self.root.lift()
+                        self._ensure_topmost()
+                        self._update_status_animation()
+                        return
+                except:
+                    # Окно не существует - создаем новое
+                    self.root = None
+
+            # Создаем новое окно
+            self._create_window()
+            self.logger.info("[DEBUG] Индикатор перевода показан (новое окно)")
+
+        except Exception as e:
+            self.logger.error(f"Ошибка при создании индикатора: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def finish(self):
+        """Завершает перевод - останавливает анимацию и закрывает окно"""
+        self.logger.info("[DEBUG] finish() - завершение индикатора")
         self._stop_animation = True
         self.visible = False
-        self._close_window()
+
+        if self.root:
+            try:
+                if self.root.winfo_exists():
+                    # Устанавливаем состояние "Готово"
+                    if self.status_label:
+                        self.status_label.config(text="✅ Готово!")
+                    if self.progress:
+                        try:
+                            self.progress.stop()
+                        except:
+                            pass
+                        self.progress['mode'] = 'determinate'
+                        self.progress['value'] = 100
+                    self.root.update_idletasks()
+                    self._ensure_topmost()
+
+                    # Закрываем окно через 300мс
+                    self.root.after(300, self._close_window)
+                else:
+                    self.logger.info("[DEBUG] Окно уже закрыто")
+                    self.root = None
+            except Exception as e:
+                self.logger.warning(f"[DEBUG] Ошибка при завершении: {e}")
+                self._close_window()
 
     def _close_window(self):
         """Закрывает окно с полной очисткой всех ссылок"""
@@ -35,46 +102,27 @@ class TranslationOverlay:
             self.visible = False
             self._stop_animation = True
 
-            if self.root is not None:
+            if self.root:
                 try:
                     if self.root.winfo_exists():
-                        print("[DEBUG] Закрытие окна прогресса...")
-                        self.root.destroy()
-                        print("[DEBUG] Окно прогресса закрыто")
+                        self.logger.info("[DEBUG] Закрытие окна индикатора...")
+                        self.root.withdraw()  # Просто скрываем, не уничтожаем
+                        # self.root.destroy()  # <-- НЕ УНИЧТОЖАЕМ
+                        self.logger.info("[DEBUG] Окно индикатора скрыто")
+                    else:
+                        self.root = None
                 except Exception as e:
-                    print(f"[DEBUG] Ошибка при закрытии окна: {e}")
-                finally:
+                    self.logger.info(f"[DEBUG] Ошибка при закрытии окна: {e}")
                     self.root = None
-                    self.progress = None
-                    self.status_label = None
-
         except Exception as e:
-            print(f"[DEBUG] Ошибка при закрытии окна: {e}")
+            self.logger.info(f"[DEBUG] Ошибка при закрытии окна: {e}")
             self.root = None
-            self.progress = None
-            self.status_label = None
 
-    def finish(self):
-        """Завершает перевод - останавливает анимацию и закрывает окно"""
-        print(f"[DEBUG] Перевод завершен, закрываем окно прогресса")
+    def hide(self):
+        """Скрывает оверлей с полной очисткой"""
         self._stop_animation = True
-
-        if self.root is not None:
-            try:
-                if self.root.winfo_exists():
-                    self.root.after(0, self._set_finished_ui)
-                else:
-                    print("[DEBUG] Окно уже закрыто, пропускаем")
-                    self.visible = False
-                    self.root = None
-                    self.progress = None
-                    self.status_label = None
-            except Exception as e:
-                print(f"[DEBUG] Ошибка при завершении: {e}")
-                self._close_window()
-        else:
-            print("[DEBUG] Нет активного окна для завершения")
-            self.visible = False
+        self.visible = False
+        self._close_window()
 
     def _create_window(self):
         """Создает окно оверлея как Toplevel от главного окна"""
@@ -237,25 +285,6 @@ class TranslationOverlay:
 
         except Exception as e:
             print(f"[DEBUG] _ensure_topmost ошибка: {e}")
-
-    def show(self, text="Перевод..."):
-        """Показывает оверлей с индикатором"""
-        try:
-            if self.visible:
-                print(f"[DEBUG] Оверлей уже виден")
-                return
-
-            self._stop_animation = False
-            self._status_text = text
-            self.visible = True
-
-            self._create_window()
-            print(f"[DEBUG] TranslationOverlay.show() - окно создано")
-
-        except Exception as e:
-            print(f"Ошибка при создании оверлея: {e}")
-            import traceback
-            traceback.print_exc()
 
     def _update_status_animation(self):
         """Обновляет текст статуса с точками для имитации активности"""
