@@ -17,7 +17,6 @@ class HotkeysWindow:
         self.settings = app.settings
         self.logger = logging.getLogger(__name__)
 
-        # Если окно уже существует, просто поднимаем его
         if hasattr(app, '_hotkeys_window') and app._hotkeys_window:
             try:
                 app._hotkeys_window.window.lift()
@@ -26,7 +25,6 @@ class HotkeysWindow:
             except:
                 app._hotkeys_window = None
 
-        # Создаем окно
         self.window = tk.Toplevel(app.root)
         self.window.title(self.get_string('hotkeys_title'))
         self.window.geometry("650x700")
@@ -37,40 +35,40 @@ class HotkeysWindow:
         self.window.grab_set()
         self.window.protocol("WM_DELETE_WINDOW", self.on_close)
 
-        # Сохраняем ссылку
         app._hotkeys_window = self
 
-        # ОТКЛЮЧАЕМ ВСЕ ХУКИ КЛАВИШ
-        try:
-            keyboard.unhook_all()
-            self.logger.info("[HOTKEYS_WINDOW] Все хуки клавиш отключены")
-        except Exception as e:
-            self.logger.warning(f"[HOTKEYS_WINDOW] Ошибка отключения хуков: {e}")
-
-        # Блокируем действия горячих клавиш
         if hasattr(self.app, 'set_actions_blocked'):
-            self.logger.info("[HOTKEYS_WINDOW] Блокируем действия горячих клавиш")
+            self.logger.info("[HOTKEYS_WINDOW] Блокируем выполнение действий горячих клавиш")
             self.app.set_actions_blocked(True)
 
-        # Создаем менеджер захвата горячих клавиш
         self.hotkey_capture_manager = HotkeyCaptureManager(self.window, self.settings, self.app)
 
-        # Словари для хранения кнопок и переменных
         self.hotkey_buttons = {}
         self.hotkey_vars = {}
         self.hotkey_capturing = {}
 
-        # Создаем виджеты
         self.create_widgets()
-
-        # Регистрируем кнопки в менеджере
         self.hotkey_capture_manager.set_hotkey_buttons(self.hotkey_buttons, self.hotkey_vars)
 
-        # Центрируем и показываем
         self.center_window()
         self.window.deiconify()
         self.window.lift()
         self.window.focus_force()
+
+    def on_close(self):
+        """Закрывает окно и очищает ссылку."""
+        try:
+            self.window.grab_release()
+            self.window.destroy()
+        except:
+            pass
+
+        if hasattr(self.app, 'set_actions_blocked'):
+            self.logger.info("[HOTKEYS_WINDOW] Разблокируем выполнение действий горячих клавиш")
+            self.app.set_actions_blocked(False)
+
+        if hasattr(self.app, '_hotkeys_window'):
+            self.app._hotkeys_window = None
 
     def create_widgets(self):
         """Создает все виджеты окна."""
@@ -367,27 +365,3 @@ class HotkeysWindow:
         for widget in self.window.winfo_children():
             widget.destroy()
         self.create_widgets()
-
-    def on_close(self):
-        """Закрывает окно и очищает ссылку."""
-        try:
-            self.window.grab_release()
-            self.window.destroy()
-        except:
-            pass
-
-        # ВОССТАНАВЛИВАЕМ ХУКИ КЛАВИШ
-        try:
-            if hasattr(self.app, 'hotkeys') and self.app.hotkeys:
-                self.app.hotkeys.setup()
-                self.logger.info("[HOTKEYS_WINDOW] Хуки клавиш восстановлены")
-        except Exception as e:
-            self.logger.warning(f"[HOTKEYS_WINDOW] Ошибка восстановления хуков: {e}")
-
-        # Разблокируем действия горячих клавиш
-        if hasattr(self.app, 'set_actions_blocked'):
-            self.logger.info("[HOTKEYS_WINDOW] Разблокируем действия горячих клавиш")
-            self.app.set_actions_blocked(False)
-
-        if hasattr(self.app, '_hotkeys_window'):
-            self.app._hotkeys_window = None

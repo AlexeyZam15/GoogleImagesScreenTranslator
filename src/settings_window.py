@@ -21,7 +21,6 @@ class SettingsWindow:
         self.settings = settings
         self.on_settings_changed = on_settings_changed
 
-        # Флаг для предотвращения множественных диалогов сброса
         self._is_reset_dialog_open = False
         self._reset_dialog = None
 
@@ -33,11 +32,10 @@ class SettingsWindow:
         self.window.configure(bg='#1e1e1e')
 
         self.window.grab_set()
+        self.window.protocol("WM_DELETE_WINDOW", self.on_close)
 
-        # Создаем менеджер захвата горячих клавиш
         self.hotkey_capture_manager = HotkeyCaptureManager(self.window, self.settings, self.app)
 
-        # Явно разрешаем максимизацию через системное меню
         try:
             import ctypes
             from ctypes import wintypes
@@ -71,18 +69,15 @@ class SettingsWindow:
             try:
                 self.window.attributes('-toolwindow', False)
                 self.window.attributes('-topmost', False)
-                self.window.protocol("WM_DELETE_WINDOW", self.window.destroy)
             except:
                 pass
 
-        # Скрываем окно до полной настройки
         self.window.withdraw()
 
         self.center_window()
         self.create_widgets()
         self.load_values()
 
-        # Показываем окно после всех настроек
         self.window.deiconify()
         self.window.lift()
         self.window.focus_force()
@@ -92,7 +87,6 @@ class SettingsWindow:
         import logging
         logger = logging.getLogger(__name__)
 
-        # Проверка: если окно уже открыто - поднимаем его
         if self._is_reset_dialog_open:
             if self._reset_dialog and self._reset_dialog.winfo_exists():
                 logger.info("[SETTINGS] Диалог сброса уже открыт, поднимаем наверх")
@@ -103,7 +97,6 @@ class SettingsWindow:
                 self._is_reset_dialog_open = False
                 self._reset_dialog = None
 
-        # Создаем кастомное диалоговое окно
         self._is_reset_dialog_open = True
 
         dialog = tk.Toplevel(self.window)
@@ -132,6 +125,8 @@ class SettingsWindow:
         def on_dialog_close():
             self._is_reset_dialog_open = False
             self._reset_dialog = None
+            if hasattr(self.app, 'set_actions_blocked'):
+                self.app.set_actions_blocked(False)
             dialog.destroy()
 
         dialog.protocol("WM_DELETE_WINDOW", on_dialog_close)
@@ -161,12 +156,16 @@ class SettingsWindow:
         def on_confirm():
             self._is_reset_dialog_open = False
             self._reset_dialog = None
+            if hasattr(self.app, 'set_actions_blocked'):
+                self.app.set_actions_blocked(False)
             dialog.destroy()
             self._do_reset()
 
         def on_cancel():
             self._is_reset_dialog_open = False
             self._reset_dialog = None
+            if hasattr(self.app, 'set_actions_blocked'):
+                self.app.set_actions_blocked(False)
             dialog.destroy()
 
         confirm_btn = tk.Button(
@@ -201,6 +200,112 @@ class SettingsWindow:
         confirm_btn.focus_set()
         dialog.bind('<Escape>', lambda e: on_cancel())
         dialog.bind('<Return>', lambda e: on_confirm())
+
+    def save_settings(self):
+        """Сохраняет настройки."""
+        logger = logging.getLogger(__name__)
+
+        for action in self.hotkey_capture_manager.hotkey_capturing:
+            if self.hotkey_capture_manager.hotkey_capturing[action]:
+                self.hotkey_capture_manager.hotkey_capturing[action] = False
+                self.hotkey_capture_manager.hotkey_buttons[action].config(
+                    bg='#2d2d2d',
+                    text=self.hotkey_capture_manager.hotkey_vars[action].get().upper() or "—"
+                )
+                self.window.unbind_all('<Key>')
+                self.window.unbind_all('<Escape>')
+                if hasattr(self, 'app') and hasattr(self.app, 'set_actions_blocked'):
+                    self.app.set_actions_blocked(False)
+                break
+
+        old_browser_path = self.settings.get_browser_path()
+        new_browser_path = self.browser_path_var.get().strip()
+
+        if new_browser_path and not os.path.exists(new_browser_path):
+            messagebox.showerror(
+                "Ошибка",
+                "Указанный файл не существует!\nПроверьте путь."
+            )
+            return
+
+        self.settings.set_browser_path(new_browser_path)
+        self.settings.set_show_translation_indicator(self.show_indicator_var.get())
+        self.settings.set_auto_hide_overlay(self.auto_hide_var.get())
+        self.settings.set_auto_windowed_fullscreen(self.auto_windowed_fullscreen_var.get())
+        self.settings.set_auto_replace_translated(self.auto_replace_translated_var.get())
+        self.settings.set_confidence_threshold(self.confidence_var.get())
+        self.settings.set_monitor_delay(self.monitor_delay_var.get())
+
+        edit_mode = self.edit_mode_var.get()
+        self.settings.set_edit_mode_enabled(edit_mode)
+
+        if hasattr(self, 'hotkey_capture_manager'):
+            for action, var in self.hotkey_capture_manager.hotkey_vars.items():
+                key = var.get().strip()
+                if key:
+                    self.settings.set_hotkey(action, key)
+
+        self.settings.save()
+
+        if hasattr(self, 'app') and hasattr(self.app, 'translation_monitor'):
+            monitor = self.app.translation_monitor
+            if monitor:
+                monitor.set_confidence(self.confidence_var.get())
+                monitor.set_delay(self.monitor_delay_var.get())
+
+                if self.auto_replace_translated_var.get() and monitor.templates:
+                    if not monitor.is_running():
+                        monitor.start()
+                else:
+                    if monitor.is_running():
+                        monitor.stop()
+
+        browser_path_changed = (old_browser_path != new_browser_path)
+        if browser_path_changed:
+            logger.info(f"[SETTINGS] Путь к браузеру изменен: {old_browser_path} -> {new_browser_path}")
+            if hasattr(self.app, 'ready') and self.app.ready:
+                logger.info("[SETTINGS] Браузер активен, выполняем перезапуск...")
+                if hasattr(self.app, 'update_status'):
+                    self.app.update_status("● " + self.app.get_string('starting_browser'), '#ff9800')
+                if hasattr(self.app, '_restart_translator'):
+                    self.app._restart_translator()
+            else:
+                logger.info("[SETTINGS] Браузер не активен, перезапуск не требуется")
+                if hasattr(self.app, 'update_status'):
+                    self.app.update_status("● Настройки сохранены", '#4CAF50')
+
+        if hasattr(self, 'app') and hasattr(self.app, '_edit_mode_enabled'):
+            self.app._edit_mode_enabled = edit_mode
+            if hasattr(self.app, 'btn_edit_mode'):
+                status_text = "ВКЛЮЧЕН" if edit_mode else "ВЫКЛЮЧЕН"
+                self.app.btn_edit_mode.config(
+                    text=f"✏️ Редактирование: {status_text} (F5)",
+                    bg='#4CAF50' if edit_mode else '#ff9800'
+                )
+            self.app.logger.info(f"Режим редактирования из настроек: {edit_mode}")
+
+        if hasattr(self, 'app') and hasattr(self.app, 'setup_hotkeys'):
+            self.app.setup_hotkeys()
+
+        if hasattr(self, 'app') and hasattr(self.app, 'update_hotkey_buttons'):
+            self.app.update_hotkey_buttons()
+
+        if self.on_settings_changed:
+            self.on_settings_changed()
+
+        if hasattr(self.app, 'set_actions_blocked'):
+            self.app.set_actions_blocked(False)
+
+        self.window.destroy()
+
+    def on_close(self):
+        """Закрывает окно настроек и разблокирует выполнение хоткеев"""
+        if hasattr(self.app, 'set_actions_blocked'):
+            self.app.set_actions_blocked(False)
+        try:
+            self.window.destroy()
+        except:
+            pass
 
     def _do_reset(self):
         """Реальная логика сброса настроек"""
@@ -681,101 +786,6 @@ class SettingsWindow:
         cancel_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(4, 0), ipady=1)
 
         self.window.bind('<Escape>', lambda e: self.hotkey_capture_manager._cancel_hotkey_capture())
-
-    def save_settings(self):
-        """Сохраняет настройки."""
-        logger = logging.getLogger(__name__)
-
-        # Проверяем, не идет ли захват клавиши
-        for action in self.hotkey_capture_manager.hotkey_capturing:
-            if self.hotkey_capture_manager.hotkey_capturing[action]:
-                self.hotkey_capture_manager.hotkey_capturing[action] = False
-                self.hotkey_capture_manager.hotkey_buttons[action].config(
-                    bg='#2d2d2d',
-                    text=self.hotkey_capture_manager.hotkey_vars[action].get().upper() or "—"
-                )
-                self.window.unbind_all('<Key>')
-                self.window.unbind_all('<Escape>')
-                if hasattr(self, 'app') and hasattr(self.app, 'set_actions_blocked'):
-                    self.app.set_actions_blocked(False)
-                break
-
-        old_browser_path = self.settings.get_browser_path()
-        new_browser_path = self.browser_path_var.get().strip()
-
-        if new_browser_path and not os.path.exists(new_browser_path):
-            messagebox.showerror(
-                "Ошибка",
-                "Указанный файл не существует!\nПроверьте путь."
-            )
-            return
-
-        self.settings.set_browser_path(new_browser_path)
-        self.settings.set_show_translation_indicator(self.show_indicator_var.get())
-        self.settings.set_auto_hide_overlay(self.auto_hide_var.get())
-        self.settings.set_auto_windowed_fullscreen(self.auto_windowed_fullscreen_var.get())
-        self.settings.set_auto_replace_translated(self.auto_replace_translated_var.get())
-        self.settings.set_confidence_threshold(self.confidence_var.get())
-        self.settings.set_monitor_delay(self.monitor_delay_var.get())
-
-        edit_mode = self.edit_mode_var.get()
-        self.settings.set_edit_mode_enabled(edit_mode)
-
-        if hasattr(self, 'hotkey_capture_manager'):
-            for action, var in self.hotkey_capture_manager.hotkey_vars.items():
-                key = var.get().strip()
-                if key:
-                    self.settings.set_hotkey(action, key)
-
-        self.settings.save()
-
-        if hasattr(self, 'app') and hasattr(self.app, 'translation_monitor'):
-            monitor = self.app.translation_monitor
-            if monitor:
-                monitor.set_confidence(self.confidence_var.get())
-                monitor.set_delay(self.monitor_delay_var.get())
-
-                if self.auto_replace_translated_var.get() and monitor.templates:
-                    if not monitor.is_running():
-                        monitor.start()
-                else:
-                    if monitor.is_running():
-                        monitor.stop()
-
-        browser_path_changed = (old_browser_path != new_browser_path)
-        if browser_path_changed:
-            logger.info(f"[SETTINGS] Путь к браузеру изменен: {old_browser_path} -> {new_browser_path}")
-            if hasattr(self.app, 'ready') and self.app.ready:
-                logger.info("[SETTINGS] Браузер активен, выполняем перезапуск...")
-                if hasattr(self.app, 'update_status'):
-                    self.app.update_status("● " + self.app.get_string('starting_browser'), '#ff9800')
-                if hasattr(self.app, '_restart_translator'):
-                    self.app._restart_translator()
-            else:
-                logger.info("[SETTINGS] Браузер не активен, перезапуск не требуется")
-                if hasattr(self.app, 'update_status'):
-                    self.app.update_status("● Настройки сохранены", '#4CAF50')
-
-        if hasattr(self, 'app') and hasattr(self.app, '_edit_mode_enabled'):
-            self.app._edit_mode_enabled = edit_mode
-            if hasattr(self.app, 'btn_edit_mode'):
-                status_text = "ВКЛЮЧЕН" if edit_mode else "ВЫКЛЮЧЕН"
-                self.app.btn_edit_mode.config(
-                    text=f"✏️ Редактирование: {status_text} (F5)",
-                    bg='#4CAF50' if edit_mode else '#ff9800'
-                )
-            self.app.logger.info(f"Режим редактирования из настроек: {edit_mode}")
-
-        if hasattr(self, 'app') and hasattr(self.app, 'setup_hotkeys'):
-            self.app.setup_hotkeys()
-
-        if hasattr(self, 'app') and hasattr(self.app, 'update_hotkey_buttons'):
-            self.app.update_hotkey_buttons()
-
-        if self.on_settings_changed:
-            self.on_settings_changed()
-
-        self.window.destroy()
 
     def find_chromium_browsers(self):
         """Находит установленные Яндекс Браузер и Google Chrome, показывает список для выбора."""

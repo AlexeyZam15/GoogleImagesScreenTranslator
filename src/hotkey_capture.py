@@ -94,7 +94,6 @@ class HotkeyCaptureManager:
         if not self.hotkey_capturing.get(action, False):
             return
 
-        # Проверяем, была ли назначена клавиша
         combo = self.hotkey_vars[action].get()
         logger.info(f"[HOTKEYS] _finish_hotkey_capture: combo='{combo}' для действия '{action}'")
 
@@ -107,8 +106,7 @@ class HotkeyCaptureManager:
         else:
             self.settings.set_hotkey(action, combo)
             display_text = combo.upper()
-            self.hotkey_buttons[action].config(text=display_text,
-                                               bg='#4CAF50')  # <-- ОСТАВЛЯЕМ ЗЕЛЕНЫЙ ДЛЯ ТЕКУЩЕЙ КНОПКИ
+            self.hotkey_buttons[action].config(text=display_text, bg='#4CAF50')
             logger.info(f"[HOTKEYS] Сохранена комбинация '{combo}' для действия '{action}', текст: {display_text}")
 
         self.hotkey_capturing[action] = False
@@ -118,12 +116,10 @@ class HotkeyCaptureManager:
             logger.info("[HOTKEYS] Разблокируем действия горячих клавиш")
             self.app.set_actions_blocked(False)
 
-        # Сбрасываем цвет кнопки через 300мс, но сохраняем текст
         def restore_button_color():
             try:
                 current_text = self.hotkey_buttons[action].cget('text')
                 logger.info(f"[HOTKEYS] restore_button_color: текущий текст='{current_text}'")
-                # Если текст пустой или "—", не меняем цвет на зеленый
                 if current_text and current_text != "—":
                     self.hotkey_buttons[action].config(bg='#2d2d2d')
                 else:
@@ -133,7 +129,6 @@ class HotkeyCaptureManager:
 
         self.parent.after(300, restore_button_color)
 
-        # Сбрасываем состояние
         self._first_key = None
         self._main_key = None
         self._capture_action = None
@@ -219,7 +214,6 @@ class HotkeyCaptureManager:
         logger.info("[HOTKEYS] ===== НАЧАЛО ЗАХВАТА КЛАВИШИ =====")
         logger.info(f"[HOTKEYS] Действие: {action}")
 
-        # Принудительно сбрасываем все захваты
         for a in list(self.hotkey_capturing.keys()):
             if self.hotkey_capturing.get(a, False):
                 logger.info(f"[HOTKEYS] Принудительно отменяем захват для: {a}")
@@ -229,17 +223,14 @@ class HotkeyCaptureManager:
                 except:
                     pass
 
-        # Отвязываем старые обработчики
         try:
             self.parent.unbind_all('<Key>')
             self.parent.unbind_all('<KeyRelease>')
         except:
             pass
 
-        # Устанавливаем флаг захвата
         self.hotkey_capturing[action] = True
 
-        # Меняем цвет кнопки
         btn = self.hotkey_buttons.get(action)
         if btn:
             btn.config(bg='#FF6B00', text="Нажмите клавишу...")
@@ -250,24 +241,20 @@ class HotkeyCaptureManager:
             self.hotkey_capturing[action] = False
             return
 
-        # Блокируем действия горячих клавиш
         if self.app and hasattr(self.app, 'set_actions_blocked'):
             logger.info("[HOTKEYS] Блокируем действия горячих клавиш")
             self.app.set_actions_blocked(True)
 
-        # Устанавливаем фокус
         self.parent.focus_force()
         self.parent.lift()
         self.parent.attributes('-topmost', True)
         self.parent.update_idletasks()
 
-        # Сбрасываем состояние захвата
         self._first_key = None
         self._main_key = None
         self._first_key_time = 0
         self._capture_action = action
 
-        # Привязываем обработчики
         self.parent.bind_all('<Key>', self._on_hotkey_key_down)
         self.parent.bind_all('<KeyRelease>', self._on_hotkey_key_up)
         logger.info(f"[HOTKEYS] Обработчики клавиш привязаны для действия: {action}")

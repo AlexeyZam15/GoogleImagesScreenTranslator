@@ -27,6 +27,40 @@ class AreaSelector:
         self.min_selection_size = self.config.get("min_selection_size", 10)
         self.logger = logging.getLogger(__name__)
 
+    def _close_capture(self, success):
+        """Закрывает окно захвата и восстанавливает состояние"""
+        self.logger.info(f"[DEBUG] AreaSelector._close_capture(success={success}) - начало")
+
+        try:
+            if self.parent and hasattr(self.parent, 'root'):
+                self.parent.root.deiconify()
+                self.parent.root.lift()
+                self.parent.root.focus_force()
+                self.logger.info("[DEBUG] Главное окно восстановлено")
+        except Exception as ex:
+            self.logger.error(f"[DEBUG] Ошибка восстановления главного окна: {ex}")
+
+        try:
+            if self.parent:
+                self.parent._capture_mode = False
+                self.parent._area_selector = None
+                self.parent.set_actions_blocked(False)
+                self.logger.info("[DEBUG] Флаги захвата сброшены, хоткеи разблокированы")
+        except Exception as ex:
+            self.logger.error(f"[DEBUG] Ошибка сброса флагов захвата: {ex}")
+
+        try:
+            if self.root:
+                self.root.grab_release()
+                self.root.destroy()
+                self.logger.info("[DEBUG] Окно захвата закрыто")
+        except Exception as ex:
+            self.logger.error(f"[DEBUG] Ошибка закрытия окна захвата: {ex}")
+
+        if success and self.callback and hasattr(self, '_selected_rect'):
+            self.logger.info(f"[DEBUG] Вызов callback с rect={self._selected_rect}")
+            self.callback(self._selected_rect)
+
     def on_escape(self, e):
         """Обработчик ESC"""
         self.logger.info("[DEBUG] AreaSelector.on_escape() вызван")
@@ -83,43 +117,6 @@ class AreaSelector:
         )
 
         self.logger.info("[DEBUG] AreaSelector.start_capture() - окно создано")
-
-    def _close_capture(self, success):
-        """Закрывает окно захвата и восстанавливает состояние"""
-        self.logger.info(f"[DEBUG] AreaSelector._close_capture(success={success}) - начало")
-
-        # Восстанавливаем главное окно
-        try:
-            if self.parent and hasattr(self.parent, 'root'):
-                self.parent.root.deiconify()
-                self.parent.root.lift()
-                self.parent.root.focus_force()
-                self.logger.info("[DEBUG] Главное окно восстановлено")
-        except Exception as ex:
-            self.logger.error(f"[DEBUG] Ошибка восстановления главного окна: {ex}")
-
-        # Выключаем режим захвата в родителе
-        try:
-            if self.parent:
-                self.parent._capture_mode = False
-                self.parent._area_selector = None
-                self.logger.info("[DEBUG] Флаги захвата сброшены")
-        except Exception as ex:
-            self.logger.error(f"[DEBUG] Ошибка сброса флагов захвата: {ex}")
-
-        # Закрываем окно захвата
-        try:
-            if self.root:
-                self.root.grab_release()
-                self.root.destroy()
-                self.logger.info("[DEBUG] Окно захвата закрыто")
-        except Exception as ex:
-            self.logger.error(f"[DEBUG] Ошибка закрытия окна захвата: {ex}")
-
-        # Если успешный захват - вызываем колбэк с координатами
-        if success and self.callback and hasattr(self, '_selected_rect'):
-            self.logger.info(f"[DEBUG] Вызов callback с rect={self._selected_rect}")
-            self.callback(self._selected_rect)
 
     def on_mouse_down(self, event):
         self.logger.debug(f"[DEBUG] on_mouse_down: ({event.x}, {event.y})")
