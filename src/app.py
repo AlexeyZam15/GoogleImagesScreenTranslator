@@ -151,6 +151,65 @@ class ScreenshotTranslatorApp:
         # Запуск инициализации
         self.ui.root.after(100, self._init_translator_step)
 
+    def _on_window_switch(self, new_hwnd):
+        """Обработчик переключения окон"""
+        if new_hwnd == self._current_active_hwnd:
+            return
+
+        old_hwnd = self._current_active_hwnd
+        self._current_active_hwnd = new_hwnd
+
+        self.logger.info(f"[WINDOW] Переключение окон: old_hwnd={old_hwnd}, new_hwnd={new_hwnd}")
+
+        # При любом переключении окон - скрываем все принудительные оверлеи
+        # НО пропускаем те, которые находятся в процессе перетаскивания
+        if self.overlay_manager:
+            # Проверяем глобальный флаг перетаскивания
+            is_any_dragging = self.overlay_manager.is_dragging()
+
+            for hwnd, overlays in list(self.overlay_manager.overlays_by_hwnd.items()):
+                for overlay in overlays:
+                    # Проверяем флаг перетаскивания на конкретном оверлее
+                    is_dragging = getattr(overlay, '_is_dragging', False)
+
+                    if is_any_dragging or is_dragging:
+                        self.logger.info(f"[WINDOW] Пропускаем скрытие оверлея для HWND={hwnd} (идет перетаскивание)")
+                        continue
+
+                    if getattr(overlay, '_pinned_by_user', False) or getattr(overlay, '_forced_by_user', False):
+                        self.logger.info(
+                            f"[WINDOW] Скрываем принудительный оверлей для HWND={hwnd} при переключении окон")
+                        overlay._forced_by_user = False
+                        overlay._pinned_by_user = False
+                        overlay.auto_hide_enabled = True
+                        if overlay.visible:
+                            overlay.hide()
+                        self.logger.info(f"[WINDOW] Принудительный оверлей скрыт и сброшен")
+
+        # Скрываем оверлеи старого окна (только не принудительные)
+        if old_hwnd and self.overlay_manager:
+            overlays = self.overlay_manager.get_overlays_for_window(old_hwnd)
+            for overlay in overlays:
+                try:
+                    if getattr(overlay, '_pinned_by_user', False) or getattr(overlay, '_forced_by_user', False):
+                        continue
+                    if overlay.visible:
+                        overlay.hide()
+                        self.logger.info(f"[WINDOW] Скрыт оверлей для окна {old_hwnd}")
+                except Exception as e:
+                    self.logger.warning(f"[WINDOW] Ошибка скрытия оверлея: {e}")
+
+        # Показываем оверлеи нового окна
+        if new_hwnd and self.overlay_manager:
+            overlays = self.overlay_manager.get_overlays_for_window(new_hwnd)
+            for overlay in overlays:
+                try:
+                    if overlay._is_visible_by_user and not overlay.visible:
+                        overlay.show()
+                        self.logger.info(f"[WINDOW] Показан оверлей для окна {new_hwnd}")
+                except Exception as e:
+                    self.logger.warning(f"[WINDOW] Ошибка показа оверлея: {e}")
+
     def _cancel_translation(self):
         """Отменяет текущий перевод"""
         if not self._translation_in_progress:
@@ -363,56 +422,6 @@ class ScreenshotTranslatorApp:
                 self.logger.info("[HOTKEYS] Горячие клавиши разблокированы")
         else:
             self.logger.warning("[HOTKEYS] HotkeyManager не инициализирован")
-
-    def _on_window_switch(self, new_hwnd):
-        """Обработчик переключения окон"""
-        if new_hwnd == self._current_active_hwnd:
-            return
-
-        old_hwnd = self._current_active_hwnd
-        self._current_active_hwnd = new_hwnd
-
-        # Проверяем, активно ли главное окно приложения
-        is_app_window_active = False
-        try:
-            if self.ui.root and self.ui.root.winfo_exists():
-                app_hwnd = int(self.ui.root.winfo_id())
-                if new_hwnd == app_hwnd:
-                    is_app_window_active = True
-        except Exception as e:
-            self.logger.warning(f"[WINDOW] Ошибка проверки главного окна: {e}")
-
-        # Скрываем оверлеи старого окна
-        if old_hwnd and self.overlay_manager:
-            overlays = self.overlay_manager.get_overlays_for_window(old_hwnd)
-            for overlay in overlays:
-                try:
-                    if overlay._pinned_by_user:
-                        self.logger.info(f"[WINDOW] Закрепленный оверлей для {old_hwnd} не скрыт")
-                        continue
-                    if overlay.visible:
-                        overlay.hide()
-                        self.logger.info(f"[WINDOW] Скрыт оверлей для окна {old_hwnd}")
-                except Exception as e:
-                    self.logger.warning(f"[WINDOW] Ошибка скрытия оверлея: {e}")
-
-        # Показываем оверлеи нового окна
-        if new_hwnd and self.overlay_manager:
-            overlays = self.overlay_manager.get_overlays_for_window(new_hwnd)
-            for overlay in overlays:
-                try:
-                    if overlay._pinned_by_user and not is_app_window_active:
-                        self.logger.info(f"[WINDOW] Закрепленный оверлей скрыт (главное окно не активно)")
-                        if overlay.visible:
-                            overlay.visible = False
-                            overlay.root.withdraw()
-                        continue
-
-                    if overlay._is_visible_by_user and not overlay.visible:
-                        overlay.show()
-                        self.logger.info(f"[WINDOW] Показан оверлей для окна {new_hwnd}")
-                except Exception as e:
-                    self.logger.warning(f"[WINDOW] Ошибка показа оверлея: {e}")
 
     def setup_hotkeys(self):
         """Настройка глобальных горячих клавиш"""

@@ -11,6 +11,33 @@ class WindowListManager:
         self.window_listbox = window_listbox
         self._window_hwnd_map = window_hwnd_map
 
+    def show_overlays_for_selected(self):
+        """Показывает оверлеи для выбранного окна (принудительно)"""
+        hwnd = self.get_selected_hwnd()
+        if not hwnd:
+            return
+        overlays = self.app.overlay_manager.get_overlays_for_window(hwnd) if self.app.overlay_manager else []
+        if not overlays:
+            return
+
+        for overlay in overlays:
+            try:
+                overlay._forced_by_user = True
+                overlay._pinned_by_user = True
+                overlay.auto_hide_enabled = False
+                overlay._stop_visibility_monitor()
+                overlay._is_visible_by_user = True
+                overlay._hidden_by_user = False
+                overlay._hidden_by_mouse = False
+                if not overlay.visible:
+                    overlay.show()
+                else:
+                    overlay.root.lift()
+                    overlay.root.attributes('-topmost', True)
+                self.logger.info(f"[WINDOW_LIST] Принудительно показан оверлей для окна {hwnd}")
+            except Exception as e:
+                self.logger.warning(f"[WINDOW_LIST] Ошибка показа оверлея: {e}")
+
     def refresh(self):
         """Обновляет список окон с оверлеями"""
         try:
@@ -132,30 +159,6 @@ class WindowListManager:
         if not selection:
             return None
         return self._window_hwnd_map.get(selection[0])
-
-    def show_overlays_for_selected(self):
-        """Показывает оверлеи для выбранного окна"""
-        hwnd = self.get_selected_hwnd()
-        if not hwnd:
-            return
-        overlays = self.app.overlay_manager.get_overlays_for_window(hwnd) if self.app.overlay_manager else []
-        if not overlays:
-            return
-
-        for overlay in overlays:
-            try:
-                overlay.auto_hide_enabled = False
-                overlay._stop_visibility_monitor()
-                overlay._is_visible_by_user = True
-                overlay._hidden_by_user = False
-                overlay._hidden_by_mouse = False
-                if not overlay.visible:
-                    overlay.show()
-                else:
-                    overlay.root.lift()
-                    overlay.root.attributes('-topmost', True)
-            except Exception as e:
-                self.logger.warning(f"[WINDOW_LIST] Ошибка показа оверлея: {e}")
 
     def hide_overlays_for_selected(self):
         """Скрывает оверлеи для выбранного окна"""

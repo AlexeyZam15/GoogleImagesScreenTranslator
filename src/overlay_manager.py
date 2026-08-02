@@ -33,6 +33,54 @@ class OverlayManager:
         self._create_context_menu()
         self.logger.info("OverlayManager инициализирован")
 
+    def _remove_overlay_under_cursor(self):
+        """Удаляет оверлей, для которого было показано контекстное меню."""
+        self.logger.info("[DEBUG] Удаление оверлея через контекстное меню")
+
+        try:
+            if self._context_menu:
+                try:
+                    self._context_menu.unpost()
+                    self._context_menu.update_idletasks()
+                    self.logger.info("[DEBUG] Контекстное меню закрыто (unpost)")
+                except Exception as e:
+                    self.logger.warning(f"[DEBUG] Ошибка при unpost: {e}")
+
+                try:
+                    if hasattr(self._context_menu, 'tk') and self._context_menu.tk:
+                        self._context_menu.tk.call('destroy', self._context_menu)
+                        self.logger.info("[DEBUG] Контекстное меню уничтожено через tk.call")
+                except Exception as e:
+                    self.logger.warning(f"[DEBUG] Ошибка при уничтожении меню: {e}")
+
+                self._context_menu = None
+                self._create_context_menu()
+                self.logger.info("[DEBUG] Контекстное меню пересоздано")
+        except Exception as e:
+            self.logger.warning(f"[DEBUG] Не удалось закрыть меню: {e}")
+
+        overlay = None
+        if hasattr(self, '_context_menu_overlay') and self._context_menu_overlay:
+            overlay = self._context_menu_overlay
+            self._context_menu_overlay = None
+            self.logger.info("[DEBUG] Ссылка на оверлей сброшена")
+
+        if overlay is None:
+            self.logger.warning("[DEBUG] Нет оверлея для удаления")
+            return
+
+        try:
+            if overlay in self.overlays:
+                # Сбрасываем флаги принудительного и закрепленного показа
+                overlay._forced_by_user = False
+                overlay._pinned_by_user = False
+                self.remove_overlay(overlay)
+                self.logger.info("[DEBUG] Оверлей удален")
+            else:
+                self.logger.warning("[DEBUG] Оверлей уже удален из списка")
+        except Exception as e:
+            self.logger.error(f"[DEBUG] Ошибка при удалении оверлея: {e}")
+
     def show_context_menu(self, overlay, x, y):
         """Показывает контекстное меню для указанного оверлея."""
         if overlay is None:
@@ -87,53 +135,6 @@ class OverlayManager:
         except Exception as e:
             self.logger.warning(f"[DEBUG] Не удалось показать контекстное меню: {e}")
             self._context_menu_overlay = None
-
-    def _remove_overlay_under_cursor(self):
-        """Удаляет оверлей, для которого было показано контекстное меню."""
-        self.logger.info("[DEBUG] Удаление оверлея через контекстное меню")
-
-        try:
-            if self._context_menu:
-                try:
-                    self._context_menu.unpost()
-                    self._context_menu.update_idletasks()
-                    self.logger.info("[DEBUG] Контекстное меню закрыто (unpost)")
-                except Exception as e:
-                    self.logger.warning(f"[DEBUG] Ошибка при unpost: {e}")
-
-                try:
-                    if hasattr(self._context_menu, 'tk') and self._context_menu.tk:
-                        self._context_menu.tk.call('destroy', self._context_menu)
-                        self.logger.info("[DEBUG] Контекстное меню уничтожено через tk.call")
-                except Exception as e:
-                    self.logger.warning(f"[DEBUG] Ошибка при уничтожении меню: {e}")
-
-                self._context_menu = None
-                self._create_context_menu()
-                self.logger.info("[DEBUG] Контекстное меню пересоздано")
-        except Exception as e:
-            self.logger.warning(f"[DEBUG] Не удалось закрыть меню: {e}")
-
-        overlay = None
-        if hasattr(self, '_context_menu_overlay') and self._context_menu_overlay:
-            overlay = self._context_menu_overlay
-            self._context_menu_overlay = None
-            self.logger.info("[DEBUG] Ссылка на оверлей сброшена")
-
-        if overlay is None:
-            self.logger.warning("[DEBUG] Нет оверлея для удаления")
-            return
-
-        try:
-            if overlay in self.overlays:
-                # Снимаем флаг закрепления при удалении
-                overlay._pinned_by_user = False
-                self.remove_overlay(overlay)
-                self.logger.info("[DEBUG] Оверлей удален")
-            else:
-                self.logger.warning("[DEBUG] Оверлей уже удален из списка")
-        except Exception as e:
-            self.logger.error(f"[DEBUG] Ошибка при удалении оверлея: {e}")
 
     def _unpin_overlay_under_cursor(self):
         """Открепляет оверлей, для которого было показано контекстное меню."""

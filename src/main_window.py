@@ -64,12 +64,36 @@ class MainWindow:
         self._setup_icon()
         self.create_menu()
         self.create_widgets()
+        self._create_context_menu()
         self.update_ui_language()
         self._center_window()
 
         self.root.deiconify()
         self.root.lift()
         self.root.focus_force()
+
+    def _show_context_menu(self, event):
+        """Показывает контекстное меню"""
+        try:
+            if self.context_menu is None:
+                self._create_context_menu()
+
+            index = self.window_listbox.nearest(event.y)
+            if index >= 0:
+                self.window_listbox.selection_clear(0, END)
+                self.window_listbox.selection_set(index)
+                # Обновляем текст кнопки в зависимости от состояния
+                hwnd = self._window_hwnd_map.get(index)
+                if hwnd and self.app.overlay_manager:
+                    overlays = self.app.overlay_manager.get_overlays_for_window(hwnd)
+                    any_visible = any(o.visible for o in overlays)
+                    if any_visible:
+                        self.context_menu.entryconfig(0, label="🙈 Скрыть", command=self.app._context_hide_overlays)
+                    else:
+                        self.context_menu.entryconfig(0, label="👁️ Показать", command=self.app._context_show_overlays)
+            self.context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.context_menu.grab_release()
 
     def _on_listbox_double_click(self, event):
         """Обработчик двойного клика по списку окон - переключает видимость оверлеев"""

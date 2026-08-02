@@ -97,6 +97,97 @@ class OverlayWindow:
 
         self.logger.info("OverlayWindow инициализирован")
 
+    def _start_drag(self, event):
+        """Начинает перетаскивание окна."""
+        self.logger.info(f"[DEBUG] _start_drag вызван! event=({event.x}, {event.y})")
+
+        if self._is_window_screenshot:
+            self.logger.info("[DEBUG] _start_drag: F2-оверлей, перетаскивание разрешено")
+        else:
+            if self._pinned_by_user:
+                self.logger.info("[DEBUG] _start_drag: закрепленный оверлей, перетаскивание разрешено всегда")
+            else:
+                is_edit_mode = False
+                if hasattr(self, '_edit_mode_enabled'):
+                    is_edit_mode = self._edit_mode_enabled
+                elif hasattr(self, '_overlay_manager') and self._overlay_manager:
+                    try:
+                        parent = self._overlay_manager.parent
+                        if parent and hasattr(parent, 'is_edit_mode_enabled'):
+                            is_edit_mode = parent.is_edit_mode_enabled()
+                        elif parent and hasattr(parent, '_edit_mode_enabled'):
+                            is_edit_mode = parent._edit_mode_enabled
+                    except Exception as e:
+                        self.logger.warning(f"[DEBUG] _start_drag: ошибка проверки режима: {e}")
+
+                if not is_edit_mode:
+                    self.logger.info("[DEBUG] _start_drag: режим редактирования ВЫКЛЮЧЕН - перетаскивание запрещено")
+                    return "break"
+
+        if not self._is_visible_by_user or not self.visible:
+            self.logger.info("[DEBUG] _start_drag - оверлей скрыт, перетаскивание запрещено")
+            return "break"
+
+        if self._drag_stop_timer:
+            try:
+                self.root.after_cancel(self._drag_stop_timer)
+            except:
+                pass
+            self._drag_stop_timer = None
+
+        self._hidden_by_mouse = False
+        self._mouse_over = False
+
+        self._is_dragging = True
+        self._drag_data["x"] = event.x
+        self._drag_data["y"] = event.y
+        self.logger.info("[DEBUG] Начало перетаскивания, флаг _is_dragging=True")
+
+        if hasattr(self, '_overlay_manager') and self._overlay_manager:
+            self._overlay_manager.set_dragging(True)
+
+    def hide(self, by_user: bool = True):
+        """Скрывает оверлей.
+
+        Args:
+            by_user: True - если пользователь явно скрыл оверлей (через F1)
+                    False - если оверлей скрывается автоматически (монитор автозамены)
+        """
+        self.logger.info(
+            f"[DEBUG][hide] НАЧАЛО: visible={self.visible}, _is_visible_by_user={self._is_visible_by_user}, by_user={by_user}")
+
+        # Если оверлей принудительно показан пользователем через список - игнорируем скрытие
+        if getattr(self, '_forced_by_user', False):
+            self.logger.info("[DEBUG][hide] Принудительный оверлей - игнорируем скрытие")
+            return
+
+        # Если оверлей закреплен, игнорируем скрытие, кроме случаев, когда его убирает сам пользователь
+        if self._pinned_by_user:
+            if by_user:
+                self.logger.info("[DEBUG][hide] Пользователь скрывает закрепленный оверлей. Сбрасываем флаг.")
+                self._pinned_by_user = False
+            else:
+                self.logger.info("[DEBUG][hide] Попытка автоскрытия закрепленного оверлея - игнорируем.")
+                return
+
+        if by_user:
+            self._hidden_by_user = True
+            self._is_visible_by_user = False
+        else:
+            self._is_visible_by_user = False
+
+        self._stop_visibility_monitor()
+        self.visible = False
+        self._disable_esc_hook()
+
+        self._hide_close_button()
+
+        try:
+            self.root.withdraw()
+            self.logger.info("[DEBUG][hide] оверлей скрыт (withdraw выполнен)")
+        except Exception as e:
+            self.logger.error(f"[DEBUG][hide] ОШИБКА: {e}")
+
     def _show_close_button_forced(self):
         """Показывает кнопку закрытия НАД оверлеем (для закрепленных оверлеев)."""
         if not self.root or not self.root.winfo_exists():
@@ -590,58 +681,6 @@ class OverlayWindow:
         if self.root and self.root.winfo_exists():
             self.root.after(500, self._reset_right_click_flag)
 
-    def _start_drag(self, event):
-        """Начинает перетаскивание окна."""
-        self.logger.info(f"[DEBUG] _start_drag вызван! event=({event.x}, {event.y})")
-
-        # ДЛЯ F2 (СКРИНШОТ ОКНА) ВСЕГДА РАЗРЕШАЕМ ПЕРЕТАСКИВАНИЕ
-        if self._is_window_screenshot:
-            self.logger.info("[DEBUG] _start_drag: F2-оверлей, перетаскивание разрешено")
-        else:
-            # ДЛЯ ЗАКРЕПЛЕННЫХ ОВЕРЛЕЕВ ВСЕГДА РАЗРЕШАЕМ ПЕРЕТАСКИВАНИЕ
-            if self._pinned_by_user:
-                self.logger.info("[DEBUG] _start_drag: закрепленный оверлей, перетаскивание разрешено всегда")
-            else:
-                # Для обычных F3-оверлеев проверяем режим редактирования
-                is_edit_mode = False
-                if hasattr(self, '_edit_mode_enabled'):
-                    is_edit_mode = self._edit_mode_enabled
-                elif hasattr(self, '_overlay_manager') and self._overlay_manager:
-                    try:
-                        parent = self._overlay_manager.parent
-                        if parent and hasattr(parent, 'is_edit_mode_enabled'):
-                            is_edit_mode = parent.is_edit_mode_enabled()
-                        elif parent and hasattr(parent, '_edit_mode_enabled'):
-                            is_edit_mode = parent._edit_mode_enabled
-                    except Exception as e:
-                        self.logger.warning(f"[DEBUG] _start_drag: ошибка проверки режима: {e}")
-
-                if not is_edit_mode:
-                    self.logger.info("[DEBUG] _start_drag: режим редактирования ВЫКЛЮЧЕН - перетаскивание запрещено")
-                    return "break"
-
-        if not self._is_visible_by_user or not self.visible:
-            self.logger.info("[DEBUG] _start_drag - оверлей скрыт, перетаскивание запрещено")
-            return "break"
-
-        if self._drag_stop_timer:
-            try:
-                self.root.after_cancel(self._drag_stop_timer)
-            except:
-                pass
-            self._drag_stop_timer = None
-
-        self._hidden_by_mouse = False
-        self._mouse_over = False
-
-        self._is_dragging = True
-        self._drag_data["x"] = event.x
-        self._drag_data["y"] = event.y
-        self.logger.info("[DEBUG] Начало перетаскивания, флаг _is_dragging=True")
-
-        if hasattr(self, '_overlay_manager') and self._overlay_manager:
-            self._overlay_manager.set_dragging(True)
-
     def _remove_overlay(self):
         """Удаляет этот оверлей через OverlayManager."""
         self.logger.info("[DEBUG] _remove_overlay вызван")
@@ -864,49 +903,6 @@ class OverlayWindow:
 
         finally:
             self._updating_visibility = False
-
-    def hide(self, by_user: bool = True):
-        """Скрывает оверлей.
-
-        Args:
-            by_user: True - если пользователь явно скрыл оверлей (через F1)
-                    False - если оверлей скрывается автоматически (монитор автозамены)
-        """
-        self.logger.info(
-            f"[DEBUG][hide] НАЧАЛО: visible={self.visible}, _is_visible_by_user={self._is_visible_by_user}, by_user={by_user}")
-
-        # НОВАЯ ЛОГИКА: Если оверлей закреплен, игнорируем скрытие, кроме случаев, когда его убирает сам пользователь
-        # Чтобы не сломать ручное удаление, проверяем, не является ли это удалением через ESC или контекстное меню.
-        if self._pinned_by_user:
-            # Разрешаем скрытие только если это явное действие пользователя (F1 или ручное скрытие)
-            # или если вызывается из _remove_overlay.
-            # В остальных случаях (автоскрытие) - игнорируем.
-            if by_user:
-                self.logger.info("[DEBUG][hide] Пользователь скрывает закрепленный оверлей. Сбрасываем флаг.")
-                self._pinned_by_user = False
-            else:
-                self.logger.info("[DEBUG][hide] Попытка автоскрытия закрепленного оверлея - игнорируем.")
-                return
-
-        # Устанавливаем флаг скрытия пользователем ТОЛЬКО если пользователь явно скрыл оверлей
-        if by_user:
-            self._hidden_by_user = True
-            self._is_visible_by_user = False
-        else:
-            # Автоматическое скрытие - не меняем _hidden_by_user
-            self._is_visible_by_user = False
-
-        self._stop_visibility_monitor()
-        self.visible = False
-        self._disable_esc_hook()
-
-        self._hide_close_button()
-
-        try:
-            self.root.withdraw()
-            self.logger.info("[DEBUG][hide] оверлей скрыт (withdraw выполнен)")
-        except Exception as e:
-            self.logger.error(f"[DEBUG][hide] ОШИБКА: {e}")
 
     def show_for_window(self, image_path: Path, window_rect: tuple, target_hwnd: int = None,
                         is_fullscreen: bool = None, show_immediately: bool = True,
