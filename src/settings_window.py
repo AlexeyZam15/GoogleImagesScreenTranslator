@@ -489,7 +489,7 @@ class SettingsWindow:
 
         find_btn = tk.Button(
             path_entry_frame,
-            text="🔍 Найти",
+            text=self.get_string('settings_browser_find_button'),
             command=self.find_chromium_browsers,
             bg='#2196F3',
             fg='white',

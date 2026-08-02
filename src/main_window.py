@@ -259,14 +259,8 @@ class MainWindow:
             else:
                 self.settings_btn.config(bg='#2d2d2d', fg='#444444')
 
-        def on_settings_click(e):
-            if self.settings_btn['state'] != DISABLED:
-                self.settings_btn.config(text="🔧")
-                self.root.after(150, lambda: self.settings_btn.config(text="⚙️"))
-
         self.settings_btn.bind('<Enter>', on_settings_enter)
         self.settings_btn.bind('<Leave>', on_settings_leave)
-        self.settings_btn.bind('<Button-1>', on_settings_click)
 
         separator = Frame(main, bg='#2d2d2d', height=1)
         separator.pack(fill=tk.X, padx=20)
