@@ -1,6 +1,9 @@
 """
+
 Модуль для автоматического мониторинга экрана и замены областей на их переводы.
+
 Адаптирован из AutoArtReplacer ScreenMonitor.
+
 """
 
 import logging
@@ -18,6 +21,7 @@ import win32con
 import ctypes
 from PIL import Image, ImageGrab
 import ctypes
+
 
 class TranslationMonitor:
     """Мониторит экран, ищет сохраненные области (шаблоны) и показывает их переводы."""
@@ -176,7 +180,7 @@ class TranslationMonitor:
                     self.logger.warning(f"[DEBUG] Ошибка при обновлении существующего оверлея: {e}")
                     template_data['overlay'] = None
 
-            # === СОЗДАЁМ НОВЫЙ ОВЕРЛЕЙ ЧЕРЕЗ ОБЩИЙ МЕТОД ===
+            # === СОЗДАЁМ НОВЫЙ ОВЕРЛЕЙ ===
             self.logger.info(f"[DEBUG] Создаем новый оверлей для шаблона #{pair_index}")
 
             if self.overlay_manager:
@@ -359,7 +363,7 @@ class TranslationMonitor:
                 return
 
             pair_index = template_data['pair_index']
-            template_id = template_data.get('hash')  # <-- БЕРЁМ ХЕШ ИЗ ШАБЛОНА
+            template_id = template_data.get('hash')
             overlay = template_data.get('overlay')
             target_hwnd = template_data.get('target_hwnd')
 
@@ -388,7 +392,6 @@ class TranslationMonitor:
             if self.parent and hasattr(self.parent, 'root'):
                 root = self.parent.root
                 if root and root.winfo_exists():
-                    # Отложенное выполнение в главном потоке, передаём template_id (хеш)
                     root.after(0, lambda: self._update_overlay_gui(template_data, x, y, w, h, translated_path,
                                                                    template_id))
                 else:
@@ -483,7 +486,6 @@ class TranslationMonitor:
         self.monitor_thread.start()
         self.logger.info(f"Мониторинг запущен для {len(self.templates)} шаблонов")
 
-        # === УБИРАЕМ ПРИНУДИТЕЛЬНЫЙ ПОКАЗ ОВЕРЛЕЕВ ПРИ ЗАПУСКЕ ===
         # Оверлеи будут показаны только когда шаблоны будут найдены при сканировании
         # Это устраняет "мигание" при восстановлении
 

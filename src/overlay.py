@@ -95,15 +95,20 @@ class OverlayWindow:
         self.logger.info("OverlayWindow инициализирован")
 
     def show_for_window(self, image_path: Path, window_rect: tuple, target_hwnd: int = None,
-                        is_fullscreen: bool = None, show_immediately: bool = True):
+                        is_fullscreen: bool = None, show_immediately: bool = True,
+                        is_startup: bool = False):
         """
         Показывает оверлей для указанного окна.
+
+        Args:
+            is_startup: True если оверлей восстанавливается при запуске программы
         """
         self.logger.info(f"[DEBUG] === show_for_window НАЧАЛО ===")
         self.logger.info(f"[DEBUG] image_path={image_path}")
         self.logger.info(f"[DEBUG] window_rect={window_rect}")
         self.logger.info(f"[DEBUG] target_hwnd={target_hwnd}")
         self.logger.info(f"[DEBUG] show_immediately={show_immediately}")
+        self.logger.info(f"[DEBUG] is_startup={is_startup}")
 
         if target_hwnd is not None:
             self._target_hwnd = target_hwnd
@@ -124,30 +129,49 @@ class OverlayWindow:
         self.logger.info(f"[DEBUG] _last_image_path={self._last_image_path}")
         self.logger.info(f"[DEBUG] _last_window_rect={self._last_window_rect}")
 
-        # === ВСЕГДА ЗАГРУЖАЕМ ИЗОБРАЖЕНИЕ, НО НЕ ПОКАЗЫВАЕМ ЕСЛИ show_immediately=False ===
-        # Загружаем изображение в фоне
-        self.logger.info("[DEBUG] Загружаем изображение в фоне")
-        self._load_and_show_image(image_path, window_rect, show_immediately=show_immediately)
+        # Сохраняем флаг запуска
+        self._created_at_startup = is_startup
+
+        # Если это запуск программы - загружаем изображение, но НЕ ПОКАЗЫВАЕМ
+        if is_startup:
+            self.logger.info("[DEBUG] Режим запуска: загружаем изображение, но НЕ показываем оверлей")
+            self._load_and_show_image(image_path, window_rect, show_immediately=False, is_startup=is_startup)
+            # Явно скрываем окно
+            try:
+                self.root.withdraw()
+                self.visible = False
+                self.logger.info("[DEBUG] Оверлей скрыт при запуске")
+            except Exception as e:
+                self.logger.warning(f"[DEBUG] Не удалось скрыть оверлей: {e}")
+            # Запускаем монитор видимости, который покажет оверлей когда окно станет активным
+            if self.auto_hide_enabled:
+                self.logger.info("[DEBUG] Запуск монитора для отслеживания активации окна")
+                self.root.after(500, self._start_visibility_monitor)
+            return
+
+        # Обычный режим - показываем сразу
+        self.logger.info("[DEBUG] Обычный режим: показываем оверлей")
+        self._load_and_show_image(image_path, window_rect, show_immediately=show_immediately, is_startup=is_startup)
 
         if show_immediately:
             self.logger.info("[DEBUG] show_immediately=True, показываем оверлей")
             self._stop_visibility_monitor()
-            # Уже показано в _load_and_show_image
         else:
             self.logger.info("[DEBUG] show_immediately=False, оверлей сохранен но НЕ показан")
-            # Окно уже скрыто через withdraw в _load_and_show_image
             if self.auto_hide_enabled:
                 self.logger.info("[DEBUG] Запуск монитора для отложенного показа")
                 self.root.after(1000, self._start_visibility_monitor_delayed)
 
         self.logger.info("[DEBUG] === show_for_window ЗАВЕРШЕН ===")
 
-    def _load_and_show_image(self, image_path: Path, window_rect: tuple, show_immediately: bool = True):
+    def _load_and_show_image(self, image_path: Path, window_rect: tuple, show_immediately: bool = True,
+                             is_startup: bool = False):
         """Загружает изображение и показывает его в оверлее."""
         self.logger.info(f"[DEBUG] === _load_and_show_image НАЧАЛО ===")
         self.logger.info(f"[DEBUG] image_path={image_path}")
         self.logger.info(f"[DEBUG] window_rect={window_rect}")
         self.logger.info(f"[DEBUG] show_immediately={show_immediately}")
+        self.logger.info(f"[DEBUG] is_startup={is_startup}")
 
         try:
             x1, y1, x2, y2 = window_rect
@@ -227,6 +251,17 @@ class OverlayWindow:
             self._show_time = time.time()
             self._monitor_stable_time = time.time() + 2.0
             self._image_loaded = True
+
+            # Если это запуск программы - НЕ ПОКАЗЫВАЕМ окно
+            if is_startup:
+                self.logger.info("[DEBUG] Режим запуска: окно остается скрытым")
+                try:
+                    self.root.withdraw()
+                    self.visible = False
+                    self.logger.info("[DEBUG] Окно скрыто")
+                except Exception as e:
+                    self.logger.warning(f"[DEBUG] Не удалось скрыть окно: {e}")
+                return
 
             if show_immediately:
                 self.logger.info("[DEBUG] Показываем окно (асинхронно)")
@@ -314,6 +349,41 @@ class OverlayWindow:
             traceback.print_exc()
             self._image_loaded = False
             self.logger.info("[DEBUG] === _load_and_show_image ЗАВЕРШЕН С ОШИБКОЙ ===")
+
+    def _start_visibility_monitor_delayed(self):
+        """Запускает монитор видимости с задержкой"""
+        self.logger.info(
+            f"[DEBUG][_start_visibility_monitor_delayed] НАЧАЛО: visible={self.visible}, _is_visible_by_user={self._is_visible_by_user}, _monitor_initialized={self._monitor_initialized}")
+
+        # УБИРАЕМ ПРОВЕРКУ not self.visible — монитор должен работать даже когда оверлей скрыт
+        if not self._is_visible_by_user:
+            self.logger.info(
+                "[DEBUG][_start_visibility_monitor_delayed] оверлей не должен быть виден, отменяем запуск монитора")
+            return
+
+        # === ДЛЯ АВТОЗАМЕНЫ: НЕ ЗАПУСКАЕМ ВНУТРЕННИЙ МОНИТОР, ТАК КАК ОН УПРАВЛЯЕТСЯ TranslationMonitor ===
+        if self._is_auto_replace:
+            self.logger.info(
+                "[DEBUG][_start_visibility_monitor_delayed] автозамена, монитор управляется TranslationMonitor, пропускаем")
+            return
+
+        self.logger.info("[DEBUG][_start_visibility_monitor_delayed] запускаем монитор")
+
+        # Увеличиваем задержку при запуске (при восстановлении из состояния)
+        # Проверяем, был ли оверлей создан при запуске программы
+        is_startup = hasattr(self, '_created_at_startup') and self._created_at_startup
+
+        if is_startup:
+            # При запуске программы даем больше времени на переключение окна
+            self.logger.info("[DEBUG][_start_visibility_monitor_delayed] запуск при старте программы, задержка 3с")
+            if self.root and self.root.winfo_exists():
+                self.root.after(3000, self._start_visibility_monitor)
+        else:
+            # Обычная задержка
+            self._start_visibility_monitor()
+
+    def get_target_hwnd(self) -> int:
+        return self._target_hwnd
 
     def show(self):
         """Показывает оверлей с принудительным обновлением позиции."""
@@ -822,26 +892,6 @@ class OverlayWindow:
 
         finally:
             self._showing_in_progress = False
-
-    def _start_visibility_monitor_delayed(self):
-        """Запускает монитор видимости с задержкой"""
-        self.logger.info(
-            f"[DEBUG][_start_visibility_monitor_delayed] НАЧАЛО: visible={self.visible}, _is_visible_by_user={self._is_visible_by_user}, _monitor_initialized={self._monitor_initialized}")
-
-        # УБИРАЕМ ПРОВЕРКУ not self.visible — монитор должен работать даже когда оверлей скрыт
-        if not self._is_visible_by_user:
-            self.logger.info(
-                "[DEBUG][_start_visibility_monitor_delayed] оверлей не должен быть виден, отменяем запуск монитора")
-            return
-
-        # === ДЛЯ АВТОЗАМЕНЫ: НЕ ЗАПУСКАЕМ ВНУТРЕННИЙ МОНИТОР, ТАК КАК ОН УПРАВЛЯЕТСЯ TranslationMonitor ===
-        if self._is_auto_replace:
-            self.logger.info(
-                "[DEBUG][_start_visibility_monitor_delayed] автозамена, монитор управляется TranslationMonitor, пропускаем")
-            return
-
-        self.logger.info("[DEBUG][_start_visibility_monitor_delayed] запускаем монитор")
-        self._start_visibility_monitor()
 
     def _check_and_update_visibility(self):
         """
@@ -1968,9 +2018,6 @@ class OverlayWindow:
                 self.logger.info("Фокус восстановлен на полноэкранное приложение")
             except Exception as e:
                 self.logger.warning(f"Не удалось восстановить фокус на игру: {e}")
-
-    def get_target_hwnd(self) -> int:
-        return self._target_hwnd
 
     def _on_drag_stop_timeout(self):
         """Таймаут после остановки перетаскивания"""

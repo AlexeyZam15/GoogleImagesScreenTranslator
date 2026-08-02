@@ -1,7 +1,3 @@
-"""
-Управление списком окон с оверлеями
-"""
-
 import logging
 import win32gui
 
@@ -28,11 +24,59 @@ class WindowListManager:
                 return
 
             windows_with_overlays = []
+
+            self.logger.info(
+                f"[WINDOW_LIST] overlays_by_hwnd: {list(self.app.overlay_manager.overlays_by_hwnd.keys())}")
+            self.logger.info(f"[WINDOW_LIST] Всего оверлеев: {len(self.app.overlay_manager.overlays)}")
+
             for hwnd, overlays in self.app.overlay_manager.overlays_by_hwnd.items():
-                if overlays and win32gui.IsWindow(hwnd):
-                    title = win32gui.GetWindowText(hwnd)
-                    if title:
-                        windows_with_overlays.append((hwnd, title, len(overlays)))
+                self.logger.info(f"[WINDOW_LIST] Проверка HWND={hwnd}, оверлеев={len(overlays)}")
+
+                # Проверяем, что HWND валидный
+                if not win32gui.IsWindow(hwnd):
+                    self.logger.info(f"[WINDOW_LIST] HWND={hwnd} не является валидным окном, пропускаем")
+                    continue
+
+                # Проверяем наличие оверлеев (не только видимых!)
+                if overlays:
+                    # Проверяем хотя бы один оверлей на существование окна
+                    overlay_exists = False
+                    for overlay in overlays:
+                        try:
+                            if overlay.root and overlay.root.winfo_exists():
+                                overlay_exists = True
+                                break
+                        except Exception as e:
+                            self.logger.warning(f"[WINDOW_LIST] Ошибка проверки существования оверлея: {e}")
+
+                    if overlay_exists:
+                        # Пытаемся получить сохраненное имя приложения из состояния
+                        app_name = self._get_app_name_from_state(hwnd)
+
+                        if app_name:
+                            title = app_name
+                            self.logger.info(f"[WINDOW_LIST] Для HWND={hwnd} использовано имя из состояния: {title}")
+                        else:
+                            # Если нет в состоянии - пробуем заголовок окна
+                            title = win32gui.GetWindowText(hwnd)
+
+                            # Если заголовок пустой, используем имя процесса
+                            if not title or not title.strip():
+                                from src.window_utils import get_process_name_by_hwnd
+                                title = get_process_name_by_hwnd(hwnd)
+                                self.logger.info(f"[WINDOW_LIST] Для HWND={hwnd} использовано имя процесса: {title}")
+
+                        # Считаем сколько оверлеев всего (не только видимых)
+                        total_overlays = len(overlays)
+                        # Считаем сколько видимых для отображения в скобках
+                        visible_overlays = [o for o in overlays if o.visible]
+                        visible_count = len(visible_overlays)
+
+                        # Отображаем общее количество оверлеев и сколько из них видимых
+                        windows_with_overlays.append((hwnd, title, total_overlays, visible_count))
+
+                    else:
+                        self.logger.info(f"[WINDOW_LIST] Оверлеи для HWND={hwnd} не имеют существующих окон")
 
             if not windows_with_overlays:
                 self.logger.info("[WINDOW_LIST] Нет окон с оверлеями")
@@ -40,17 +84,47 @@ class WindowListManager:
 
             windows_with_overlays.sort(key=lambda x: x[1].lower())
 
-            for idx, (hwnd, title, count) in enumerate(windows_with_overlays):
-                display = f"{title[:37] + '...' if len(title) > 40 else title} ({count})"
+            for idx, (hwnd, title, total_count, visible_count) in enumerate(windows_with_overlays):
+                # Отображаем общее количество оверлеев и сколько видимых
+                if visible_count > 0 and visible_count < total_count:
+                    display = f"{title[:33] + '...' if len(title) > 36 else title} ({visible_count}/{total_count})"
+                else:
+                    display = f"{title[:37] + '...' if len(title) > 40 else title} ({total_count})"
                 self.window_listbox.insert('end', display)
                 self._window_hwnd_map[idx] = hwnd
 
-            self.logger.info(f"[WINDOW_LIST] Найдено {len(windows_with_overlays)} окон")
+            self.logger.info(f"[WINDOW_LIST] Найдено {len(windows_with_overlays)} окон с оверлеями")
 
         except Exception as e:
             self.logger.error(f"[WINDOW_LIST] Ошибка: {e}")
+            import traceback
+            traceback.print_exc()
             self.window_listbox.delete(0, 'end')
             self._window_hwnd_map.clear()
+
+    def _get_app_name_from_state(self, hwnd: int) -> str:
+        """Получает сохраненное имя приложения из состояния для указанного HWND."""
+        try:
+            # Получаем состояние оверлеев из файла
+            state_file = self.app.overlay_manager._get_overlay_state_file()
+            if not state_file.exists():
+                return None
+
+            import json
+            with open(state_file, 'r', encoding='utf-8') as f:
+                states = json.load(f)
+
+            # Ищем в состоянии оверлей с таким target_hwnd
+            for key, state in states.items():
+                if state.get('target_hwnd') == hwnd:
+                    app_name = state.get('app_name')
+                    if app_name:
+                        return app_name
+
+            return None
+        except Exception as e:
+            self.logger.warning(f"[WINDOW_LIST] Ошибка получения имени из состояния: {e}")
+            return None
 
     def get_selected_hwnd(self):
         """Возвращает HWND выбранного окна"""

@@ -1,5 +1,7 @@
 """
+
 Управление горячими клавишами
+
 """
 
 import logging
@@ -39,14 +41,17 @@ class HotkeyManager:
 
             def make_single_handler(action):
                 def handler(e):
-                    # БЛОКИРУЕМ ПЕРЕДАЧУ КЛАВИШИ В ДРУГИЕ ПРИЛОЖЕНИЯ
-                    # Возвращаем True чтобы заблокировать дальнейшую обработку
+                    # Проверяем, заблокированы ли действия
+                    if self._actions_blocked:
+                        self.logger.debug(f"[HOTKEYS] Действие {action} заблокировано")
+                        return True
+
                     current_time = time.time() * 1000
                     if current_time - self._key_last_time.get(action, 0) >= self._debounce_ms:
                         self._key_last_time[action] = current_time
                         self.logger.info(f"[HOTKEYS] ДЕЙСТВИЕ: {action}")
                         self._execute_action(action)
-                    return True  # <-- ВАЖНО: блокируем передачу клавиши
+                    return True
 
                 return handler
 
@@ -62,6 +67,9 @@ class HotkeyManager:
                 self._pressed_keys = set()
 
                 def on_combination_key(event):
+                    if self._actions_blocked:
+                        return True
+
                     if event.event_type == 'down':
                         self._pressed_keys.add(event.name)
                     elif event.event_type == 'up':
@@ -74,10 +82,21 @@ class HotkeyManager:
                             hotkey_parts = [p.lower().strip() for p in hotkey.split('+') if p.strip()]
                             if not hotkey_parts:
                                 continue
-                            all_pressed = all(
-                                any(part in p or p in part for p in [h.lower() for h in current_pressed]) for part in
-                                hotkey_parts)
-                            if all_pressed and len(current_pressed) == len(hotkey_parts):
+
+                            # Проверяем, что все части комбинации нажаты
+                            all_pressed = True
+                            pressed_lower = [p.lower() for p in current_pressed]
+                            for part in hotkey_parts:
+                                found = False
+                                for pressed in pressed_lower:
+                                    if part in pressed or pressed in part:
+                                        found = True
+                                        break
+                                if not found:
+                                    all_pressed = False
+                                    break
+
+                            if all_pressed:
                                 current_time = time.time() * 1000
                                 combo_key = f"{action}_{hotkey}"
                                 if current_time - self._key_last_time.get(combo_key, 0) >= self._debounce_ms:
@@ -122,18 +141,10 @@ class HotkeyManager:
         """Блокирует/разблокирует действия горячих клавиш"""
         self._actions_blocked = blocked
         if blocked:
-            try:
-                keyboard.unhook_all()
-                self._hotkey_hook_active = False
-                self.logger.info("[HOTKEYS] Хуки отключены")
-            except Exception as e:
-                self.logger.error(f"[HOTKEYS] Ошибка отключения хуков: {e}")
+            self.logger.info("[HOTKEYS] Действия горячих клавиш заблокированы")
         else:
-            try:
-                self.setup()
-                self.logger.info("[HOTKEYS] Хуки восстановлены")
-            except Exception as e:
-                self.logger.error(f"[HOTKEYS] Ошибка восстановления хуков: {e}")
+            self.logger.info("[HOTKEYS] Действия горячих клавиш разблокированы")
+        # Не пересоздаем хуки, просто меняем флаг
 
     def cleanup(self):
         """Очищает хуки"""

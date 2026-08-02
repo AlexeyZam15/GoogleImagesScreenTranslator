@@ -1,5 +1,7 @@
 """
+
 Главный модуль приложения - объединяет все компоненты
+
 """
 
 # Стандартные библиотеки
@@ -149,6 +151,44 @@ class ScreenshotTranslatorApp:
         # Запуск инициализации
         self.ui.root.after(100, self._init_translator_step)
 
+    def setup_hotkeys(self):
+        """Настройка глобальных горячих клавиш"""
+        self.logger.info("[HOTKEYS] Настройка горячих клавиш (упрощенная версия)")
+        try:
+            import keyboard
+            keyboard.unhook_all()
+            self.logger.info("[HOTKEYS] Старые хуки отключены")
+
+            hotkeys = self.settings.get_all_hotkeys()
+            self.logger.info(f"[HOTKEYS] Загружены настройки: {hotkeys}")
+
+            # Обработчики для одиночных клавиш
+            def make_handler(action):
+                def handler(e):
+                    self.logger.info(f"[HOTKEYS] Нажата клавиша: {action}")
+                    if action == 'toggle_overlay':
+                        self.toggle_overlay()
+                    elif action == 'screenshot':
+                        self.process()
+                    elif action == 'area':
+                        self.capture_area()
+                    elif action == 'clear_all':
+                        self.clear_all_overlays()
+                    elif action == 'edit_mode':
+                        self.toggle_edit_mode()
+                    elif action == 'auto_replace':
+                        self.toggle_auto_replace_mode()
+                    return True
+
+                return handler
+
+            for action, hotkey in hotkeys.items():
+                keyboard.on_press_key(hotkey, make_handler(action), suppress=True)
+                self.logger.info(f"[HOTKEYS] Зарегистрирована клавиша {hotkey} -> {action}")
+
+        except Exception as e:
+            self.logger.error(f"[HOTKEYS] Ошибка регистрации горячих клавиш: {e}")
+
     def _on_overlay_removed(self, target_hwnd):
         """Вызывается при удалении оверлея"""
         self.logger.info(f"[OVERLAY] Удалён оверлей для HWND={target_hwnd}")
@@ -169,42 +209,27 @@ class ScreenshotTranslatorApp:
         old_hwnd = self._current_active_hwnd
         self._current_active_hwnd = new_hwnd
 
-        # Сохраняем состояние старого окна
+        # Скрываем оверлеи старого окна
         if old_hwnd and self.overlay_manager:
             overlays = self.overlay_manager.get_overlays_for_window(old_hwnd)
-            if overlays:
-                self._window_states[old_hwnd] = {
-                    'overlays': overlays,
-                    'was_visible': any(o._is_visible_by_user for o in overlays)
-                }
-                for o in overlays:
-                    o._is_visible_by_user = False
-                    o._hidden_by_user = True
-                    if o.visible:
-                        o.visible = False
-                        o.root.withdraw()
+            for overlay in overlays:
+                try:
+                    if overlay.visible:
+                        overlay.hide()
+                        self.logger.info(f"[WINDOW] Скрыт оверлей для окна {old_hwnd}")
+                except Exception as e:
+                    self.logger.warning(f"[WINDOW] Ошибка скрытия оверлея: {e}")
 
-        # Восстанавливаем новое окно
-        if new_hwnd in self._window_states:
-            state = self._window_states[new_hwnd]
-            if state.get('was_visible', False) and self.overlay_manager:
-                for o in self.overlay_manager.get_overlays_for_window(new_hwnd):
-                    # Для автозамены показываем только если шаблон найден
-                    if o._is_auto_replace:
-                        # Проверяем, найден ли шаблон в мониторе
-                        template_found = False
-                        if self.translation_monitor:
-                            for template in self.translation_monitor.templates:
-                                if template.get('overlay') is o:
-                                    template_found = template.get('found', False)
-                                    break
-                        if not template_found:
-                            self.logger.debug(f"[WINDOW_SWITCH] Оверлей автозамены не показан (шаблон не найден)")
-                            continue
-                    o._is_visible_by_user = True
-                    o._hidden_by_user = False
-                    if not o.visible:
-                        o.show()
+        # Показываем оверлеи нового окна
+        if new_hwnd and self.overlay_manager:
+            overlays = self.overlay_manager.get_overlays_for_window(new_hwnd)
+            for overlay in overlays:
+                try:
+                    if overlay._is_visible_by_user and not overlay.visible:
+                        overlay.show()
+                        self.logger.info(f"[WINDOW] Показан оверлей для окна {new_hwnd}")
+                except Exception as e:
+                    self.logger.warning(f"[WINDOW] Ошибка показа оверлея: {e}")
 
     def _on_init_complete(self, result, error):
         """Завершение инициализации"""
@@ -236,7 +261,8 @@ class ScreenshotTranslatorApp:
             restored_count = self.overlay_manager.restore_overlays_from_state(self)
             if restored_count > 0:
                 self.logger.info(f"[STATE] Восстановлено {restored_count} оверлеев")
-                self.window_list.refresh()
+                # Даем время на полную инициализацию оверлеев
+                self.ui.root.after(500, self.window_list.refresh)
             else:
                 self.logger.info("[STATE] Нет сохранённых оверлеев для восстановления")
 
@@ -251,47 +277,17 @@ class ScreenshotTranslatorApp:
 
     def toggle_overlay(self):
         """Переключает видимость всех оверлеев (F1)"""
+        self.logger.info("[DEBUG] toggle_overlay вызван")
         if not self.overlay_manager:
+            self.logger.warning("toggle_overlay: менеджер оверлеев не инициализирован")
             return
 
-        any_visible = any(o.visible for o in self.overlay_manager.overlays)
-        self.logger.info(
-            f"[TOGGLE] Переключение оверлеев: currently any_visible={any_visible}, count={len(self.overlay_manager.overlays)}")
+        if not self.overlay_manager.overlays:
+            self.logger.info("toggle_overlay: нет активных оверлеев")
+            return
 
-        for overlay in self.overlay_manager.overlays:
-            try:
-                if any_visible:
-                    # Скрываем оверлей
-                    overlay._is_visible_by_user = False
-                    overlay._hidden_by_user = True
-                    overlay.visible = False
-                    try:
-                        overlay.root.withdraw()
-                    except:
-                        pass
-                    self.logger.info("[TOGGLE] Оверлей скрыт")
-                else:
-                    # Показываем оверлей
-                    overlay._is_visible_by_user = True
-                    overlay._hidden_by_user = False
-                    overlay._hidden_by_mouse = False
-                    # Для автозамены используем show() без перезагрузки
-                    if overlay._is_auto_replace:
-                        try:
-                            if overlay.root and overlay.root.winfo_exists():
-                                overlay.root.deiconify()
-                                overlay.root.lift()
-                                overlay.visible = True
-                                self.logger.info("[TOGGLE] Оверлей автозамены показан")
-                        except Exception as e:
-                            self.logger.warning(f"[TOGGLE] Ошибка показа оверлея автозамены: {e}")
-                            overlay.show()
-                    else:
-                        overlay.show()
-            except Exception as e:
-                self.logger.warning(f"[TOGGLE] Ошибка переключения оверлея: {e}")
-
-        self.logger.info(f"[TOGGLE] Переключение завершено, visible={not any_visible}")
+        new_state = self.overlay_manager.toggle_all_overlays()
+        self.logger.info(f"F1: все оверлеи {'показаны' if new_state else 'скрыты'}")
 
     def _on_translate_finished(self, result, error):
         """Завершение перевода"""
@@ -382,37 +378,6 @@ class ScreenshotTranslatorApp:
                     self._indicator_shown = False
                     self.logger.info("[DEBUG] Индикатор перевода скрыт (очередь пуста)")
 
-    def exit_area_mode():
-        self.logger.info("[DEBUG] exit_area_mode() - выход из режима захвата")
-        self._capture_mode = False
-        self.hotkeys.set_actions_blocked(False)
-
-        # === ПОСЛЕ ВЫХОДА ИЗ F3 ПОКАЗЫВАЕМ ИНДИКАТОР, ЕСЛИ ЕСТЬ ЗАДАЧИ В ОЧЕРЕДИ ===
-        if self.translation_queue and not self._indicator_shown:
-            self._show_translation_overlay()
-            self._indicator_shown = True
-            self.logger.info("[DEBUG] Индикатор перевода показан после выхода из F3")
-            # Запускаем обработку очереди
-            self._process_next_in_queue()
-
-        if target_hwnd_for_exit:
-            try:
-                win32gui.ShowWindow(target_hwnd_for_exit, 9)
-                win32gui.SetForegroundWindow(target_hwnd_for_exit)
-            except:
-                self.ui.root.deiconify()
-                self.ui.root.lift()
-                self.ui.root.focus_force()
-        else:
-            self.ui.root.deiconify()
-            self.ui.root.lift()
-            self.ui.root.focus_force()
-
-        try:
-            selection_window.destroy()
-        except:
-            pass
-
     def _process_next_in_queue(self):
         """Обрабатывает следующую задачу в очереди"""
         if self.is_processing_queue or not self.translation_queue:
@@ -420,9 +385,6 @@ class ScreenshotTranslatorApp:
             return
 
         self.is_processing_queue = True
-
-        # === ИНДИКАТОР ПОКАЗЫВАЕТСЯ ТОЛЬКО В exit_area_mode() ===
-        # Здесь индикатор НЕ ПОКАЗЫВАЕМ
 
         task = self.translation_queue.pop(0)
 
@@ -557,7 +519,7 @@ class ScreenshotTranslatorApp:
                 self.ui.root.focus_force()
 
             try:
-                selection_window.grab_release()  # <-- ДОБАВЛЕНО: освобождаем захват
+                selection_window.grab_release()
                 selection_window.destroy()
             except:
                 pass
@@ -573,7 +535,7 @@ class ScreenshotTranslatorApp:
         # Принудительно захватываем фокус
         canvas.focus_set()
         selection_window.focus_force()
-        selection_window.grab_set()  # <-- ДОБАВЛЕНО: захват всех событий
+        selection_window.grab_set()
         selection_window.lift()
 
         self.hotkeys.set_actions_blocked(True)
@@ -850,8 +812,6 @@ class ScreenshotTranslatorApp:
             if self.translation_overlay:
                 self.logger.info("[DEBUG] Скрываем индикатор перевода")
                 self.translation_overlay.finish()
-                # НЕ УНИЧТОЖАЕМ, а просто скрываем для повторного использования
-                # self.translation_overlay = None  # <-- УБРАНО! Оставляем для переиспользования
                 self.logger.info("[DEBUG] Индикатор перевода скрыт")
         except Exception as e:
             self.logger.warning(f"Не удалось скрыть индикатор: {e}")
@@ -995,3 +955,10 @@ class ScreenshotTranslatorApp:
         if self.overlay_manager:
             self.overlay_manager.close_all()
         self.ui.root.destroy()
+
+    def set_actions_blocked(self, blocked):
+        """Блокирует/разблокирует действия горячих клавиш"""
+        if hasattr(self, 'hotkeys'):
+            self.hotkeys.set_actions_blocked(blocked)
+        else:
+            self.logger.warning("[HOTKEYS] HotkeyManager не инициализирован")
