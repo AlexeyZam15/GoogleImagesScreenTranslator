@@ -25,67 +25,83 @@ class HotkeyCaptureManager:
         self._first_key_time = 0
         self._capture_action = None
 
-    def _swap_hotkeys_if_conflict(self, action: str, new_combo: str) -> bool:
-        """
-        Проверяет, занята ли комбинация new_combo другим действием.
-        Если занята, меняет местами комбинации.
+    def _disable_global_hook(self):
+        """Временно отключает глобальный хук клавиш для захвата."""
+        try:
+            import keyboard
+            # Отключаем все хуки, чтобы они не мешали захвату
+            keyboard.unhook_all()
+            self.logger.info("[HOTKEYS] Глобальный хук временно отключен для захвата клавиши")
+        except Exception as e:
+            self.logger.warning(f"[HOTKEYS] Не удалось отключить глобальный хук: {e}")
 
-        Возвращает True, если конфликт был разрешён (или не было конфликта),
-        False, если new_combo пустая или невалидная.
-        """
-        logger = self.logger
-
-        if not new_combo:
-            logger.warning("[HOTKEYS] Попытка обмена с пустой комбинацией")
-            return False
-
-        # Проверяем, не занята ли комбинация другим действием
-        conflicting_action = None
-        old_combo = self.hotkey_vars[action].get()
-
-        for a in self.hotkey_vars:
-            if a != action and self.hotkey_vars[a].get() == new_combo:
-                conflicting_action = a
-                break
-
-        logger.info(f"[HOTKEYS] conflicting_action = '{conflicting_action}'")
-
-        if conflicting_action is not None:
-            logger.info(f"[HOTKEYS] Комбинация '{new_combo}' уже занята действием '{conflicting_action}'")
-            logger.info(f"[HOTKEYS] Меняем местами: {action}={old_combo} <-> {conflicting_action}={new_combo}")
-
-            # 1. Устанавливаем новую комбинацию для action
-            self.hotkey_vars[action].set(new_combo)
-            self.hotkey_buttons[action].config(text=new_combo.upper(), bg='#4CAF50')
-            self.settings.set_hotkey(action, new_combo)
-            logger.info(f"[HOTKEYS] Для '{action}' сохранена клавиша '{new_combo}'")
-
-            # 2. Отдаем старую комбинацию конфликтующему действию
-            if old_combo:
-                self.hotkey_vars[conflicting_action].set(old_combo)
-                self.hotkey_buttons[conflicting_action].config(text=old_combo.upper(),
-                                                               bg='#2d2d2d')  # <-- ИСПРАВЛЕНО: стандартный цвет
-                self.settings.set_hotkey(conflicting_action, old_combo)
-                logger.info(f"[HOTKEYS] Для '{conflicting_action}' сохранена клавиша '{old_combo}'")
+    def _enable_global_hook(self):
+        """Восстанавливает глобальный хук клавиш после захвата."""
+        try:
+            if self.app and hasattr(self.app, 'setup_hotkeys'):
+                # Переустанавливаем хоткеи, что восстановит глобальный хук
+                self.app.setup_hotkeys()
+                self.logger.info("[HOTKEYS] Глобальный хук восстановлен после захвата")
             else:
-                self.hotkey_vars[conflicting_action].set("")
-                self.hotkey_buttons[conflicting_action].config(text="—", bg='#2d2d2d')
-                self.settings.set_hotkey(conflicting_action, "")
-                logger.info(f"[HOTKEYS] Для '{conflicting_action}' клавиша сброшена")
+                self.logger.warning(
+                    "[HOTKEYS] Не удалось восстановить глобальный хук: app или setup_hotkeys отсутствует")
+        except Exception as e:
+            self.logger.error(f"[HOTKEYS] Ошибка при восстановлении глобального хука: {e}")
 
-            # Сохраняем настройки
-            self.settings.save()
-            logger.info(f"[HOTKEYS] ✅ Клавиши поменяны местами и сохранены")
-            return True
+    def start_hotkey_capture(self, action):
+        """Начинает захват клавиши для переназначения."""
+        logger = self.logger
+        logger.info("[HOTKEYS] ===== НАЧАЛО ЗАХВАТА КЛАВИШИ =====")
+        logger.info(f"[HOTKEYS] Действие: {action}")
 
+        for a in list(self.hotkey_capturing.keys()):
+            if self.hotkey_capturing.get(a, False):
+                logger.info(f"[HOTKEYS] Принудительно отменяем захват для: {a}")
+                self.hotkey_capturing[a] = False
+                try:
+                    self.hotkey_buttons[a].config(bg='#2d2d2d', text=self.hotkey_vars[a].get().upper() or "—")
+                except:
+                    pass
+
+        try:
+            self.parent.unbind_all('<Key>')
+            self.parent.unbind_all('<KeyRelease>')
+        except:
+            pass
+
+        self.hotkey_capturing[action] = True
+
+        btn = self.hotkey_buttons.get(action)
+        if btn:
+            btn.config(bg='#FF6B00', text="Нажмите клавишу...")
+            btn.update_idletasks()
+            logger.info(f"[HOTKEYS] Кнопка для {action} переключена в режим захвата")
         else:
-            # Конфликта нет, просто назначаем новую комбинацию
-            self.hotkey_vars[action].set(new_combo)
-            self.hotkey_buttons[action].config(text=new_combo.upper(), bg='#4CAF50')
-            self.settings.set_hotkey(action, new_combo)
-            self.settings.save()
-            logger.info(f"[HOTKEYS] ✅ Назначена комбинация '{new_combo}' для действия '{action}'")
-            return True
+            logger.error(f"[HOTKEYS] Кнопка для {action} не найдена!")
+            self.hotkey_capturing[action] = False
+            return
+
+        if self.app and hasattr(self.app, 'set_actions_blocked'):
+            logger.info("[HOTKEYS] Блокируем действия горячих клавиш")
+            self.app.set_actions_blocked(True)
+
+        # ОТКЛЮЧАЕМ ГЛОБАЛЬНЫЙ ХУК, ЧТОБЫ ОН НЕ МЕШАЛ ЗАХВАТУ
+        self._disable_global_hook()
+
+        self.parent.focus_force()
+        self.parent.lift()
+        self.parent.attributes('-topmost', True)
+        self.parent.update_idletasks()
+
+        self._first_key = None
+        self._main_key = None
+        self._first_key_time = 0
+        self._capture_action = action
+
+        self.parent.bind_all('<Key>', self._on_hotkey_key_down)
+        self.parent.bind_all('<KeyRelease>', self._on_hotkey_key_up)
+        logger.info(f"[HOTKEYS] Обработчики клавиш привязаны для действия: {action}")
+        logger.info("[HOTKEYS] ===== ЗАХВАТ КЛАВИШИ НАЧАТ ======")
 
     def _finish_hotkey_capture(self, action):
         """Завершает захват горячей клавиши."""
@@ -111,10 +127,14 @@ class HotkeyCaptureManager:
 
         self.hotkey_capturing[action] = False
         self.parent.unbind_all('<Key>')
+        self.parent.unbind_all('<KeyRelease>')
 
         if self.app and hasattr(self.app, 'set_actions_blocked'):
             logger.info("[HOTKEYS] Разблокируем действия горячих клавиш")
             self.app.set_actions_blocked(False)
+
+        # ВОССТАНАВЛИВАЕМ ГЛОБАЛЬНЫЙ ХУК ПОСЛЕ ЗАХВАТА
+        self._enable_global_hook()
 
         def restore_button_color():
             try:
@@ -134,6 +154,98 @@ class HotkeyCaptureManager:
         self._capture_action = None
 
         logger.info(f"[HOTKEYS] ✅ Захват завершен для действия: {action}")
+
+    def _cancel_hotkey_capture(self):
+        """Отменяет текущий захват горячей клавиши."""
+        logger = self.logger
+        logger.info("[HOTKEYS] ===== ОТМЕНА ЗАХВАТА КЛАВИШИ =====")
+
+        for action in self.hotkey_capturing:
+            if self.hotkey_capturing[action]:
+                logger.info(f"[HOTKEYS] Отменяем захват для действия: {action}")
+                self.hotkey_capturing[action] = False
+
+                old_key = self.settings.get_hotkey(action)
+                self.hotkey_vars[action].set(old_key)
+                self.hotkey_buttons[action].config(text=old_key.upper() if old_key else "—", bg='#2d2d2d')
+
+                self.parent.unbind_all('<Key>')
+                self.parent.unbind_all('<KeyRelease>')
+
+                if self.app and hasattr(self.app, 'set_actions_blocked'):
+                    logger.info("[HOTKEYS] Разблокируем действия горячих клавиш")
+                    self.app.set_actions_blocked(False)
+
+                # ВОССТАНАВЛИВАЕМ ГЛОБАЛЬНЫЙ ХУК ПОСЛЕ ОТМЕНЫ
+                self._enable_global_hook()
+
+                self._first_key = None
+                self._main_key = None
+                self._capture_action = None
+
+                logger.info(f"[HOTKEYS] ✅ Захват отменен для действия: {action}")
+                break
+
+        logger.info("[HOTKEYS] ===== ОТМЕНА ЗАХВАТА ЗАВЕРШЕНА =====")
+
+    def _swap_hotkeys_if_conflict(self, action: str, new_combo: str) -> bool:
+        """
+        Проверяет, занята ли комбинация new_combo другим действием.
+        Если занята, меняет местами комбинации.
+        Возвращает True, если конфликт был разрешён (или не было конфликта),
+        False, если new_combo пустая или невалидная.
+        """
+        logger = self.logger
+
+        if not new_combo:
+            logger.warning("[HOTKEYS] Попытка обмена с пустой комбинацией")
+            return False
+
+        # Проверяем, не занята ли комбинация другим действием
+        conflicting_action = None
+        old_combo = self.hotkey_vars[action].get()
+
+        for a in self.hotkey_vars:
+            if a != action and self.hotkey_vars[a].get() == new_combo:
+                conflicting_action = a
+                break
+
+        logger.info(f"[HOTKEYS] conflicting_action = '{conflicting_action}'")
+
+        if conflicting_action is not None:
+            logger.info(f"[HOTKEYS] Комбинация '{new_combo}' уже занята действием '{conflicting_action}'")
+
+            # 1. Устанавливаем новую комбинацию для action
+            self.hotkey_vars[action].set(new_combo)
+            self.hotkey_buttons[action].config(text=new_combo.upper(), bg='#4CAF50')
+            self.settings.set_hotkey(action, new_combo)
+            logger.info(f"[HOTKEYS] Для '{action}' сохранена клавиша '{new_combo}'")
+
+            # 2. Отдаем старую комбинацию конфликтующему действию
+            if old_combo:
+                self.hotkey_vars[conflicting_action].set(old_combo)
+                self.hotkey_buttons[conflicting_action].config(text=old_combo.upper(), bg='#2d2d2d')
+                self.settings.set_hotkey(conflicting_action, old_combo)
+                logger.info(f"[HOTKEYS] Для '{conflicting_action}' сохранена клавиша '{old_combo}'")
+            else:
+                self.hotkey_vars[conflicting_action].set("")
+                self.hotkey_buttons[conflicting_action].config(text="—", bg='#2d2d2d')
+                self.settings.set_hotkey(conflicting_action, "")
+                logger.info(f"[HOTKEYS] Для '{conflicting_action}' клавиша сброшена")
+
+            # Сохраняем настройки
+            self.settings.save()
+            logger.info(f"[HOTKEYS] ✅ Клавиши поменяны местами и сохранены")
+            return True
+
+        else:
+            # Конфликта нет, просто назначаем новую комбинацию
+            self.hotkey_vars[action].set(new_combo)
+            self.hotkey_buttons[action].config(text=new_combo.upper(), bg='#4CAF50')
+            self.settings.set_hotkey(action, new_combo)
+            self.settings.save()
+            logger.info(f"[HOTKEYS] ✅ Назначена комбинация '{new_combo}' для действия '{action}'")
+            return True
 
     def _on_hotkey_key_down(self, event):
         """Обработчик нажатия клавиши для захвата комбинации."""
@@ -186,6 +298,32 @@ class HotkeyCaptureManager:
 
         self._finish_hotkey_capture(action)
 
+    def _on_hotkey_key_up(self, event):
+        """Обработчик отпускания клавиши."""
+        logger = self.logger
+        action = self._capture_action
+
+        if not self.hotkey_capturing.get(action, False):
+            return
+
+        key = event.keysym.lower()
+        logger.info(f"[HOTKEYS] Отпущена клавиша: {key}")
+
+        # Если нажата была одна клавиша без модификаторов, завершаем захват
+        if key == self._first_key and self._main_key is None:
+            elapsed = time.time() - self._first_key_time
+            if elapsed < 0.3:
+                logger.info(f"[HOTKEYS] Короткое нажатие ({elapsed:.2f}с) - назначаем одиночную клавишу")
+                self._finish_single_key(action)
+            else:
+                logger.info(f"[HOTKEYS] Долгое нажатие ({elapsed:.2f}с) - ждём вторую клавишу")
+                # Для долгого нажатия ничего не делаем, пользователь может нажать вторую клавишу
+                pass
+
+        if key == 'escape':
+            logger.info(f"[HOTKEYS] Нажат ESC — отменяем захват")
+            self._cancel_hotkey_capture()
+
     def _finish_single_key(self, action):
         """Завершает захват одиночной клавиши (если пользователь нажал и отпустил)."""
         logger = self.logger
@@ -207,183 +345,6 @@ class HotkeyCaptureManager:
         """Устанавливает ссылки на кнопки и переменные."""
         self.hotkey_buttons = hotkey_buttons
         self.hotkey_vars = hotkey_vars
-
-    def start_hotkey_capture(self, action):
-        """Начинает захват клавиши для переназначения."""
-        logger = self.logger
-        logger.info("[HOTKEYS] ===== НАЧАЛО ЗАХВАТА КЛАВИШИ =====")
-        logger.info(f"[HOTKEYS] Действие: {action}")
-
-        for a in list(self.hotkey_capturing.keys()):
-            if self.hotkey_capturing.get(a, False):
-                logger.info(f"[HOTKEYS] Принудительно отменяем захват для: {a}")
-                self.hotkey_capturing[a] = False
-                try:
-                    self.hotkey_buttons[a].config(bg='#2d2d2d', text=self.hotkey_vars[a].get().upper() or "—")
-                except:
-                    pass
-
-        try:
-            self.parent.unbind_all('<Key>')
-            self.parent.unbind_all('<KeyRelease>')
-        except:
-            pass
-
-        self.hotkey_capturing[action] = True
-
-        btn = self.hotkey_buttons.get(action)
-        if btn:
-            btn.config(bg='#FF6B00', text="Нажмите клавишу...")
-            btn.update_idletasks()
-            logger.info(f"[HOTKEYS] Кнопка для {action} переключена в режим захвата")
-        else:
-            logger.error(f"[HOTKEYS] Кнопка для {action} не найдена!")
-            self.hotkey_capturing[action] = False
-            return
-
-        if self.app and hasattr(self.app, 'set_actions_blocked'):
-            logger.info("[HOTKEYS] Блокируем действия горячих клавиш")
-            self.app.set_actions_blocked(True)
-
-        self.parent.focus_force()
-        self.parent.lift()
-        self.parent.attributes('-topmost', True)
-        self.parent.update_idletasks()
-
-        self._first_key = None
-        self._main_key = None
-        self._first_key_time = 0
-        self._capture_action = action
-
-        self.parent.bind_all('<Key>', self._on_hotkey_key_down)
-        self.parent.bind_all('<KeyRelease>', self._on_hotkey_key_up)
-        logger.info(f"[HOTKEYS] Обработчики клавиш привязаны для действия: {action}")
-        logger.info("[HOTKEYS] ===== ЗАХВАТ КЛАВИШИ НАЧАТ ======")
-
-    def _on_hotkey_key_up(self, event):
-        """Обработчик отпускания клавиши."""
-        logger = self.logger
-        action = self._capture_action
-
-        if not self.hotkey_capturing.get(action, False):
-            return
-
-        key = event.keysym.lower()
-        logger.info(f"[HOTKEYS] Отпущена клавиша: {key}")
-
-        if key == self._first_key and self._main_key is None:
-            elapsed = time.time() - self._first_key_time
-            if elapsed < 0.3:
-                logger.info(f"[HOTKEYS] Короткое нажатие ({elapsed:.2f}с) - назначаем одиночную клавишу")
-                self._finish_single_key(action)
-            else:
-                logger.info(f"[HOTKEYS] Долгое нажатие ({elapsed:.2f}с) - ждём вторую клавишу")
-
-        if key == 'escape':
-            logger.info(f"[HOTKEYS] Нажат ESC — отменяем захват")
-            self._cancel_hotkey_capture()
-
-    def _apply_combo(self, action):
-        """Применяет комбинацию клавиш."""
-        logger = self.logger
-
-        combo_parts = [self._first_key, self._main_key]
-
-        normalized_parts = []
-        for part in combo_parts:
-            if 'control' in part or 'ctrl' in part:
-                normalized_parts.append('ctrl')
-            elif 'shift' in part:
-                normalized_parts.append('shift')
-            elif 'alt' in part:
-                normalized_parts.append('alt')
-            elif 'win' in part or 'meta' in part:
-                normalized_parts.append('win')
-            else:
-                normalized_parts.append(part)
-
-        normalized_parts = list(dict.fromkeys(normalized_parts))
-        combo = '+'.join(normalized_parts)
-
-        logger.info(f"[HOTKEYS] Сформирована комбинация: {combo}")
-
-        # Проверяем конфликты
-        conflicting_action = None
-        old_combo = self.hotkey_vars[action].get()
-        logger.info(f"[HOTKEYS] old_combo для '{action}' = '{old_combo}'")
-
-        for a in self.hotkey_vars:
-            if a != action and self.hotkey_vars[a].get() == combo:
-                conflicting_action = a
-                break
-
-        logger.info(f"[HOTKEYS] conflicting_action = '{conflicting_action}'")
-
-        if conflicting_action is not None:
-            logger.info(f"[HOTKEYS] Комбинация '{combo}' уже занята действием '{conflicting_action}'")
-            logger.info(f"[HOTKEYS] Меняем местами: {action}={old_combo} <-> {conflicting_action}={combo}")
-
-            # Устанавливаем новую комбинацию для action
-            self.hotkey_vars[action].set(combo)
-            self.hotkey_buttons[action].config(text=combo.upper(), bg='#4CAF50')
-            self.settings.set_hotkey(action, combo)
-            logger.info(f"[HOTKEYS] Для '{action}' сохранена клавиша '{combo}'")
-
-            # Отдаем старую комбинацию конфликтующему действию
-            logger.info(f"[HOTKEYS] old_combo = '{old_combo}', проверяем if old_combo:")
-            if old_combo:
-                logger.info(f"[HOTKEYS] old_combo не пустой, обновляем '{conflicting_action}'")
-                self.hotkey_vars[conflicting_action].set(old_combo)
-                self.hotkey_buttons[conflicting_action].config(text=old_combo.upper(), bg='#4CAF50')
-                self.settings.set_hotkey(conflicting_action, old_combo)
-                logger.info(f"[HOTKEYS] Для '{conflicting_action}' сохранена клавиша '{old_combo}'")
-            else:
-                logger.info(f"[HOTKEYS] old_combo пустой, сбрасываем '{conflicting_action}'")
-                self.hotkey_vars[conflicting_action].set("")
-                self.hotkey_buttons[conflicting_action].config(text="—", bg='#2d2d2d')
-                self.settings.set_hotkey(conflicting_action, "")
-                logger.info(f"[HOTKEYS] Для '{conflicting_action}' клавиша сброшена")
-
-            # Сохраняем настройки
-            self.settings.save()
-            logger.info(f"[HOTKEYS] ✅ Клавиши поменяны местами и сохранены")
-        else:
-            self.hotkey_vars[action].set(combo)
-            self.hotkey_buttons[action].config(text=combo.upper(), bg='#4CAF50')
-            self.settings.set_hotkey(action, combo)
-            self.settings.save()
-            logger.info(f"[HOTKEYS] ✅ Назначена комбинация '{combo}' для действия '{action}'")
-
-        self._finish_hotkey_capture(action)
-
-    def _cancel_hotkey_capture(self):
-        """Отменяет текущий захват горячей клавиши."""
-        logger = self.logger
-        logger.info("[HOTKEYS] ===== ОТМЕНА ЗАХВАТА КЛАВИШИ =====")
-
-        for action in self.hotkey_capturing:
-            if self.hotkey_capturing[action]:
-                logger.info(f"[HOTKEYS] Отменяем захват для действия: {action}")
-                self.hotkey_capturing[action] = False
-
-                old_key = self.settings.get_hotkey(action)
-                self.hotkey_vars[action].set(old_key)
-                self.hotkey_buttons[action].config(text=old_key.upper() if old_key else "—", bg='#2d2d2d')
-
-                self.parent.unbind_all('<Key>')
-
-                if self.app and hasattr(self.app, 'set_actions_blocked'):
-                    logger.info("[HOTKEYS] Разблокируем действия горячих клавиш")
-                    self.app.set_actions_blocked(False)
-
-                self._first_key = None
-                self._main_key = None
-                self._capture_action = None
-
-                logger.info(f"[HOTKEYS] ✅ Захват отменен для действия: {action}")
-                break
-
-        logger.info("[HOTKEYS] ===== ОТМЕНА ЗАХВАТА ЗАВЕРШЕНА =====")
 
     def get_string(self, key):
         """Возвращает локализованную строку."""
