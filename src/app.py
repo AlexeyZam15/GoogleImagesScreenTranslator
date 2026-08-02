@@ -151,6 +151,56 @@ class ScreenshotTranslatorApp:
         # Запуск инициализации
         self.ui.root.after(100, self._init_translator_step)
 
+    def _on_window_switch(self, new_hwnd):
+        """Обработчик переключения окон"""
+        if new_hwnd == self._current_active_hwnd:
+            return
+
+        old_hwnd = self._current_active_hwnd
+        self._current_active_hwnd = new_hwnd
+
+        # Проверяем, активно ли главное окно приложения
+        is_app_window_active = False
+        try:
+            if self.ui.root and self.ui.root.winfo_exists():
+                app_hwnd = int(self.ui.root.winfo_id())
+                if new_hwnd == app_hwnd:
+                    is_app_window_active = True
+        except Exception as e:
+            self.logger.warning(f"[WINDOW] Ошибка проверки главного окна: {e}")
+
+        # Скрываем оверлеи старого окна
+        if old_hwnd and self.overlay_manager:
+            overlays = self.overlay_manager.get_overlays_for_window(old_hwnd)
+            for overlay in overlays:
+                try:
+                    if overlay._pinned_by_user:
+                        self.logger.info(f"[WINDOW] Закрепленный оверлей для {old_hwnd} не скрыт")
+                        continue
+                    if overlay.visible:
+                        overlay.hide()
+                        self.logger.info(f"[WINDOW] Скрыт оверлей для окна {old_hwnd}")
+                except Exception as e:
+                    self.logger.warning(f"[WINDOW] Ошибка скрытия оверлея: {e}")
+
+        # Показываем оверлеи нового окна
+        if new_hwnd and self.overlay_manager:
+            overlays = self.overlay_manager.get_overlays_for_window(new_hwnd)
+            for overlay in overlays:
+                try:
+                    if overlay._pinned_by_user and not is_app_window_active:
+                        self.logger.info(f"[WINDOW] Закрепленный оверлей скрыт (главное окно не активно)")
+                        if overlay.visible:
+                            overlay.visible = False
+                            overlay.root.withdraw()
+                        continue
+
+                    if overlay._is_visible_by_user and not overlay.visible:
+                        overlay.show()
+                        self.logger.info(f"[WINDOW] Показан оверлей для окна {new_hwnd}")
+                except Exception as e:
+                    self.logger.warning(f"[WINDOW] Ошибка показа оверлея: {e}")
+
     def setup_hotkeys(self):
         """Настройка глобальных горячих клавиш"""
         self.logger.info("[HOTKEYS] Настройка горячих клавиш (упрощенная версия)")
@@ -200,36 +250,6 @@ class ScreenshotTranslatorApp:
         self.logger.info(f"[OVERLAY] Создан оверлей для HWND={target_hwnd}")
         # Обновляем список окон
         self.window_list.refresh()
-
-    def _on_window_switch(self, new_hwnd):
-        """Обработчик переключения окон"""
-        if new_hwnd == self._current_active_hwnd:
-            return
-
-        old_hwnd = self._current_active_hwnd
-        self._current_active_hwnd = new_hwnd
-
-        # Скрываем оверлеи старого окна
-        if old_hwnd and self.overlay_manager:
-            overlays = self.overlay_manager.get_overlays_for_window(old_hwnd)
-            for overlay in overlays:
-                try:
-                    if overlay.visible:
-                        overlay.hide()
-                        self.logger.info(f"[WINDOW] Скрыт оверлей для окна {old_hwnd}")
-                except Exception as e:
-                    self.logger.warning(f"[WINDOW] Ошибка скрытия оверлея: {e}")
-
-        # Показываем оверлеи нового окна
-        if new_hwnd and self.overlay_manager:
-            overlays = self.overlay_manager.get_overlays_for_window(new_hwnd)
-            for overlay in overlays:
-                try:
-                    if overlay._is_visible_by_user and not overlay.visible:
-                        overlay.show()
-                        self.logger.info(f"[WINDOW] Показан оверлей для окна {new_hwnd}")
-                except Exception as e:
-                    self.logger.warning(f"[WINDOW] Ошибка показа оверлея: {e}")
 
     def _on_init_complete(self, result, error):
         """Завершение инициализации"""

@@ -71,6 +71,45 @@ class MainWindow:
         self.root.lift()
         self.root.focus_force()
 
+    def _on_listbox_double_click(self, event):
+        """Обработчик двойного клика по списку окон - переключает видимость оверлеев"""
+        selection = self.window_listbox.curselection()
+        if not selection:
+            return
+        hwnd = self._window_hwnd_map.get(selection[0])
+        if not hwnd or not self.app.overlay_manager:
+            return
+
+        overlays = self.app.overlay_manager.get_overlays_for_window(hwnd)
+        if not overlays:
+            return
+
+        any_visible = any(o.visible for o in overlays)
+
+        if any_visible:
+            for overlay in overlays:
+                try:
+                    # При скрытии через список, сбрасываем флаг закрепления
+                    overlay._pinned_by_user = False
+                    overlay.visible = False
+                    overlay.root.withdraw()
+                    overlay._is_visible_by_user = False
+                    overlay._hidden_by_user = True
+                except:
+                    pass
+        else:
+            for overlay in overlays:
+                try:
+                    # При показе через список, устанавливаем флаг закрепления
+                    overlay._pinned_by_user = True
+                    overlay._is_visible_by_user = True
+                    overlay._hidden_by_user = False
+                    overlay._hidden_by_mouse = False
+                    if not overlay.visible:
+                        overlay.show()
+                except:
+                    pass
+
     def create_menu(self):
         """Создает главное меню"""
         menubar = Menu(self.root, bg='#1e1e1e', fg='white', activebackground='#333333', activeforeground='white')
@@ -337,41 +376,6 @@ class MainWindow:
 
         from src.hotkeys_window import HotkeysWindow
         HotkeysWindow(self.app)
-
-    def _on_listbox_double_click(self, event):
-        """Обработчик двойного клика по списку окон - переключает видимость оверлеев"""
-        selection = self.window_listbox.curselection()
-        if not selection:
-            return
-        hwnd = self._window_hwnd_map.get(selection[0])
-        if not hwnd or not self.app.overlay_manager:
-            return
-
-        overlays = self.app.overlay_manager.get_overlays_for_window(hwnd)
-        if not overlays:
-            return
-
-        any_visible = any(o.visible for o in overlays)
-
-        if any_visible:
-            for overlay in overlays:
-                try:
-                    overlay.visible = False
-                    overlay.root.withdraw()
-                    overlay._is_visible_by_user = False
-                    overlay._hidden_by_user = True
-                except:
-                    pass
-        else:
-            for overlay in overlays:
-                try:
-                    overlay._is_visible_by_user = True
-                    overlay._hidden_by_user = False
-                    overlay._hidden_by_mouse = False
-                    if not overlay.visible:
-                        overlay.show()
-                except:
-                    pass
 
     def _center_window(self):
         """Центрирует окно"""
