@@ -395,11 +395,23 @@ class OverlayManager:
                                   is_startup: bool = False) -> Optional[OverlayWindow]:
         """
         ЕДИНСТВЕННЫЙ метод для создания оверлея.
-        Используется при создании новых оверлеев и при восстановлении.
-
-        Args:
-            is_startup: True если оверлей создается при запуске программы
         """
+        # === ВЫЧИСЛЯЕМ ФИНАЛЬНУЮ ПОЗИЦИЮ ===
+        if saved_x != 0 or saved_y != 0:
+            final_x = saved_x
+            final_y = saved_y
+            final_w = saved_w
+            final_h = saved_h
+            self.logger.info(f"[STATE] Используем сохраненную позицию: ({saved_x}, {saved_y})")
+        else:
+            rx1, ry1, rx2, ry2 = window_rect
+            final_x = rx1
+            final_y = ry1
+            final_w = rx2 - rx1
+            final_h = ry2 - ry1
+            self.logger.info(f"[STATE] Используем позицию из window_rect: ({rx1}, {ry1})")
+
+        # Создаем оверлей
         overlay = self.create_overlay(
             image_path=image_path,
             window_rect=window_rect,
@@ -409,25 +421,20 @@ class OverlayManager:
             is_window_screenshot=is_window_screenshot,
             is_auto_replace=is_auto_replace,
             template_id=template_id,
-            is_startup=is_startup  # <-- НОВЫЙ ПАРАМЕТР
+            is_startup=is_startup
         )
 
         if overlay:
-            # Устанавливаем позицию
-            if saved_x != 0 or saved_y != 0:
-                try:
-                    overlay.root.geometry(f"{saved_w}x{saved_h}+{saved_x}+{saved_y}")
-                    overlay._saved_position = (saved_x, saved_y)
-                    overlay._user_moved = True
-                except Exception as e:
-                    self.logger.warning(f"[OVERLAY] Ошибка установки позиции: {e}")
-            elif window_rect:
-                try:
-                    rx1, ry1, rx2, ry2 = window_rect
-                    if rx2 - rx1 > 10 and ry2 - ry1 > 10:
-                        overlay.root.geometry(f"{rx2 - rx1}x{ry2 - ry1}+{rx1}+{ry1}")
-                except Exception as e:
-                    self.logger.warning(f"[OVERLAY] Ошибка установки позиции из window_rect: {e}")
+            overlay._created_at_startup = is_startup
+
+            # === СРАЗУ УСТАНАВЛИВАЕМ ФИНАЛЬНУЮ ПОЗИЦИЮ ===
+            try:
+                overlay.root.geometry(f"{final_w}x{final_h}+{final_x}+{final_y}")
+                overlay._saved_position = (final_x, final_y)
+                overlay._user_moved = True
+                self.logger.info(f"[OVERLAY] Установлена финальная позиция: ({final_x}, {final_y})")
+            except Exception as e:
+                self.logger.warning(f"[OVERLAY] Ошибка установки позиции: {e}")
 
             overlay._is_visible_by_user = True
             overlay._hidden_by_user = False
@@ -448,7 +455,6 @@ class OverlayManager:
                 except Exception as e:
                     self.logger.warning(f"[OVERLAY] Не удалось скрыть оверлей: {e}")
 
-            # Убеждаемся, что оверлей добавлен в overlays_by_hwnd
             if target_hwnd not in self.overlays_by_hwnd:
                 self.overlays_by_hwnd[target_hwnd] = []
             if overlay not in self.overlays_by_hwnd[target_hwnd]:

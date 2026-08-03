@@ -131,7 +131,7 @@ class TranslationMonitor:
 
     def _update_overlay_gui(self, template_data: Dict, x: int, y: int, w: int, h: int, translated_path: Path,
                             template_id: str):
-        """Обновляет или создает оверлей в главном потоке."""
+        """Обновляет или создает оверлей в главном потоке. Позиция вычисляется ДО создания."""
         try:
             self.logger.info(
                 f"[DEBUG] === _update_overlay_gui НАЧАЛО для шаблона #{template_data.get('pair_index')} ===")
@@ -147,33 +147,55 @@ class TranslationMonitor:
                 self.logger.info(f"[DEBUG] Шаблон #{pair_index} больше не найден, пропускаем показ")
                 return
 
-            # Если оверлей уже существует — обновляем позицию
+            # === ВЫЧИСЛЯЕМ ФИНАЛЬНУЮ ПОЗИЦИЮ ===
+            final_x = x
+            final_y = y
+            final_w = w
+            final_h = h
+
+            # Если оверлей уже существует - проверяем сохраненную позицию
             if overlay:
                 try:
                     if overlay.root and overlay.root.winfo_exists():
-                        self.logger.info(f"[DEBUG] Оверлей для шаблона #{pair_index} уже существует")
-
+                        # === ВСЕГДА ПРОВЕРЯЕМ СОХРАНЕННУЮ ПОЗИЦИЮ ===
                         saved_position = None
-                        if self.overlay_manager and hasattr(overlay, '_user_moved') and overlay._user_moved:
+                        if self.overlay_manager:
                             saved_position = self.overlay_manager.get_saved_position(template_id)
 
                         if saved_position:
                             saved_x, saved_y = saved_position
-                            current_x = overlay.root.winfo_x()
-                            current_y = overlay.root.winfo_y()
-                            if abs(current_x - saved_x) > 5 or abs(current_y - saved_y) > 5:
-                                overlay.root.geometry(f"+{saved_x}+{saved_y}")
+                            final_x = saved_x
+                            final_y = saved_y
+                            self.logger.info(f"[DEBUG] Используем сохраненную позицию оверлея: ({saved_x}, {saved_y})")
+
+                            # Если оверлей виден и позиция изменилась - обновляем
+                            if overlay.visible:
+                                current_x = overlay.root.winfo_x()
+                                current_y = overlay.root.winfo_y()
+                                if abs(current_x - saved_x) > 5 or abs(current_y - saved_y) > 5:
+                                    overlay.root.geometry(f"+{saved_x}+{saved_y}")
+                                    self.logger.info(
+                                        f"[DEBUG] Обновлена позиция оверлея на сохраненную: ({saved_x}, {saved_y})")
+                                # Если оверлей скрыт, но должен быть виден - показываем
+                                if not overlay.visible and overlay._is_visible_by_user and not overlay._hidden_by_user:
+                                    overlay._saved_position = (saved_x, saved_y)
+                                    overlay._user_moved = True
+                                    overlay.show()
+                                return
                         else:
+                            # Нет сохраненной позиции - используем позицию шаблона
+                            self.logger.info(f"[DEBUG] Нет сохраненной позиции, используем позицию шаблона: ({x}, {y})")
                             current_x = overlay.root.winfo_x()
                             current_y = overlay.root.winfo_y()
                             if abs(current_x - x) > 5 or abs(current_y - y) > 5:
                                 overlay.root.geometry(f"+{x}+{y}")
+                                self.logger.info(f"[DEBUG] Обновлена позиция оверлея на позицию шаблона: ({x}, {y})")
 
-                        if not overlay.visible and overlay._is_visible_by_user and not overlay._hidden_by_user:
-                            overlay.show()
-                        elif overlay.visible:
-                            overlay.root.lift()
-                        return
+                            if not overlay.visible and overlay._is_visible_by_user and not overlay._hidden_by_user:
+                                overlay.show()
+                            elif overlay.visible:
+                                overlay.root.lift()
+                            return
                     else:
                         template_data['overlay'] = None
                 except Exception as e:
@@ -185,9 +207,17 @@ class TranslationMonitor:
 
             if self.overlay_manager:
                 try:
-                    window_rect = (x, y, x + w, y + h)
+                    # Проверяем сохраненную позицию перед созданием
+                    saved_position = self.overlay_manager.get_saved_position(template_id)
+                    if saved_position:
+                        saved_x, saved_y = saved_position
+                        final_x = saved_x
+                        final_y = saved_y
+                        self.logger.info(f"[DEBUG] Создаем оверлей с сохраненной позицией: ({saved_x}, {saved_y})")
 
-                    # Используем общий метод из overlay_manager
+                    window_rect = (final_x, final_y, final_x + final_w, final_y + final_h)
+
+                    # Используем общий метод из overlay_manager с финальной позицией
                     new_overlay = self.overlay_manager._create_overlay_from_data(
                         image_path=translated_path,
                         window_rect=window_rect,
@@ -195,7 +225,11 @@ class TranslationMonitor:
                         is_auto_replace=True,
                         is_window_screenshot=False,
                         template_id=template_id,
-                        show_immediately=True
+                        show_immediately=True,
+                        saved_x=final_x,
+                        saved_y=final_y,
+                        saved_w=final_w,
+                        saved_h=final_h
                     )
 
                     if new_overlay:
@@ -204,12 +238,12 @@ class TranslationMonitor:
                         new_overlay._is_auto_replace = True
                         new_overlay._creation_time = time.time()
                         new_overlay._monitor_stable_time = time.time() + 3.0
-                        new_overlay._user_moved = False
+                        new_overlay._user_moved = True  # Важно: помечаем как перемещенный, чтобы сохранялась позиция
                         new_overlay.auto_hide_enabled = False
                         new_overlay._stop_visibility_monitor()
 
                         self.logger.info(
-                            f"[MONITOR] Создан и показан новый оверлей для шаблона #{pair_index} в позиции ({x}, {y})")
+                            f"[MONITOR] Создан и показан новый оверлей для шаблона #{pair_index} в позиции ({final_x}, {final_y})")
                     else:
                         self.logger.warning(f"[MONITOR] Не удалось создать оверлей для шаблона #{pair_index}")
                 except Exception as e:

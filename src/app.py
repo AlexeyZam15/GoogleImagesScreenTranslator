@@ -202,10 +202,26 @@ class ScreenshotTranslatorApp:
         if new_hwnd == self._current_active_hwnd:
             return
 
+        # === НОВАЯ ПРОВЕРКА: ИГНОРИРУЕМ ОВЕРЛЕЙ ===
+        try:
+            import win32gui
+            class_name = win32gui.GetClassName(new_hwnd)
+            window_text = win32gui.GetWindowText(new_hwnd)
+            if class_name == "TkTopLevel" and window_text == "Перевод":
+                self.logger.debug("[WINDOW] Активное окно - оверлей, игнорируем")
+                return
+        except:
+            pass
+
         old_hwnd = self._current_active_hwnd
         self._current_active_hwnd = new_hwnd
 
         self.logger.info(f"[WINDOW] Переключение окон: old_hwnd={old_hwnd}, new_hwnd={new_hwnd}")
+
+        # Не скрывать оверлей во время перетаскивания
+        if self.overlay_manager and self.overlay_manager.is_dragging():
+            self.logger.info("[WINDOW] Перетаскивание активно, оверлеи НЕ скрываем")
+            return
 
         # Скрываем оверлеи старого окна
         if old_hwnd and self.overlay_manager:
@@ -217,7 +233,7 @@ class ScreenshotTranslatorApp:
                 except Exception as e:
                     self.logger.warning(f"[WINDOW] Ошибка скрытия оверлея: {e}")
 
-        # Показываем оверлеи нового окна (только те, которые были видны пользователем)
+        # Показываем оверлеи нового окна
         if new_hwnd and self.overlay_manager:
             overlays = self.overlay_manager.get_overlays_for_window(new_hwnd)
             for overlay in overlays:
