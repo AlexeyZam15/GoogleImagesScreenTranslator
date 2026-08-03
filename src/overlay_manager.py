@@ -725,6 +725,11 @@ class OverlayManager:
         self.logger.info(f"[OVERLAY_MANAGER] overlay={overlay}")
         self.logger.info(f"[OVERLAY_MANAGER] force={force}")
 
+        # === ЗАЩИТА ОТ ПОВТОРНОГО УДАЛЕНИЯ ===
+        if overlay not in self.overlays:
+            self.logger.warning("[OVERLAY_MANAGER] Оверлей уже удалён из списка, пропускаем")
+            return
+
         target_hwnd = overlay.get_target_hwnd()
         self.logger.info(f"[OVERLAY_MANAGER] target_hwnd={target_hwnd}")
 
@@ -737,7 +742,6 @@ class OverlayManager:
                 monitor = self.parent.translation_monitor
                 self.logger.info("[OVERLAY_MANAGER] TranslationMonitor найден, ищем шаблон для удаления...")
 
-                # Ищем шаблон с таким же hash
                 template_to_remove = None
                 for template_data in monitor.templates:
                     if template_data.get('hash') == template_id:
@@ -750,17 +754,14 @@ class OverlayManager:
                     pair_index = template_to_remove.get('pair_index')
                     self.logger.info(f"[OVERLAY_MANAGER] Удаление шаблона #{pair_index} из монитора...")
 
-                    # Останавливаем монитор на время удаления
                     was_running = monitor.is_running()
                     if was_running:
                         monitor.stop()
                         self.logger.info("[OVERLAY_MANAGER] Монитор остановлен на время удаления шаблона")
 
-                    # Удаляем шаблон
                     monitor.remove_template(pair_index)
                     self.logger.info(f"[OVERLAY_MANAGER] Шаблон #{pair_index} удален из монитора")
 
-                    # Если остались шаблоны и монитор был запущен - перезапускаем
                     if was_running and monitor.templates:
                         monitor.start()
                         self.logger.info(
@@ -771,7 +772,6 @@ class OverlayManager:
                     self.logger.warning(f"[OVERLAY_MANAGER] Шаблон с hash {template_id[:8]} не найден в мониторе")
 
         # === 2. УДАЛЯЕМ ОВЕРЛЕЙ ИЗ СПИСКОВ ===
-        # Удаляем из списка по HWND
         if target_hwnd in self.overlays_by_hwnd:
             self.logger.info(
                 f"[OVERLAY_MANAGER] Найдено {len(self.overlays_by_hwnd[target_hwnd])} оверлеев для HWND={target_hwnd}")
@@ -783,12 +783,10 @@ class OverlayManager:
                     del self.overlays_by_hwnd[target_hwnd]
                     self.logger.info("[OVERLAY_MANAGER] Список оверлеев для HWND пуст, удален")
 
-                    # Очищаем состояние окна
                     if hasattr(self.parent, '_clear_window_state'):
                         self.parent._clear_window_state(target_hwnd)
                         self.logger.info("[OVERLAY_MANAGER] Состояние окна очищено")
 
-                    # Уведомляем родителя об удалении
                     if self.parent and hasattr(self.parent, '_on_overlay_removed'):
                         try:
                             self.parent._on_overlay_removed(target_hwnd)
@@ -796,7 +794,7 @@ class OverlayManager:
                         except Exception as e:
                             self.logger.warning(f"[OVERLAY_MANAGER] Ошибка уведомления: {e}")
 
-        # Удаляем из общего списка
+        # Удаляем из общего списка (если ещё не удалён)
         if overlay in self.overlays:
             self.overlays.remove(overlay)
             self.logger.info("[OVERLAY_MANAGER] Оверлей удален из общего списка")

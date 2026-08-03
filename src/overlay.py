@@ -982,7 +982,6 @@ class OverlayWindow:
         self.logger.info(f"[DEBUG] event: {event}")
         self.logger.info("[DEBUG] ========================================")
 
-        # === КРЕСТИК ВСЕГДА УДАЛЯЕТ ОВЕРЛЕЙ ===
         self.logger.info("[DEBUG] _on_close_click: удаляем оверлей")
         self._hide_title_bar()
         self._remove_overlay()
@@ -1062,35 +1061,29 @@ class OverlayWindow:
         self._hide_title_bar()
         self.logger.info("[DEBUG] _remove_overlay: панель заголовка скрыта")
 
-        # === УДАЛЯЕМ ВСЕ ШАБЛОНЫ ДЛЯ ЭТОГО HWND ИЗ МОНИТОРА ===
+        # === УДАЛЯЕМ ТОЛЬКО СВОЙ ШАБЛОН ИЗ МОНИТОРА ===
         if hasattr(self, '_overlay_manager') and self._overlay_manager:
             parent = self._overlay_manager.parent
             if parent and hasattr(parent, 'translation_monitor') and parent.translation_monitor:
                 monitor = parent.translation_monitor
                 target_hwnd = self._target_hwnd
+                template_id = self._template_id
 
-                # Останавливаем монитор на время удаления
-                was_running = monitor.is_running()
-                if was_running:
-                    monitor.stop()
-                    self.logger.info(f"[MONITOR] Монитор остановлен для удаления шаблонов")
-
-                # Удаляем все шаблоны для этого HWND
-                templates_to_remove = []
+                # Ищем шаблон с таким же hash (template_id)
+                template_to_remove = None
                 for template in monitor.templates:
-                    if template.get('target_hwnd') == target_hwnd:
-                        templates_to_remove.append(template.get('pair_index'))
+                    if template.get('hash') == template_id:
+                        template_to_remove = template
+                        break
 
-                for pair_index in templates_to_remove:
-                    self.logger.info(f"[MONITOR] Удаляем шаблон #{pair_index} для HWND={target_hwnd}")
+                if template_to_remove:
+                    pair_index = template_to_remove.get('pair_index')
+                    self.logger.info(
+                        f"[MONITOR] Удаляем шаблон #{pair_index} для HWND={target_hwnd} (hash={template_id[:8]})")
                     monitor.remove_template(pair_index)
-
-                # Перезапускаем монитор если он был запущен
-                if was_running and monitor.templates:
-                    monitor.start()
-                    self.logger.info(f"[MONITOR] Монитор перезапущен, осталось {len(monitor.templates)} шаблонов")
-                elif was_running:
-                    self.logger.info(f"[MONITOR] Монитор остановлен, шаблонов не осталось")
+                else:
+                    self.logger.info(
+                        f"[MONITOR] Шаблон с hash {template_id[:8] if template_id else 'None'} не найден, пропускаем")
 
         if hasattr(self, '_overlay_manager') and self._overlay_manager:
             self.logger.info(
