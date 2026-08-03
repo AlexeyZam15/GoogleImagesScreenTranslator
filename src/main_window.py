@@ -322,6 +322,15 @@ class MainWindow:
         if self.windows_label:
             self.windows_label.config(text=self.get_string('windows_with_translations'))
 
+        # Обновляем состояние кнопки редактирования
+        if hasattr(self, 'edit_mode_btn'):
+            is_enabled = getattr(self.app, '_edit_mode_enabled', False)
+            status_text = "ВКЛ" if is_enabled else "ВЫКЛ"
+            self.edit_mode_btn.config(
+                text=f"✏️ Редактирование: {status_text}",
+                bg='#4CAF50' if is_enabled else '#3c3c3c'
+            )
+
         # Сохраняем состояние готовности приложения
         is_ready = False
         if hasattr(self.app, 'ready') and self.app.ready:
@@ -329,7 +338,6 @@ class MainWindow:
 
         self.create_menu()
 
-        # Восстанавливаем состояние меню в зависимости от готовности приложения
         if is_ready:
             self.set_settings_menu_enabled(True)
 
