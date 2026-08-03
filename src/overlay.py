@@ -690,8 +690,19 @@ class OverlayWindow:
         self._stop_visibility_monitor()
         self.logger.info("[DEBUG] _start_drag: монитор видимости отключен")
 
-        # НЕ СКРЫВАЕМ оверлей! Он остается видимым.
-        # Панель заголовка уже видна (в режиме редактирования)
+        # === ОПТИМИЗАЦИЯ: Приостанавливаем монитор автозамены ===
+        if hasattr(self, '_overlay_manager') and self._overlay_manager:
+            parent = self._overlay_manager.parent
+            if parent and hasattr(parent, 'translation_monitor'):
+                monitor = parent.translation_monitor
+                if monitor and monitor.is_running():
+                    monitor.stop()
+                    self.logger.info("[DEBUG] _start_drag: монитор автозамены приостановлен")
+
+        # === ОПТИМИЗАЦИЯ: Отключаем сохранение состояния во время перетаскивания ===
+        if hasattr(self, '_overlay_manager') and self._overlay_manager:
+            self._overlay_manager._suppress_save = True
+            self.logger.info("[DEBUG] _start_drag: сохранение состояния отключено")
 
         if hasattr(self, '_overlay_manager') and self._overlay_manager:
             self._overlay_manager.set_dragging(True)
@@ -752,6 +763,14 @@ class OverlayWindow:
         self._mouse_over = False
         self.logger.info("[DEBUG] _stop_drag: флаги _hidden_by_mouse и _mouse_over сброшены")
 
+        # === ОПТИМИЗАЦИЯ: Восстанавливаем сохранение состояния с задержкой ===
+        if hasattr(self, '_overlay_manager') and self._overlay_manager:
+            self._overlay_manager._suppress_save = False
+            # Отложенное сохранение состояния
+            if self.root and self.root.winfo_exists():
+                self.root.after(500, self._overlay_manager.save_overlay_state)
+                self.logger.info("[DEBUG] _stop_drag: сохранение состояния запланировано через 500мс")
+
         # Перезапускаем монитор видимости (если нужно)
         if self.auto_hide_enabled and not self._edit_mode_enabled:
             self._start_visibility_monitor()
@@ -763,6 +782,17 @@ class OverlayWindow:
                 self._show_title_bar()
                 self.logger.info("[DEBUG] _stop_drag: панель заголовка обновлена")
 
+        # === ОПТИМИЗАЦИЯ: Восстанавливаем монитор автозамены с задержкой ===
+        if hasattr(self, '_overlay_manager') and self._overlay_manager:
+            parent = self._overlay_manager.parent
+            if parent and hasattr(parent, 'translation_monitor'):
+                monitor = parent.translation_monitor
+                if monitor and monitor.templates:
+                    # Запускаем с задержкой, чтобы дать время GUI стабилизироваться
+                    if self.root and self.root.winfo_exists():
+                        self.root.after(300, monitor.start)
+                        self.logger.info("[DEBUG] _stop_drag: монитор автозамены будет запущен через 300мс")
+
         # Таймаут для стабилизации
         if self.root and self.root.winfo_exists():
             if self._drag_stop_timer:
@@ -771,6 +801,36 @@ class OverlayWindow:
                 except:
                     pass
             self._drag_stop_timer = self.root.after(500, self._on_drag_stop_timeout)
+
+    def _on_drag(self, event):
+        """Перемещает окно во время перетаскивания."""
+        if self._is_dragging and self.root.winfo_exists():
+            x = self.root.winfo_x() + (event.x - self._drag_data["x"])
+            y = self.root.winfo_y() + (event.y - self._drag_data["y"])
+            self.root.geometry(f"+{x}+{y}")
+            self._saved_position = (x, y)
+
+            # === ОПТИМИЗАЦИЯ: Уменьшаем частоту обновления панели ===
+            if hasattr(self, '_drag_counter'):
+                self._drag_counter += 1
+            else:
+                self._drag_counter = 0
+
+            # Обновляем панель реже (каждый 5-й кадр вместо каждого 3-го)
+            if self._drag_counter % 5 == 0:
+                if self._title_bar_window and self._title_bar_window.winfo_exists():
+                    try:
+                        overlay_width = self.root.winfo_width()
+                        title_height = 24
+                        pos_y_panel = y - title_height
+                        if pos_y_panel < 0:
+                            pos_y_panel = y + 2
+
+                        # Используем move вместо geometry (быстрее)
+                        self._title_bar_window.geometry(f"{overlay_width}x{title_height}+{x}+{pos_y_panel}")
+                        self._title_bar_window.lift()
+                    except Exception as e:
+                        self.logger.warning(f"[DEBUG] _on_drag: ошибка обновления панели: {e}")
 
     def _show_close_button_forced(self):
         """Показывает кнопку закрытия НАД оверлеем (для закрепленных оверлеев)."""
@@ -990,35 +1050,6 @@ class OverlayWindow:
         except Exception as e:
             self.logger.error(f"[DEBUG] Ошибка создания кнопки закрытия: {e}")
             self._close_button_visible = False
-
-    def _on_drag(self, event):
-        """Перемещает окно во время перетаскивания."""
-        if self._is_dragging and self.root.winfo_exists():
-            x = self.root.winfo_x() + (event.x - self._drag_data["x"])
-            y = self.root.winfo_y() + (event.y - self._drag_data["y"])
-            self.root.geometry(f"+{x}+{y}")
-            self._saved_position = (x, y)
-
-            # === ОПТИМИЗАЦИЯ: обновляем панель реже (каждый 3-й кадр) ===
-            if hasattr(self, '_drag_counter'):
-                self._drag_counter += 1
-            else:
-                self._drag_counter = 0
-
-            if self._drag_counter % 3 == 0:
-                if self._title_bar_window and self._title_bar_window.winfo_exists():
-                    try:
-                        overlay_width = self.root.winfo_width()
-                        title_height = 24
-                        pos_y_panel = y - title_height
-                        if pos_y_panel < 0:
-                            pos_y_panel = y + 2
-
-                        # Используем move вместо geometry (быстрее)
-                        self._title_bar_window.geometry(f"{overlay_width}x{title_height}+{x}+{pos_y_panel}")
-                        self._title_bar_window.lift()
-                    except Exception as e:
-                        self.logger.warning(f"[DEBUG] _on_drag: ошибка обновления панели: {e}")
 
     def _on_close_click(self, event):
         """Обработчик клика по кнопке закрытия - удаляет оверлей."""
