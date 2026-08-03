@@ -57,26 +57,15 @@ class OverlayManager:
 
             self.logger.info(f"[DEBUG] Скрываем оверлей: {overlay}")
 
-            # === СОХРАНЯЕМ ТЕКУЩЕЕ СОСТОЯНИЕ РЕЖИМА РЕДАКТИРОВАНИЯ ===
-            is_edit_mode = overlay._edit_mode_enabled
-            self.logger.info(f"[DEBUG] Текущий режим редактирования: {is_edit_mode}")
-
-            # === НЕ СБРАСЫВАЕМ _edit_mode_enabled! ===
-            # overlay._edit_mode_enabled = False  # <-- УДАЛЕНО
-
-            overlay._pinned_by_user = False
-            overlay._forced_by_user = False
             overlay._hidden_by_user = True
             overlay._is_visible_by_user = False
             overlay._hidden_by_mouse = False
             overlay._mouse_over = False
             overlay.auto_hide_enabled = True
 
-            # === СКРЫВАЕМ ПАНЕЛЬ (уничтожается в hide) ===
             overlay.hide(by_user=True)
 
-            self.logger.info(
-                f"[DEBUG] Оверлей скрыт через контекстное меню, режим редактирования сохранён: {is_edit_mode}")
+            self.logger.info("[DEBUG] Оверлей скрыт через контекстное меню")
             self.save_overlay_state()
 
         except Exception as e:
@@ -157,9 +146,6 @@ class OverlayManager:
 
         try:
             if overlay in self.overlays:
-                # Сбрасываем флаги принудительного и закрепленного показа
-                overlay._forced_by_user = False
-                overlay._pinned_by_user = False
                 self.remove_overlay(overlay)
                 self.logger.info("[DEBUG] Оверлей удален")
             else:
@@ -233,60 +219,6 @@ class OverlayManager:
         except Exception as e:
             self.logger.warning(f"[DEBUG] Не удалось показать контекстное меню: {e}")
             self._context_menu_overlay = None
-
-    def _unpin_overlay_under_cursor(self):
-        """Открепляет оверлей, для которого было показано контекстное меню."""
-        self.logger.info("[DEBUG] Открепление оверлея через контекстное меню")
-
-        try:
-            if self._context_menu:
-                try:
-                    self._context_menu.unpost()
-                    self._context_menu.update_idletasks()
-                    self.logger.info("[DEBUG] Контекстное меню закрыто (unpost)")
-                except Exception as e:
-                    self.logger.warning(f"[DEBUG] Ошибка при unpost: {e}")
-
-                try:
-                    if hasattr(self._context_menu, 'tk') and self._context_menu.tk:
-                        self._context_menu.tk.call('destroy', self._context_menu)
-                        self.logger.info("[DEBUG] Контекстное меню уничтожено через tk.call")
-                except Exception as e:
-                    self.logger.warning(f"[DEBUG] Ошибка при уничтожении меню: {e}")
-
-                self._context_menu = None
-                self._create_context_menu()
-                self.logger.info("[DEBUG] Контекстное меню пересоздано")
-        except Exception as e:
-            self.logger.warning(f"[DEBUG] Не удалось закрыть меню: {e}")
-
-        overlay = None
-        if hasattr(self, '_context_menu_overlay') and self._context_menu_overlay:
-            overlay = self._context_menu_overlay
-            self._context_menu_overlay = None
-            self.logger.info("[DEBUG] Ссылка на оверлей сброшена")
-
-        if overlay is None:
-            self.logger.warning("[DEBUG] Нет оверлея для открепления")
-            return
-
-        try:
-            if overlay in self.overlays:
-                # Снимаем флаг закрепления, но не удаляем оверлей
-                overlay._pinned_by_user = False
-                # Обновляем поведение: теперь оверлей будет подчиняться стандартным правилам
-                # Если режим редактирования выключен, скрываем крестик
-                is_edit_mode = self.parent.is_edit_mode_enabled() if hasattr(self.parent,
-                                                                             'is_edit_mode_enabled') else False
-                if not is_edit_mode:
-                    overlay._hide_close_button()
-                self.logger.info("[DEBUG] Оверлей откреплен")
-                # Сохраняем состояние
-                self.save_overlay_state()
-            else:
-                self.logger.warning("[DEBUG] Оверлей уже удален из списка")
-        except Exception as e:
-            self.logger.error(f"[DEBUG] Ошибка при откреплении оверлея: {e}")
 
     def _global_esc_handler(self, event):
         """Глобальный обработчик ESC - только отменяет перевод."""
@@ -765,37 +697,104 @@ class OverlayManager:
 
     def remove_overlay(self, overlay: OverlayWindow, force: bool = False):
         """Удаляет оверлей из всех списков и очищает состояние окна."""
-        target_hwnd = overlay.get_target_hwnd()
+        self.logger.info(f"[OVERLAY_MANAGER] === remove_overlay НАЧАЛО ===")
+        self.logger.info(f"[OVERLAY_MANAGER] overlay={overlay}")
+        self.logger.info(f"[OVERLAY_MANAGER] force={force}")
 
+        target_hwnd = overlay.get_target_hwnd()
+        self.logger.info(f"[OVERLAY_MANAGER] target_hwnd={target_hwnd}")
+
+        # === 1. УДАЛЯЕМ ШАБЛОН ИЗ МОНИТОРА (ЕСЛИ ЕСТЬ) ===
+        if hasattr(overlay, '_template_id') and overlay._template_id:
+            template_id = overlay._template_id
+            self.logger.info(f"[OVERLAY_MANAGER] Найден template_id: {template_id}")
+
+            if hasattr(self.parent, 'translation_monitor') and self.parent.translation_monitor:
+                monitor = self.parent.translation_monitor
+                self.logger.info("[OVERLAY_MANAGER] TranslationMonitor найден, ищем шаблон для удаления...")
+
+                # Ищем шаблон с таким же hash
+                template_to_remove = None
+                for template_data in monitor.templates:
+                    if template_data.get('hash') == template_id:
+                        template_to_remove = template_data
+                        self.logger.info(
+                            f"[OVERLAY_MANAGER] Найден шаблон #{template_data.get('pair_index')} для удаления")
+                        break
+
+                if template_to_remove:
+                    pair_index = template_to_remove.get('pair_index')
+                    self.logger.info(f"[OVERLAY_MANAGER] Удаление шаблона #{pair_index} из монитора...")
+
+                    # Останавливаем монитор на время удаления
+                    was_running = monitor.is_running()
+                    if was_running:
+                        monitor.stop()
+                        self.logger.info("[OVERLAY_MANAGER] Монитор остановлен на время удаления шаблона")
+
+                    # Удаляем шаблон
+                    monitor.remove_template(pair_index)
+                    self.logger.info(f"[OVERLAY_MANAGER] Шаблон #{pair_index} удален из монитора")
+
+                    # Если остались шаблоны и монитор был запущен - перезапускаем
+                    if was_running and monitor.templates:
+                        monitor.start()
+                        self.logger.info(
+                            f"[OVERLAY_MANAGER] Монитор перезапущен, осталось {len(monitor.templates)} шаблонов")
+                    elif was_running:
+                        self.logger.info("[OVERLAY_MANAGER] Монитор остановлен, шаблонов не осталось")
+                else:
+                    self.logger.warning(f"[OVERLAY_MANAGER] Шаблон с hash {template_id[:8]} не найден в мониторе")
+
+        # === 2. УДАЛЯЕМ ОВЕРЛЕЙ ИЗ СПИСКОВ ===
         # Удаляем из списка по HWND
         if target_hwnd in self.overlays_by_hwnd:
+            self.logger.info(
+                f"[OVERLAY_MANAGER] Найдено {len(self.overlays_by_hwnd[target_hwnd])} оверлеев для HWND={target_hwnd}")
             if overlay in self.overlays_by_hwnd[target_hwnd]:
                 self.overlays_by_hwnd[target_hwnd].remove(overlay)
+                self.logger.info("[OVERLAY_MANAGER] Оверлей удален из overlays_by_hwnd")
+
                 if not self.overlays_by_hwnd[target_hwnd]:
                     del self.overlays_by_hwnd[target_hwnd]
+                    self.logger.info("[OVERLAY_MANAGER] Список оверлеев для HWND пуст, удален")
 
-                    # === ОЧИЩАЕМ СОСТОЯНИЕ ОКНА ===
+                    # Очищаем состояние окна
                     if hasattr(self.parent, '_clear_window_state'):
                         self.parent._clear_window_state(target_hwnd)
+                        self.logger.info("[OVERLAY_MANAGER] Состояние окна очищено")
 
-                    # === УВЕДОМЛЯЕМ РОДИТЕЛЯ ОБ УДАЛЕНИИ ОВЕРЛЕЯ ===
+                    # Уведомляем родителя об удалении
                     if self.parent and hasattr(self.parent, '_on_overlay_removed'):
                         try:
                             self.parent._on_overlay_removed(target_hwnd)
+                            self.logger.info("[OVERLAY_MANAGER] Родитель уведомлен об удалении")
                         except Exception as e:
-                            self.logger.warning(f"[OVERLAY] Ошибка уведомления об удалении оверлея: {e}")
+                            self.logger.warning(f"[OVERLAY_MANAGER] Ошибка уведомления: {e}")
 
         # Удаляем из общего списка
         if overlay in self.overlays:
             self.overlays.remove(overlay)
+            self.logger.info("[OVERLAY_MANAGER] Оверлей удален из общего списка")
+        else:
+            self.logger.warning("[OVERLAY_MANAGER] Оверлей не найден в общем списке")
 
+        # === 3. ЗАКРЫВАЕМ ОВЕРЛЕЙ ===
         try:
+            self.logger.info("[OVERLAY_MANAGER] Вызов overlay.close()")
             overlay.close()
+            self.logger.info("[OVERLAY_MANAGER] overlay.close() выполнен")
         except Exception as e:
-            self.logger.error(f"Ошибка при закрытии оверлея: {e}")
+            self.logger.error(f"[OVERLAY_MANAGER] Ошибка при закрытии оверлея: {e}")
+            import traceback
+            traceback.print_exc()
 
-        # Сохраняем состояние после удаления
+        # === 4. СОХРАНЯЕМ СОСТОЯНИЕ ===
+        self.logger.info("[OVERLAY_MANAGER] Сохранение состояния...")
         self.save_overlay_state()
+        self.logger.info("[OVERLAY_MANAGER] Состояние сохранено")
+
+        self.logger.info("[OVERLAY_MANAGER] === remove_overlay ЗАВЕРШЕН ===")
 
     def save_position(self, overlay_id, art_x, art_y, art_w, art_h, icon_x=None, icon_y=None,
                       user_modified=False, offset_x=None, offset_y=None):

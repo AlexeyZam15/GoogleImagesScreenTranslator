@@ -11,33 +11,6 @@ class WindowListManager:
         self.window_listbox = window_listbox
         self._window_hwnd_map = window_hwnd_map
 
-    def show_overlays_for_selected(self):
-        """Показывает оверлеи для выбранного окна (принудительно)"""
-        hwnd = self.get_selected_hwnd()
-        if not hwnd:
-            return
-        overlays = self.app.overlay_manager.get_overlays_for_window(hwnd) if self.app.overlay_manager else []
-        if not overlays:
-            return
-
-        for overlay in overlays:
-            try:
-                overlay._forced_by_user = True
-                overlay._pinned_by_user = True
-                overlay.auto_hide_enabled = False
-                overlay._stop_visibility_monitor()
-                overlay._is_visible_by_user = True
-                overlay._hidden_by_user = False
-                overlay._hidden_by_mouse = False
-                if not overlay.visible:
-                    overlay.show()
-                else:
-                    overlay.root.lift()
-                    overlay.root.attributes('-topmost', True)
-                self.logger.info(f"[WINDOW_LIST] Принудительно показан оверлей для окна {hwnd}")
-            except Exception as e:
-                self.logger.warning(f"[WINDOW_LIST] Ошибка показа оверлея: {e}")
-
     def refresh(self):
         """Обновляет список окон с оверлеями"""
         try:
@@ -160,38 +133,55 @@ class WindowListManager:
             return None
         return self._window_hwnd_map.get(selection[0])
 
-    def hide_overlays_for_selected(self):
-        """Скрывает оверлеи для выбранного окна"""
-        hwnd = self.get_selected_hwnd()
-        if not hwnd:
-            return
-        overlays = self.app.overlay_manager.get_overlays_for_window(hwnd) if self.app.overlay_manager else []
-        if not overlays:
-            return
-
-        for overlay in overlays:
-            try:
-                overlay.visible = False
-                overlay.root.withdraw()
-                overlay.auto_hide_enabled = True
-                overlay._is_visible_by_user = False
-                overlay._hidden_by_user = True
-            except Exception as e:
-                self.logger.warning(f"[WINDOW_LIST] Ошибка скрытия оверлея: {e}")
-
     def remove_overlays_for_selected(self):
         """Удаляет оверлеи для выбранного окна"""
-        hwnd = self.get_selected_hwnd()
+        self.logger.info("[WINDOW_LIST] === remove_overlays_for_selected НАЧАЛО ===")
+
+        # Получаем выбранный индекс
+        selection = self.window_listbox.curselection()
+        self.logger.info(f"[WINDOW_LIST] Выделено: {selection}")
+
+        if not selection:
+            self.logger.warning("[WINDOW_LIST] Нет выбранного элемента")
+            return
+
+        # Получаем HWND по индексу
+        hwnd = self._window_hwnd_map.get(selection[0])
+        self.logger.info(f"[WINDOW_LIST] Получен HWND={hwnd} для индекса {selection[0]}")
+
         if not hwnd:
+            self.logger.warning("[WINDOW_LIST] HWND не найден")
             return
+
+        # Проверяем, что окно существует
+        if not win32gui.IsWindow(hwnd):
+            self.logger.warning(f"[WINDOW_LIST] Окно с HWND={hwnd} не существует")
+            return
+
+        # Получаем оверлеи для этого окна
         overlays = self.app.overlay_manager.get_overlays_for_window(hwnd) if self.app.overlay_manager else []
+        self.logger.info(f"[WINDOW_LIST] Найдено {len(overlays)} оверлеев для HWND={hwnd}")
+
         if not overlays:
+            self.logger.info("[WINDOW_LIST] Нет оверлеев для удаления")
             return
 
-        for overlay in overlays[:]:
+        # Удаляем каждый оверлей
+        removed_count = 0
+        for overlay in overlays[:]:  # Используем копию списка
             try:
+                self.logger.info(f"[WINDOW_LIST] Удаление оверлея: {overlay}")
                 self.app.overlay_manager.remove_overlay(overlay)
+                removed_count += 1
+                self.logger.info(f"[WINDOW_LIST] Оверлей удален (удалено: {removed_count})")
             except Exception as e:
-                self.logger.warning(f"[WINDOW_LIST] Ошибка удаления оверлея: {e}")
+                self.logger.error(f"[WINDOW_LIST] Ошибка удаления оверлея: {e}")
+                import traceback
+                traceback.print_exc()
 
-        self.app.root.after(100, self.refresh)
+        self.logger.info(f"[WINDOW_LIST] Удалено {removed_count} оверлеев")
+
+        # Обновляем список окон
+        self.logger.info("[WINDOW_LIST] Обновление списка окон...")
+        self.refresh()
+        self.logger.info("[WINDOW_LIST] === remove_overlays_for_selected ЗАВЕРШЕН ===")

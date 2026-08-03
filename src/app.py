@@ -196,7 +196,6 @@ class ScreenshotTranslatorApp:
         self.ui.update_status("● " + self.ui.get_string('ready'), '#4CAF50')
 
         self.window_list.refresh()
-        self._pending_command_ids = {}
 
     def _on_window_switch(self, new_hwnd):
         """Обработчик переключения окон"""
@@ -208,43 +207,21 @@ class ScreenshotTranslatorApp:
 
         self.logger.info(f"[WINDOW] Переключение окон: old_hwnd={old_hwnd}, new_hwnd={new_hwnd}")
 
-        if self.overlay_manager:
-            is_any_dragging = self.overlay_manager.is_dragging()
-            is_edit_mode = getattr(self, '_edit_mode_enabled', False)
-
-            for hwnd, overlays in list(self.overlay_manager.overlays_by_hwnd.items()):
-                for overlay in overlays:
-                    is_dragging = getattr(overlay, '_is_dragging', False)
-
-                    if is_any_dragging or is_dragging or is_edit_mode or getattr(overlay, '_pinned_by_user', False):
-                        continue
-
-                    if getattr(overlay, '_pinned_by_user', False) or getattr(overlay, '_forced_by_user', False):
-                        overlay._forced_by_user = False
-                        overlay._pinned_by_user = False
-                        overlay.auto_hide_enabled = True
-                        if overlay.visible:
-                            overlay.hide()
-
+        # Скрываем оверлеи старого окна
         if old_hwnd and self.overlay_manager:
             overlays = self.overlay_manager.get_overlays_for_window(old_hwnd)
             for overlay in overlays:
                 try:
-                    if getattr(self, '_edit_mode_enabled', False):
-                        continue
-                    if getattr(overlay, '_pinned_by_user', False) or getattr(overlay, '_forced_by_user', False):
-                        continue
                     if overlay.visible:
                         overlay.hide()
                 except Exception as e:
                     self.logger.warning(f"[WINDOW] Ошибка скрытия оверлея: {e}")
 
+        # Показываем оверлеи нового окна (только те, которые были видны пользователем)
         if new_hwnd and self.overlay_manager:
             overlays = self.overlay_manager.get_overlays_for_window(new_hwnd)
             for overlay in overlays:
                 try:
-                    if getattr(self, '_edit_mode_enabled', False):
-                        continue
                     if overlay._is_visible_by_user and not overlay.visible:
                         overlay.show()
                 except Exception as e:
@@ -268,32 +245,27 @@ class ScreenshotTranslatorApp:
         self.show_notification(f"✏️ Режим редактирования {status_text}")
 
         if self._edit_mode_enabled:
-            # Включаем режим: закрепляем и показываем панель для всех оверлеев
+            # Включаем режим: показываем панель для всех оверлеев
             for overlay in self.overlay_manager.overlays:
                 try:
-                    overlay._pinned_by_user = True
-                    overlay._forced_by_user = True
                     overlay.auto_hide_enabled = False
                     overlay._stop_visibility_monitor()
                     if not overlay.visible and overlay._is_visible_by_user:
                         overlay.show()
-                    # Показываем панель сразу
                     if overlay.visible and overlay._image_loaded:
                         overlay._show_title_bar()
                 except Exception as e:
-                    self.logger.warning(f"[EDIT_MODE] Ошибка закрепления оверлея: {e}")
+                    self.logger.warning(f"[EDIT_MODE] Ошибка показа панели оверлея: {e}")
         else:
-            # Выключаем режим: открепляем и скрываем панель
+            # Выключаем режим: скрываем панель
             for overlay in self.overlay_manager.overlays:
                 try:
-                    overlay._pinned_by_user = False
-                    overlay._forced_by_user = False
                     overlay.auto_hide_enabled = True
                     overlay._hide_title_bar()
                     if overlay.visible:
                         overlay._start_visibility_monitor()
                 except Exception as e:
-                    self.logger.warning(f"[EDIT_MODE] Ошибка открепления оверлея: {e}")
+                    self.logger.warning(f"[EDIT_MODE] Ошибка скрытия панели оверлея: {e}")
 
     def clear_all_overlays(self):
         """Удаляет все оверлеи (F4)"""
@@ -931,17 +903,18 @@ class ScreenshotTranslatorApp:
 
     # === КОНТЕКСТНОЕ МЕНЮ ===
 
-    def _context_show_overlays(self):
-        """Показать оверлеи для выбранного окна"""
-        self.window_list.show_overlays_for_selected()
-
-    def _context_hide_overlays(self):
-        """Скрыть оверлеи для выбранного окна"""
-        self.window_list.hide_overlays_for_selected()
-
     def _context_remove_overlays(self):
         """Удалить оверлеи для выбранного окна"""
+        self.logger.info("[CONTEXT] === _context_remove_overlays НАЧАЛО ===")
+
+        if not self.window_list:
+            self.logger.warning("[CONTEXT] window_list не инициализирован")
+            return
+
+        self.logger.info("[CONTEXT] Вызов window_list.remove_overlays_for_selected()")
         self.window_list.remove_overlays_for_selected()
+
+        self.logger.info("[CONTEXT] === _context_remove_overlays ЗАВЕРШЕН ===")
 
     # === НАСТРОЙКИ И ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ===
 

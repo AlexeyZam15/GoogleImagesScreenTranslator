@@ -72,67 +72,59 @@ class MainWindow:
         self.root.lift()
         self.root.focus_force()
 
+    def _create_context_menu(self):
+        """Создает контекстное меню для списка окон"""
+        self.logger.info("[CONTEXT_MENU] Создание контекстного меню")
+
+        self.context_menu = Menu(
+            self.window_listbox,
+            tearoff=0,
+            bg='#2d2d2d',
+            fg='white',
+            activebackground='#4CAF50',
+            activeforeground='white'
+        )
+
+        self.context_menu.add_command(
+            label="🗑️ Удалить оверлеи",
+            command=self.app._context_remove_overlays
+        )
+
+        self.logger.info("[CONTEXT_MENU] Контекстное меню создано")
+
+        # Привязываем ПКМ к списку
+        self.window_listbox.bind('<Button-3>', self._show_context_menu)
+        self.logger.info("[CONTEXT_MENU] Привязка <Button-3> выполнена")
+
     def _show_context_menu(self, event):
         """Показывает контекстное меню"""
+        self.logger.info(f"[CONTEXT_MENU] _show_context_menu вызван, event={event}")
+
         try:
             if self.context_menu is None:
+                self.logger.warning("[CONTEXT_MENU] Контекстное меню не создано")
                 self._create_context_menu()
 
+            # Определяем, на каком элементе произошел клик
             index = self.window_listbox.nearest(event.y)
+            self.logger.info(f"[CONTEXT_MENU] Индекс под курсором: {index}")
+
             if index >= 0:
-                self.window_listbox.selection_clear(0, END)
+                self.window_listbox.selection_clear(0, 'end')
                 self.window_listbox.selection_set(index)
-                # Обновляем текст кнопки в зависимости от состояния
-                hwnd = self._window_hwnd_map.get(index)
-                if hwnd and self.app.overlay_manager:
-                    overlays = self.app.overlay_manager.get_overlays_for_window(hwnd)
-                    any_visible = any(o.visible for o in overlays)
-                    if any_visible:
-                        self.context_menu.entryconfig(0, label="🙈 Скрыть", command=self.app._context_hide_overlays)
-                    else:
-                        self.context_menu.entryconfig(0, label="👁️ Показать", command=self.app._context_show_overlays)
+                self.logger.info(f"[CONTEXT_MENU] Выбран элемент {index}")
+            else:
+                self.logger.warning("[CONTEXT_MENU] Индекс под курсором отрицательный")
+
             self.context_menu.tk_popup(event.x_root, event.y_root)
+            self.logger.info("[CONTEXT_MENU] Меню показано")
+        except Exception as e:
+            self.logger.error(f"[CONTEXT_MENU] Ошибка показа меню: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
             self.context_menu.grab_release()
 
-    def _on_listbox_double_click(self, event):
-        """Обработчик двойного клика по списку окон - переключает видимость оверлеев"""
-        selection = self.window_listbox.curselection()
-        if not selection:
-            return
-        hwnd = self._window_hwnd_map.get(selection[0])
-        if not hwnd or not self.app.overlay_manager:
-            return
-
-        overlays = self.app.overlay_manager.get_overlays_for_window(hwnd)
-        if not overlays:
-            return
-
-        any_visible = any(o.visible for o in overlays)
-
-        if any_visible:
-            for overlay in overlays:
-                try:
-                    # При скрытии через список, сбрасываем флаг закрепления
-                    overlay._pinned_by_user = False
-                    overlay.visible = False
-                    overlay.root.withdraw()
-                    overlay._is_visible_by_user = False
-                    overlay._hidden_by_user = True
-                except:
-                    pass
-        else:
-            for overlay in overlays:
-                try:
-                    # При показе через список, устанавливаем флаг закрепления
-                    overlay._pinned_by_user = True
-                    overlay._is_visible_by_user = True
-                    overlay._hidden_by_user = False
-                    overlay._hidden_by_mouse = False
-                    if not overlay.visible:
-                        overlay.show()
-                except:
-                    pass
 
     def create_menu(self):
         """Создает главное меню"""
@@ -312,7 +304,7 @@ class MainWindow:
         )
         self.window_listbox.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
 
-        self.window_listbox.bind('<Double-Button-1>', self._on_listbox_double_click)
+        # Двойной клик удален - больше не нужен
 
     def update_ui_language(self):
         """Обновляет язык интерфейса"""
@@ -436,35 +428,6 @@ class MainWindow:
                         pass
         except Exception as e:
             self.logger.warning(f"[MENU] Ошибка при блокировке меню: {e}")
-
-    def _create_context_menu(self):
-        """Создает контекстное меню для списка окон"""
-        self.context_menu = Menu(self.window_listbox, tearoff=0, bg='#2d2d2d', fg='white',
-                                 activebackground='#4CAF50', activeforeground='white')
-        self.context_menu.add_command(label="Показать", command=self.app._context_show_overlays)
-        self.context_menu.add_separator()
-        self.context_menu.add_command(label="🗑️ Удалить оверлеи", command=self.app._context_remove_overlays)
-        self.window_listbox.bind('<Button-3>', self._show_context_menu)
-
-    def _show_context_menu(self, event):
-        """Показывает контекстное меню"""
-        try:
-            index = self.window_listbox.nearest(event.y)
-            if index >= 0:
-                self.window_listbox.selection_clear(0, END)
-                self.window_listbox.selection_set(index)
-                # Обновляем текст кнопки в зависимости от состояния
-                hwnd = self._window_hwnd_map.get(index)
-                if hwnd and self.app.overlay_manager:
-                    overlays = self.app.overlay_manager.get_overlays_for_window(hwnd)
-                    any_visible = any(o.visible for o in overlays)
-                    if any_visible:
-                        self.context_menu.entryconfig(0, label="🙈 Скрыть", command=self.app._context_hide_overlays)
-                    else:
-                        self.context_menu.entryconfig(0, label="👁️ Показать", command=self.app._context_show_overlays)
-            self.context_menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            self.context_menu.grab_release()
 
     def _on_lang_search(self, event):
         """Фильтрует список языков"""

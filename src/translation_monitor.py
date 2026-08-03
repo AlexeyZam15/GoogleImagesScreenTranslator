@@ -607,30 +607,26 @@ class TranslationMonitor:
 
     def remove_template(self, pair_index: int):
         """Удаляет шаблон по индексу."""
+        self.logger.info(f"[MONITOR] Удаление шаблона #{pair_index}")
         for i, template_data in enumerate(self.templates):
             if template_data['pair_index'] == pair_index:
-                if template_data['overlay']:
+                # Закрываем оверлей, если он есть
+                if template_data.get('overlay'):
                     try:
-                        template_data['overlay'].close()
-                    except:
-                        pass
+                        overlay = template_data['overlay']
+                        if overlay.root and overlay.root.winfo_exists():
+                            overlay.close()
+                    except Exception as e:
+                        self.logger.warning(f"[MONITOR] Ошибка закрытия оверлея при удалении: {e}")
                 del self.templates[i]
-                self.logger.info(f"Удален шаблон #{pair_index}")
+                self.logger.info(f"[MONITOR] ✅ Шаблон #{pair_index} удален. Осталось {len(self.templates)} шаблонов")
                 return
+        self.logger.warning(f"[MONITOR] ❌ Шаблон #{pair_index} не найден в списке")
 
     def stop(self):
-        """Останавливает мониторинг."""
+        """Останавливает мониторинг и скрывает все оверлеи."""
         self.monitoring = False
-        for template_data in self.templates:
-            template_data['found'] = False
-            if template_data.get('overlay'):
-                try:
-                    overlay = template_data['overlay']
-                    if overlay.visible:
-                        overlay.hide()
-                except:
-                    pass
-        self.logger.info("Мониторинг остановлен")
+        self.logger.info("[MONITOR] Мониторинг остановлен")
 
     def is_running(self) -> bool:
         return self.monitoring
