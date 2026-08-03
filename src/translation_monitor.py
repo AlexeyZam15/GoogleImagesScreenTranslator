@@ -84,15 +84,21 @@ class TranslationMonitor:
                 'hash': file_hash,
                 'found': False,
                 'last_position': None,
+                'last_template_position': None,
                 'overlay': None,
                 'enabled': True,
-                'target_hwnd': target_hwnd
+                'target_hwnd': target_hwnd,
+                # === НОВЫЕ ПОЛЯ ДЛЯ СМЕЩЕНИЯ ===
+                'offset_x': 0,
+                'offset_y': 0,
+                'offset_initialized': False,
+                'overlay_width': 0,
+                'overlay_height': 0
             }
 
             self.templates.append(template_data)
             self.logger.info(f"Добавлен шаблон #{pair_index} (хеш: {file_hash[:8]}) для окна HWND={target_hwnd}")
 
-            # Запускаем монитор если автозамена включена
             if self.settings and self.settings.get_auto_replace_translated():
                 if not self.monitoring:
                     self.start()
@@ -131,7 +137,10 @@ class TranslationMonitor:
 
     def _update_overlay_gui(self, template_data: Dict, x: int, y: int, w: int, h: int, translated_path: Path,
                             template_id: str):
-        """Обновляет или создает оверлей в главном потоке. Позиция вычисляется ДО создания."""
+        """
+        Обновляет или создает оверлей в главном потоке.
+        Позиция вычисляется: позиция шаблона + сохраненное смещение (offset).
+        """
         try:
             self.logger.info(
                 f"[DEBUG] === _update_overlay_gui НАЧАЛО для шаблона #{template_data.get('pair_index')} ===")
@@ -139,85 +148,117 @@ class TranslationMonitor:
             pair_index = template_data['pair_index']
             overlay = template_data.get('overlay')
             target_hwnd = template_data.get('target_hwnd')
+            is_found = template_data.get('found', False)
 
             if not template_id:
                 template_id = template_data.get('hash')
 
-            if template_data.get('found', False) is False:
-                self.logger.info(f"[DEBUG] Шаблон #{pair_index} больше не найден, пропускаем показ")
+            # === ЕСЛИ ШАБЛОН НЕ НАЙДЕН - СКРЫВАЕМ ОВЕРЛЕЙ ===
+            if not is_found:
+                self.logger.info(f"[DEBUG] Шаблон #{pair_index} не найден")
+                if overlay and overlay.visible:
+                    self._hide_overlay_in_main_thread(overlay, pair_index)
                 return
 
-            # === ВЫЧИСЛЯЕМ ФИНАЛЬНУЮ ПОЗИЦИЮ ===
-            final_x = x
-            final_y = y
-            final_w = w
-            final_h = h
+            # === ШАБЛОН НАЙДЕН - ПОКАЗЫВАЕМ И ОБНОВЛЯЕМ ПОЗИЦИЮ ===
+            template_x = x
+            template_y = y
+            template_w = w
+            template_h = h
 
-            # Если оверлей уже существует - проверяем сохраненную позицию
+            offset_x = template_data.get('offset_x', 0)
+            offset_y = template_data.get('offset_y', 0)
+
+            overlay_w = template_data.get('overlay_width', template_w)
+            overlay_h = template_data.get('overlay_height', template_h)
+
+            if overlay_w == 0 or overlay_h == 0:
+                overlay_w = template_w
+                overlay_h = template_h
+                template_data['overlay_width'] = overlay_w
+                template_data['overlay_height'] = overlay_h
+
+            final_x = template_x + offset_x
+            final_y = template_y + offset_y
+            final_w = overlay_w
+            final_h = overlay_h
+
+            current_template_pos = (template_x, template_y)
+            last_template_pos = template_data.get('last_template_position')
+
+            # === ЕСЛИ ОВЕРЛЕЙ УЖЕ СУЩЕСТВУЕТ ===
             if overlay:
                 try:
                     if overlay.root and overlay.root.winfo_exists():
-                        # === ВСЕГДА ПРОВЕРЯЕМ СОХРАНЕННУЮ ПОЗИЦИЮ ===
-                        saved_position = None
-                        if self.overlay_manager:
-                            saved_position = self.overlay_manager.get_saved_position(template_id)
+                        # ВСЕГДА ОБНОВЛЯЕМ ПОЗИЦИЮ, если она изменилась
+                        if last_template_pos is None or last_template_pos != current_template_pos:
+                            self.logger.info(
+                                f"[DEBUG] Позиция шаблона изменилась: {last_template_pos} -> {current_template_pos}")
 
-                        if saved_position:
-                            saved_x, saved_y = saved_position
-                            final_x = saved_x
-                            final_y = saved_y
-                            self.logger.info(f"[DEBUG] Используем сохраненную позицию оверлея: ({saved_x}, {saved_y})")
+                            # Устанавливаем новую геометрию
+                            overlay.root.geometry(f"{final_w}x{final_h}+{final_x}+{final_y}")
 
-                            # Если оверлей виден и позиция изменилась - обновляем
-                            if overlay.visible:
-                                current_x = overlay.root.winfo_x()
-                                current_y = overlay.root.winfo_y()
-                                if abs(current_x - saved_x) > 5 or abs(current_y - saved_y) > 5:
-                                    overlay.root.geometry(f"+{saved_x}+{saved_y}")
-                                    self.logger.info(
-                                        f"[DEBUG] Обновлена позиция оверлея на сохраненную: ({saved_x}, {saved_y})")
-                                # Если оверлей скрыт, но должен быть виден - показываем
-                                if not overlay.visible and overlay._is_visible_by_user and not overlay._hidden_by_user:
-                                    overlay._saved_position = (saved_x, saved_y)
-                                    overlay._user_moved = True
-                                    overlay.show()
-                                return
+                            # === ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ ОКНА ===
+                            overlay.root.update_idletasks()
+                            overlay.root.update()
+
+                            # === ОБНОВЛЯЕМ _last_window_rect ===
+                            overlay._last_window_rect = (final_x, final_y, final_x + final_w, final_y + final_h)
+
+                            # === ОБНОВЛЯЕМ _saved_position ===
+                            overlay._saved_position = (final_x, final_y)
+
+                            # === ОБНОВЛЯЕМ last_template_position ===
+                            template_data['last_template_position'] = current_template_pos
+
+                            # Обновляем панель заголовка, если она есть
+                            if overlay._title_bar_window and overlay._title_bar_window.winfo_exists():
+                                overlay._update_title_bar_position()
+
+                            self.logger.info(
+                                f"[DEBUG] Позиция оверлея обновлена: шаблон({template_x},{template_y}) + смещение({offset_x},{offset_y}) = ({final_x},{final_y}), размер {final_w}x{final_h}")
+
+                        # === КЛЮЧЕВОЕ: ПОКАЗЫВАЕМ ОВЕРЛЕЙ ТОЛЬКО КОГДА ШАБЛОН НАЙДЕН ===
+                        if not overlay.visible:
+                            self.logger.info(f"[DEBUG] Шаблон #{pair_index} найден, показываем оверлей")
+                            overlay._hidden_by_user = False
+                            overlay._hidden_by_mouse = False
+                            overlay._is_visible_by_user = True
+                            overlay.show()
                         else:
-                            # Нет сохраненной позиции - используем позицию шаблона
-                            self.logger.info(f"[DEBUG] Нет сохраненной позиции, используем позицию шаблона: ({x}, {y})")
-                            current_x = overlay.root.winfo_x()
-                            current_y = overlay.root.winfo_y()
-                            if abs(current_x - x) > 5 or abs(current_y - y) > 5:
-                                overlay.root.geometry(f"+{x}+{y}")
-                                self.logger.info(f"[DEBUG] Обновлена позиция оверлея на позицию шаблона: ({x}, {y})")
+                            overlay.root.lift()
+                            # Принудительно перерисовываем после поднятия
+                            overlay.root.update_idletasks()
 
-                            if not overlay.visible and overlay._is_visible_by_user and not overlay._hidden_by_user:
-                                overlay.show()
-                            elif overlay.visible:
-                                overlay.root.lift()
-                            return
+                        return
                     else:
                         template_data['overlay'] = None
                 except Exception as e:
                     self.logger.warning(f"[DEBUG] Ошибка при обновлении существующего оверлея: {e}")
                     template_data['overlay'] = None
 
-            # === СОЗДАЁМ НОВЫЙ ОВЕРЛЕЙ ===
+            # === СОЗДАЁМ НОВЫЙ ОВЕРЛЕЙ (ТОЛЬКО КОГДА ШАБЛОН НАЙДЕН) ===
             self.logger.info(f"[DEBUG] Создаем новый оверлей для шаблона #{pair_index}")
 
             if self.overlay_manager:
                 try:
-                    # Проверяем сохраненную позицию перед созданием
-                    saved_position = self.overlay_manager.get_saved_position(template_id)
-                    if saved_position:
-                        saved_x, saved_y = saved_position
-                        final_x = saved_x
-                        final_y = saved_y
-                        self.logger.info(f"[DEBUG] Создаем оверлей с сохраненной позицией: ({saved_x}, {saved_y})")
+                    if not template_data.get('offset_initialized', False):
+                        template_data['offset_x'] = 0
+                        template_data['offset_y'] = 0
+                        template_data['offset_initialized'] = True
+                        template_data['overlay_width'] = template_w
+                        template_data['overlay_height'] = template_h
+                        offset_x = 0
+                        offset_y = 0
+                        overlay_w = template_w
+                        overlay_h = template_h
+                        final_w = overlay_w
+                        final_h = overlay_h
+                        self.logger.info(f"[DEBUG] Смещение инициализировано: (0, 0), размер {overlay_w}x{overlay_h}")
 
                     window_rect = (final_x, final_y, final_x + final_w, final_y + final_h)
+                    self.logger.info(f"[DEBUG] window_rect для создания оверлея: {window_rect}")
 
-                    # Используем общий метод из overlay_manager с финальной позицией
                     new_overlay = self.overlay_manager._create_overlay_from_data(
                         image_path=translated_path,
                         window_rect=window_rect,
@@ -225,7 +266,7 @@ class TranslationMonitor:
                         is_auto_replace=True,
                         is_window_screenshot=False,
                         template_id=template_id,
-                        show_immediately=True,
+                        show_immediately=True,  # Показываем сразу, потому что шаблон найден!
                         saved_x=final_x,
                         saved_y=final_y,
                         saved_w=final_w,
@@ -234,20 +275,29 @@ class TranslationMonitor:
 
                     if new_overlay:
                         template_data['overlay'] = new_overlay
+                        template_data['last_template_position'] = current_template_pos
                         new_overlay._is_visible_by_user = True
                         new_overlay._is_auto_replace = True
                         new_overlay._creation_time = time.time()
                         new_overlay._monitor_stable_time = time.time() + 3.0
-                        new_overlay._user_moved = True  # Важно: помечаем как перемещенный, чтобы сохранялась позиция
                         new_overlay.auto_hide_enabled = False
                         new_overlay._stop_visibility_monitor()
 
+                        template_data['overlay_width'] = final_w
+                        template_data['overlay_height'] = final_h
+
+                        # === ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ ПОСЛЕ СОЗДАНИЯ ===
+                        new_overlay.root.update_idletasks()
+                        new_overlay.root.update()
+
                         self.logger.info(
-                            f"[MONITOR] Создан и показан новый оверлей для шаблона #{pair_index} в позиции ({final_x}, {final_y})")
+                            f"[MONITOR] Создан новый оверлей для шаблона #{pair_index} в позиции ({final_x}, {final_y}), размер {final_w}x{final_h}")
                     else:
                         self.logger.warning(f"[MONITOR] Не удалось создать оверлей для шаблона #{pair_index}")
                 except Exception as e:
                     self.logger.error(f"[MONITOR] Ошибка создания оверлея для шаблона #{pair_index}: {e}")
+                    import traceback
+                    traceback.print_exc()
             else:
                 self.logger.warning("[MONITOR] overlay_manager отсутствует")
 

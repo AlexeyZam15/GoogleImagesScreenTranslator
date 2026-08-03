@@ -202,7 +202,7 @@ class ScreenshotTranslatorApp:
         if new_hwnd == self._current_active_hwnd:
             return
 
-        # === НОВАЯ ПРОВЕРКА: ИГНОРИРУЕМ ОВЕРЛЕЙ ===
+        # === ИГНОРИРУЕМ ОВЕРЛЕЙ ===
         try:
             import win32gui
             class_name = win32gui.GetClassName(new_hwnd)
@@ -233,15 +233,18 @@ class ScreenshotTranslatorApp:
                 except Exception as e:
                     self.logger.warning(f"[WINDOW] Ошибка скрытия оверлея: {e}")
 
-        # Показываем оверлеи нового окна
+        # === ИСПРАВЛЕНИЕ: НЕ ПОКАЗЫВАЕМ ОВЕРЛЕИ ПРИ ПЕРЕКЛЮЧЕНИИ ===
+        # Оверлеи должны показываться ТОЛЬКО когда монитор найдет шаблон
+        # Поэтому убираем автоматический показ оверлеев для нового окна
+
+        # Вместо этого - просто обновляем состояние, монитор сам покажет оверлеи если найдет шаблоны
         if new_hwnd and self.overlay_manager:
+            # Проверяем, есть ли оверлеи для этого окна
             overlays = self.overlay_manager.get_overlays_for_window(new_hwnd)
-            for overlay in overlays:
-                try:
-                    if overlay._is_visible_by_user and not overlay.visible:
-                        overlay.show()
-                except Exception as e:
-                    self.logger.warning(f"[WINDOW] Ошибка показа оверлея: {e}")
+            if overlays:
+                self.logger.info(
+                    f"[WINDOW] Для окна {new_hwnd} есть {len(overlays)} оверлеев, они будут показаны монитором при обнаружении шаблона")
+                # Не показываем их здесь!
 
     def toggle_edit_mode(self):
         """Переключает режим редактирования"""

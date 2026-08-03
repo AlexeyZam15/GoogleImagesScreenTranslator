@@ -592,6 +592,31 @@ class OverlayWindow:
 
         if self.visible:
             self.logger.info("[DEBUG] show() - оверлей уже виден")
+            # === ПРОВЕРЯЕМ, НЕ ИЗМЕНИЛАСЬ ЛИ ПОЗИЦИЯ ===
+            if self._last_window_rect:
+                expected_x, expected_y, expected_x2, expected_y2 = self._last_window_rect
+                try:
+                    current_x = self.root.winfo_x()
+                    current_y = self.root.winfo_y()
+                    current_w = self.root.winfo_width()
+                    current_h = self.root.winfo_height()
+
+                    expected_w = expected_x2 - expected_x
+                    expected_h = expected_y2 - expected_y
+
+                    # Если позиция или размер изменились - обновляем
+                    if (abs(current_x - expected_x) > 2 or
+                            abs(current_y - expected_y) > 2 or
+                            abs(current_w - expected_w) > 2 or
+                            abs(current_h - expected_h) > 2):
+                        self.logger.info(
+                            f"[DEBUG] show() - позиция изменилась, обновляем: ({current_x},{current_y}) -> ({expected_x},{expected_y})")
+                        self.root.geometry(f"{expected_w}x{expected_h}+{expected_x}+{expected_y}")
+                        self.root.update_idletasks()
+                        self.root.update()
+                        self._saved_position = (expected_x, expected_y)
+                except Exception as e:
+                    self.logger.warning(f"[DEBUG] show() - ошибка проверки позиции: {e}")
             return
 
         self._hidden_by_user = False
@@ -606,9 +631,6 @@ class OverlayWindow:
             except Exception as e:
                 self.logger.warning(f"Ошибка отмены таймера при show: {e}")
             self._monitor_timer = None
-
-        # === ПОЗИЦИЯ УЖЕ УСТАНОВЛЕНА В _saved_position ===
-        # Просто показываем окно
 
         try:
             self.root.deiconify()
@@ -720,13 +742,41 @@ class OverlayWindow:
             if self.root and self.root.winfo_exists():
                 overlay_x = self.root.winfo_x()
                 overlay_y = self.root.winfo_y()
+                overlay_w = self.root.winfo_width()
+                overlay_h = self.root.winfo_height()
 
                 self._user_moved = True
 
+                # === ОБНОВЛЯЕМ СМЕЩЕНИЕ В ШАБЛОНЕ ===
                 if self._template_id and hasattr(self, '_overlay_manager') and self._overlay_manager:
+                    parent = self._overlay_manager.parent
+                    if parent and hasattr(parent, 'translation_monitor'):
+                        monitor = parent.translation_monitor
+                        if monitor:
+                            for template_data in monitor.templates:
+                                if template_data.get('hash') == self._template_id:
+                                    # Получаем последнюю позицию шаблона
+                                    last_template_pos = template_data.get('last_template_position')
+                                    if last_template_pos:
+                                        template_x, template_y = last_template_pos
+                                        # Вычисляем новое смещение
+                                        new_offset_x = overlay_x - template_x
+                                        new_offset_y = overlay_y - template_y
+                                        template_data['offset_x'] = new_offset_x
+                                        template_data['offset_y'] = new_offset_y
+                                        template_data['overlay_width'] = overlay_w
+                                        template_data['overlay_height'] = overlay_h
+                                        template_data['offset_initialized'] = True
+                                        self.logger.info(
+                                            f"[DEBUG] Обновлено смещение для шаблона {self._template_id[:8]}: "
+                                            f"({new_offset_x}, {new_offset_y})"
+                                        )
+                                    break
+
                     self._overlay_manager._save_overlay_position(self._template_id, overlay_x, overlay_y)
                     self.logger.info(
                         f"[DEBUG] Сохранена позиция оверлея для шаблона {self._template_id[:8]}: ({overlay_x}, {overlay_y})")
+
                 elif self._last_image_path and hasattr(self, '_overlay_manager') and self._overlay_manager:
                     overlay_id = str(self._last_image_path)
                     self._overlay_manager._save_overlay_position(overlay_id, overlay_x, overlay_y)
@@ -1449,8 +1499,6 @@ class OverlayWindow:
             self._images.append(photo)
             self.tk_image = photo
 
-            # === ГЕОМЕТРИЯ УЖЕ УСТАНОВЛЕНА В _create_overlay_from_data ===
-            # Просто настраиваем canvas
             self.canvas.delete("all")
             self.canvas.config(width=win_width, height=win_height)
             self.canvas.create_rectangle(0, 0, win_width, win_height, fill='#000000', outline='', tags=('bg_rect',))
@@ -1465,6 +1513,9 @@ class OverlayWindow:
             self._show_time = time.time()
             self._monitor_stable_time = time.time() + 2.0
             self._image_loaded = True
+
+            # === ОБНОВЛЯЕМ _last_window_rect ===
+            self._last_window_rect = window_rect
 
             if is_startup:
                 self.logger.info("[DEBUG] Режим запуска: окно скрыто")
