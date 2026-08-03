@@ -264,27 +264,28 @@ class ScreenshotTranslatorApp:
         self.show_notification(f"✏️ Режим редактирования {status_text}")
 
         if self._edit_mode_enabled:
-            # Включаем режим: показываем панель для всех оверлеев
+            # Включаем режим: отключаем автоскрытие и монитор видимости
             for overlay in self.overlay_manager.overlays:
                 try:
                     overlay.auto_hide_enabled = False
                     overlay._stop_visibility_monitor()
+                    # Показываем оверлей если он был скрыт
                     if not overlay.visible and overlay._is_visible_by_user:
                         overlay.show()
-                    if overlay.visible and overlay._image_loaded:
-                        overlay._show_title_bar()
+                    # НЕ ПОКАЗЫВАЕМ ПАНЕЛЬ АВТОМАТИЧЕСКИ
+                    # Панель будет показана только при наведении мыши
                 except Exception as e:
-                    self.logger.warning(f"[EDIT_MODE] Ошибка показа панели оверлея: {e}")
+                    self.logger.warning(f"[EDIT_MODE] Ошибка настройки оверлея: {e}")
         else:
-            # Выключаем режим: скрываем панель
+            # Выключаем режим: включаем автоскрытие и скрываем панели
             for overlay in self.overlay_manager.overlays:
                 try:
                     overlay.auto_hide_enabled = True
-                    overlay._hide_title_bar()
+                    overlay._hide_title_bar()  # Скрываем панель при выходе из режима
                     if overlay.visible:
                         overlay._start_visibility_monitor()
                 except Exception as e:
-                    self.logger.warning(f"[EDIT_MODE] Ошибка скрытия панели оверлея: {e}")
+                    self.logger.warning(f"[EDIT_MODE] Ошибка настройки оверлея: {e}")
 
     def clear_all_overlays(self):
         """Удаляет все оверлеи (F4)"""
@@ -461,7 +462,9 @@ class ScreenshotTranslatorApp:
                     self.logger.info("[DEBUG] Индикатор перевода скрыт (очередь пуста)")
 
     def toggle_overlay(self):
+        """Переключает видимость всех оверлеев (F1)"""
         self.logger.info("[DEBUG] toggle_overlay вызван")
+
         if not self.overlay_manager:
             self.logger.warning("toggle_overlay: менеджер оверлеев не инициализирован")
             return
@@ -470,6 +473,7 @@ class ScreenshotTranslatorApp:
             self.logger.info("toggle_overlay: нет активных оверлеев")
             return
 
+        # === УБРАНА БЛОКИРОВКА - F1 РАБОТАЕТ В ЛЮБОМ РЕЖИМЕ ===
         new_state = self.overlay_manager.toggle_all_overlays()
         status_text = "показаны" if new_state else "скрыты"
         self.show_notification(f"Оверлеи {status_text}")

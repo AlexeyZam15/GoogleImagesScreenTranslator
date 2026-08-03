@@ -62,19 +62,24 @@ class OverlayWindow:
         self._last_mouse_y = -1
         self._mouse_position_known = False
         self._user_moved = False
+        self._created_at_startup = False
 
-        # === ИНИЦИАЛИЗИРУЕМ АТРИБУТЫ ===
-        self._close_button_window = None
-        self._close_button_visible = False
+        # === АТРИБУТЫ ДЛЯ РАМКИ ===
+        self._edit_frame = None
+        self._edit_frame_visible = False
 
-        # Переменные для панели заголовка
-        self._title_bar_window = None
-        self._title_canvas = None
+        # === ПАНЕЛЬ ЗАГОЛОВКА (внутри оверлея) ===
         self._title_bar_visible = False
-        self._title_close_bg = None
-        self._title_close_cross1 = None
-        self._title_close_cross2 = None
+        self._title_bar_height = 24
+        self._title_bar_hide_timer = None
+        self._title_bar_hide_delay_ms = 400
+        self._close_button_rect = None
+        self._close_button_cross1 = None
+        self._close_button_cross2 = None
         self._mouse_over_title_bar = False
+
+        # === ОТСТУП ДЛЯ ИЗОБРАЖЕНИЯ КОГДА ПАНЕЛЬ ВИДНА ===
+        self._image_offset_y = 0
 
         self.root = tk.Toplevel(parent) if parent else tk.Toplevel()
         self.root.title("Перевод")
@@ -88,12 +93,10 @@ class OverlayWindow:
 
         self._drag_data = {"x": 0, "y": 0}
 
+        # === ПРИВЯЗКИ ТОЛЬКО К CANVAS ===
         self.canvas.bind('<ButtonPress-1>', self._start_drag)
         self.canvas.bind('<B1-Motion>', self._on_drag)
         self.canvas.bind('<ButtonRelease-1>', self._stop_drag)
-        self.root.bind('<ButtonPress-1>', self._start_drag)
-        self.root.bind('<B1-Motion>', self._on_drag)
-        self.root.bind('<ButtonRelease-1>', self._stop_drag)
 
         self.canvas.bind('<Button-3>', self._on_right_click)
         self.root.bind('<Button-3>', self._on_right_click)
@@ -105,6 +108,118 @@ class OverlayWindow:
 
         self.logger.info("OverlayWindow инициализирован")
 
+    def _update_image_position(self):
+        """Обновляет позицию изображения с учётом отступа панели."""
+        try:
+            if not self._image_loaded or self.tk_image is None:
+                return
+
+            width = self.root.winfo_width()
+            height = self.root.winfo_height()
+            img_width = self.tk_image.width()
+            img_height = self.tk_image.height()
+
+            x = (width - img_width) // 2
+            y = (height - img_height) // 2 + self._image_offset_y // 2
+
+            # Удаляем старое изображение и создаём заново
+            self.canvas.delete('image')
+            self.canvas.create_image(x, y, anchor=tk.NW, image=self.tk_image, tags=('image',))
+
+            # Если есть рамка - обновляем её
+            if self._edit_frame_visible:
+                self._update_edit_frame_position()
+
+            self.logger.debug(f"[DEBUG] _update_image_position: offset_y={self._image_offset_y}, pos=({x}, {y})")
+        except Exception as e:
+            self.logger.warning(f"[DEBUG] Ошибка обновления позиции изображения: {e}")
+
+    def _schedule_hide_title_bar(self):
+        """Запускает таймер для скрытия панели с задержкой."""
+        self._cancel_hide_title_bar()
+
+        if not self._title_bar_visible:
+            return
+
+        # Если мышь на панели - не скрываем
+        if self._mouse_over_title_bar:
+            return
+
+        self.logger.info(f"[DEBUG] _schedule_hide_title_bar: запуск таймера на {self._title_bar_hide_delay_ms}мс")
+
+        if self.root and self.root.winfo_exists():
+            self._title_bar_hide_timer = self.root.after(
+                self._title_bar_hide_delay_ms,
+                self._hide_title_bar
+            )
+
+    def _cancel_hide_title_bar(self):
+        """Отменяет запланированное скрытие панели."""
+        if self._title_bar_hide_timer is not None:
+            try:
+                if self.root and self.root.winfo_exists():
+                    self.root.after_cancel(self._title_bar_hide_timer)
+                    self.logger.info("[DEBUG] _cancel_hide_title_bar: таймер отменен")
+            except Exception as e:
+                self.logger.warning(f"[DEBUG] Ошибка отмены таймера: {e}")
+            self._title_bar_hide_timer = None
+
+    def _show_edit_frame(self):
+        """Показывает чёрную рамку вокруг оверлея (режим редактирования)."""
+        if not self.root or not self.root.winfo_exists():
+            return
+
+        if not self._image_loaded:
+            return
+
+        if self._edit_frame_visible:
+            return
+
+        try:
+            width = self.root.winfo_width()
+            height = self.root.winfo_height()
+
+            self._edit_frame = self.canvas.create_rectangle(
+                0, 0, width, height,
+                outline='#000000',
+                width=3,
+                tags=('edit_frame',)
+            )
+            self._edit_frame_visible = True
+            self.logger.info("[DEBUG] _show_edit_frame: рамка показана")
+
+        except Exception as e:
+            self.logger.warning(f"[DEBUG] Ошибка показа рамки: {e}")
+
+    def _hide_edit_frame(self):
+        """Скрывает чёрную рамку."""
+        if not self._edit_frame_visible:
+            return
+
+        try:
+            self.canvas.delete('edit_frame')
+            self._edit_frame = None
+            self._edit_frame_visible = False
+            self.logger.info("[DEBUG] _hide_edit_frame: рамка скрыта")
+        except Exception as e:
+            self.logger.warning(f"[DEBUG] Ошибка скрытия рамки: {e}")
+
+    def _update_edit_frame_position(self):
+        """Обновляет размеры рамки при изменении размера оверлея."""
+        if not self._edit_frame_visible or not self._edit_frame:
+            return
+
+        try:
+            width = self.root.winfo_width()
+            height = self.root.winfo_height()
+            self.canvas.coords(self._edit_frame, 0, 0, width, height)
+            self.canvas.tag_raise('edit_frame')
+            # Панель должна быть над рамкой
+            if self._title_bar_visible:
+                self.canvas.tag_raise('title_bar')
+        except Exception as e:
+            self.logger.warning(f"[DEBUG] Ошибка обновления рамки: {e}")
+
     def _on_title_bar_enter(self, event):
         """Обработчик входа мыши на панель заголовка."""
         self._mouse_over_title_bar = True
@@ -115,6 +230,7 @@ class OverlayWindow:
         """Обработчик выхода мыши с панели заголовка."""
         self._mouse_over_title_bar = False
         self.logger.debug("[DEBUG] _on_title_bar_leave: мышь покинула панель")
+
         # Проверяем, находится ли мышь над оверлеем
         try:
             import win32api
@@ -124,13 +240,15 @@ class OverlayWindow:
                         self.root.winfo_x() + self.root.winfo_width(),
                         self.root.winfo_y() + self.root.winfo_height())
                 if rect[0] <= cursor_x <= rect[2] and rect[1] <= cursor_y <= rect[3]:
-                    # Мышь над оверлеем - не скрываем панель
-                    self.logger.debug("[DEBUG] _on_title_bar_leave: мышь над оверлеем, панель не скрываем")
+                    # Мышь над оверлеем - не скрываем панель, но запускаем задержку
+                    self.logger.debug("[DEBUG] _on_title_bar_leave: мышь над оверлеем, запускаем задержку")
+                    self._schedule_hide_title_bar()
                     return
         except:
             pass
-        # Если мышь не над оверлеем - скрываем панель
-        self._hide_title_bar()
+
+        # Если мышь не над оверлеем - скрываем с задержкой
+        self._schedule_hide_title_bar()
 
     def _update_title_bar_position(self):
         """Обновляет позицию панели заголовка."""
@@ -220,18 +338,25 @@ class OverlayWindow:
             self._suppress_enter_events = False
             return
 
+        self._cancel_hide_title_bar()
+
+        # Защита от множественных вызовов
+        if self._mouse_over:
+            return
+
         self._mouse_over = True
         self.logger.info(f"[DEBUG] _on_mouse_enter: mouse_over=True, edit_mode={self._edit_mode_enabled}")
 
-        # === В РЕЖИМЕ РЕДАКТИРОВАНИЯ НЕ СКРЫВАЕМ ОВЕРЛЕЙ ===
+        if self._edit_mode_enabled and self.visible and self._image_loaded:
+            self._show_title_bar()
+            self.logger.info("[DEBUG] _on_mouse_enter: панель показана (режим редактирования)")
+        else:
+            self.logger.debug("[DEBUG] _on_mouse_enter: панель не показана (режим редактирования выключен)")
+
         if self._edit_mode_enabled:
             self.logger.info("[DEBUG] _on_mouse_enter: режим редактирования, оверлей не скрываем")
-            # Показываем панель, если её нет
-            if not self._title_bar_window or not self._title_bar_window.winfo_exists():
-                self._show_title_bar()
             return
 
-        # === ОБЫЧНОЕ ПОВЕДЕНИЕ: СКРЫВАЕМ ОВЕРЛЕЙ ===
         if self.visible and self._is_visible_by_user:
             self.logger.info("[DEBUG] _on_mouse_enter: скрываем оверлей (режим просмотра)")
             self._hidden_by_mouse = True
@@ -244,37 +369,19 @@ class OverlayWindow:
         if self._is_dragging:
             return
 
-        # Проверяем, не перешла ли мышь на панель
-        try:
-            if self._title_bar_window and self._title_bar_window.winfo_exists():
-                import win32api
-                cursor_x, cursor_y = win32api.GetCursorPos()
-                panel_x = self._title_bar_window.winfo_x()
-                panel_y = self._title_bar_window.winfo_y()
-                panel_w = self._title_bar_window.winfo_width()
-                panel_h = self._title_bar_window.winfo_height()
-                if panel_x <= cursor_x <= panel_x + panel_w and panel_y <= cursor_y <= panel_y + panel_h:
-                    self._mouse_over = True
-                    return
-        except Exception as e:
-            self.logger.debug(f"[DEBUG] _on_mouse_leave: ошибка проверки: {e}")
-
-        self._mouse_over = False
-        self.logger.info(f"[DEBUG] _on_mouse_leave: mouse_over=False, edit_mode={self._edit_mode_enabled}")
-
-        # === В РЕЖИМЕ РЕДАКТИРОВАНИЯ НЕ СКРЫВАЕМ ОВЕРЛЕЙ ===
-        if self._edit_mode_enabled:
-            self.logger.info("[DEBUG] _on_mouse_leave: режим редактирования, оверлей не скрываем")
-            # Панель остаётся видимой
-            if self._title_bar_window and self._title_bar_window.winfo_exists():
-                self._title_bar_window.lift()
-                self._update_title_bar_position()
-            else:
-                self._show_title_bar()
+        # Защита от множественных вызовов
+        if not self._mouse_over:
             return
 
-        # === ОБЫЧНОЕ ПОВЕДЕНИЕ ===
-        self._hide_title_bar()
+        self._mouse_over = False
+        self._mouse_over_title_bar = False
+        self.logger.info(f"[DEBUG] _on_mouse_leave: mouse_over=False, edit_mode={self._edit_mode_enabled}")
+
+        if self._edit_mode_enabled:
+            self._schedule_hide_title_bar()
+            self.logger.info("[DEBUG] _on_mouse_leave: режим редактирования, панель будет скрыта с задержкой")
+            return
+
         self._hidden_by_mouse = False
 
         if self._last_image_path and self._last_window_rect:
@@ -284,137 +391,133 @@ class OverlayWindow:
                     self._start_visibility_monitor()
 
     def _show_title_bar(self):
-        """Показывает панель заголовка над оверлеем."""
-        self.logger.info(f"[DEBUG] _show_title_bar: НАЧАЛО")
+        """Показывает панель заголовка внутри оверлея (только в режиме редактирования)."""
+        # === ПАНЕЛЬ ПОКАЗЫВАЕТСЯ ТОЛЬКО В РЕЖИМЕ РЕДАКТИРОВАНИЯ ===
+        if not self._edit_mode_enabled:
+            self.logger.debug("[DEBUG] _show_title_bar: режим редактирования выключен, пропускаем")
+            return
+
+        self.logger.info("[DEBUG] _show_title_bar: НАЧАЛО")
+
+        # Отменяем запланированное скрытие
+        self._cancel_hide_title_bar()
 
         if not self.root or not self.root.winfo_exists():
-            self.logger.warning("[DEBUG] _show_title_bar: root не существует")
             return
 
-        if not self.visible:
-            self.logger.warning("[DEBUG] _show_title_bar: оверлей не виден")
+        if not self.visible or not self._image_loaded:
             return
 
-        if not self._image_loaded:
-            self.logger.warning("[DEBUG] _show_title_bar: изображение не загружено")
+        if self._title_bar_visible:
+            self.logger.info("[DEBUG] _show_title_bar: панель уже видна")
             return
 
         try:
-            overlay_x = self.root.winfo_x()
-            overlay_y = self.root.winfo_y()
-            overlay_width = self.root.winfo_width()
-            title_height = 24
+            width = self.root.winfo_width()
+            title_h = self._title_bar_height
             btn_size = 18
             padding = 3
 
-            pos_x = overlay_x
-            pos_y = overlay_y - title_height
-            if pos_y < 0:
-                pos_y = overlay_y + 2
-
-            if self._title_bar_window and self._title_bar_window.winfo_exists():
-                self.logger.info("[DEBUG] _show_title_bar: панель уже существует, обновляем")
-                self._title_bar_window.geometry(f"{overlay_width}x{title_height}+{pos_x}+{pos_y}")
-                self._title_bar_window.deiconify()
-                self._title_bar_window.lift()
-                self._title_bar_visible = True
-                self._update_title_bar_position()
-                return
-
-            self.logger.info("[DEBUG] _show_title_bar: создаём новую панель")
-            self._title_bar_window = tk.Toplevel(self.root)
-            self._title_bar_window.overrideredirect(True)
-            self._title_bar_window.attributes('-topmost', True)
-            self._title_bar_window.attributes('-toolwindow', True)
-            self._title_bar_window.configure(bg='#2d2d2d')
-            self._title_bar_window.geometry(f"{overlay_width}x{title_height}+{pos_x}+{pos_y}")
-
-            self._title_canvas = tk.Canvas(
-                self._title_bar_window,
-                width=overlay_width,
-                height=title_height,
-                bg='#2d2d2d',
-                highlightthickness=0,
-                bd=0
+            # Рисуем фон панели
+            self.canvas.create_rectangle(
+                0, 0, width, title_h,
+                fill='#2d2d2d',
+                outline='',
+                tags=('title_bar',)
             )
-            self._title_canvas.pack(fill=tk.BOTH, expand=True)
 
-            close_x = overlay_width - btn_size - padding
-            close_y = (title_height - btn_size) // 2
+            # Разделительная линия
+            self.canvas.create_line(
+                0, title_h, width, title_h,
+                fill='#3c3c3c',
+                width=1,
+                tags=('title_bar',)
+            )
 
-            close_bg = self._title_canvas.create_rectangle(
+            # Кнопка закрытия (крестик)
+            close_x = width - btn_size - padding
+            close_y = (title_h - btn_size) // 2
+
+            self._close_button_rect = self.canvas.create_rectangle(
                 close_x, close_y,
                 close_x + btn_size, close_y + btn_size,
                 fill='#e74c3c',
                 outline='#c0392b',
                 width=1,
-                tags=('title_close',)
+                tags=('title_bar', 'title_close')
             )
 
             margin = 4
-            self._title_canvas.create_line(
+            self._close_button_cross1 = self.canvas.create_line(
                 close_x + margin, close_y + margin,
                 close_x + btn_size - margin, close_y + btn_size - margin,
                 fill='white',
                 width=2,
-                tags=('title_close',)
+                tags=('title_bar', 'title_close')
             )
-            self._title_canvas.create_line(
+            self._close_button_cross2 = self.canvas.create_line(
                 close_x + btn_size - margin, close_y + margin,
                 close_x + margin, close_y + btn_size - margin,
                 fill='white',
                 width=2,
-                tags=('title_close',)
+                tags=('title_bar', 'title_close')
             )
 
+            # Привязываем события к кнопке закрытия
             def on_close_enter(e):
-                self._title_bar_window.config(cursor='hand2')
-                self._title_canvas.itemconfig(close_bg, fill='#c0392b')
+                if self._close_button_rect:
+                    self.canvas.itemconfig(self._close_button_rect, fill='#c0392b')
 
             def on_close_leave(e):
-                self._title_bar_window.config(cursor='')
-                self._title_canvas.itemconfig(close_bg, fill='#e74c3c')
+                if self._close_button_rect:
+                    self.canvas.itemconfig(self._close_button_rect, fill='#e74c3c')
 
             def on_close_click(e):
                 self.logger.info("[DEBUG] _show_title_bar: нажат крестик!")
                 self._on_close_click(e)
 
-            self._title_canvas.tag_bind('title_close', '<Enter>', on_close_enter)
-            self._title_canvas.tag_bind('title_close', '<Leave>', on_close_leave)
-            self._title_canvas.tag_bind('title_close', '<Button-1>', on_close_click)
+            self.canvas.tag_bind('title_close', '<Enter>', on_close_enter)
+            self.canvas.tag_bind('title_close', '<Leave>', on_close_leave)
+            self.canvas.tag_bind('title_close', '<Button-1>', on_close_click)
 
-            self._title_canvas.bind('<ButtonPress-1>', self._start_drag)
-            self._title_canvas.bind('<B1-Motion>', self._on_drag)
-            self._title_canvas.bind('<ButtonRelease-1>', self._stop_drag)
-            self._title_bar_window.bind('<ButtonPress-1>', self._start_drag)
-            self._title_bar_window.bind('<B1-Motion>', self._on_drag)
-            self._title_bar_window.bind('<ButtonRelease-1>', self._stop_drag)
+            # Перетаскивание через панель
+            self.canvas.tag_bind('title_bar', '<ButtonPress-1>', self._start_drag)
+            self.canvas.tag_bind('title_bar', '<B1-Motion>', self._on_drag)
+            self.canvas.tag_bind('title_bar', '<ButtonRelease-1>', self._stop_drag)
 
-            self._title_bar_window.deiconify()
-            self._title_bar_window.lift()
+            # Поднимаем панель над изображением
+            self.canvas.tag_raise('title_bar')
+
+            # Обновляем отступ для изображения
+            self._image_offset_y = title_h
+            self._update_image_position()
+
             self._title_bar_visible = True
-            self.logger.info("[DEBUG] Панель заголовка показана над оверлеем")
+            self.logger.info("[DEBUG] Панель заголовка показана")
 
         except Exception as e:
-            self.logger.error(f"[DEBUG] Ошибка показа панели заголовка: {e}")
+            self.logger.error(f"[DEBUG] Ошибка показа панели: {e}")
             import traceback
             traceback.print_exc()
 
     def _hide_title_bar(self):
         """Скрывает панель заголовка."""
+        self._cancel_hide_title_bar()
+
+        if not self._title_bar_visible:
+            return
+
         try:
-            if self._title_bar_window and self._title_bar_window.winfo_exists():
-                self.logger.info("[DEBUG] _hide_title_bar: уничтожаем окно панели")
-                self._title_bar_window.destroy()
-            self._title_bar_window = None
-            self._title_canvas = None
+            self.canvas.delete('title_bar')
+            self._close_button_rect = None
+            self._close_button_cross1 = None
+            self._close_button_cross2 = None
             self._title_bar_visible = False
-            self.logger.info("[DEBUG] Панель заголовка полностью уничтожена")
+            self._image_offset_y = 0
+            self._update_image_position()
+            self.logger.info("[DEBUG] Панель заголовка скрыта")
         except Exception as e:
-            self.logger.warning(f"[DEBUG] Ошибка уничтожения панели заголовка: {e}")
-            self._title_bar_window = None
-            self._title_canvas = None
-            self._title_bar_visible = False
+            self.logger.warning(f"[DEBUG] Ошибка скрытия панели: {e}")
 
     def _hide_close_button(self):
         """Скрывает кнопку закрытия."""
@@ -438,14 +541,8 @@ class OverlayWindow:
 
         self._created_at_startup = False
 
-        # Всегда скрываем панель
+        # Скрываем панель (теперь она на canvas)
         self._hide_title_bar()
-
-        if self._title_bar_window and self._title_bar_window.winfo_exists():
-            self._title_bar_window.destroy()
-        self._title_bar_window = None
-        self._title_canvas = None
-        self._title_bar_visible = False
 
         try:
             if self.root and self.root.winfo_exists():
@@ -550,13 +647,19 @@ class OverlayWindow:
 
         self._edit_mode_enabled = edit_mode_enabled
 
-        if self.visible and self._image_loaded:
-            if edit_mode_enabled:
-                self._show_title_bar()
-                self.logger.info("[DEBUG] update_edit_mode: панель показана")
-            else:
-                self._hide_title_bar()
-                self.logger.info("[DEBUG] update_edit_mode: панель скрыта")
+        # Обновляем рамку
+        if edit_mode_enabled:
+            self._show_edit_frame()
+        else:
+            self._hide_edit_frame()
+            # При выключении режима редактирования скрываем панель
+            self._hide_title_bar()
+
+        # Если режим включён и мышь на оверлее - показываем панель
+        if edit_mode_enabled and self._mouse_over and self.visible and self._image_loaded:
+            self._show_title_bar()
+        else:
+            self._hide_title_bar()
 
     def _start_drag(self, event):
         """Начинает перетаскивание окна."""
@@ -566,6 +669,11 @@ class OverlayWindow:
 
         if not self.visible:
             self.logger.info("[DEBUG] _start_drag - оверлей скрыт, перетаскивание запрещено")
+            return "break"
+
+        # === ЗАЩИТА ОТ ПОВТОРНОГО ВЫЗОВА ===
+        if self._is_dragging:
+            self.logger.info("[DEBUG] _start_drag - уже перетаскивается, пропускаем")
             return "break"
 
         if self._drag_stop_timer:
@@ -605,13 +713,16 @@ class OverlayWindow:
 
     def _stop_drag(self, event):
         """Останавливает перетаскивание окна."""
+        if not self._is_dragging:
+            self.logger.info("[DEBUG] _stop_drag - не в режиме перетаскивания, пропускаем")
+            return
+
         self.logger.info("[DEBUG] _stop_drag вызван")
         self._is_dragging = False
         self._drag_data["x"] = 0
         self._drag_data["y"] = 0
         self.logger.info("[DEBUG] Конец перетаскивания, флаг _is_dragging=False")
 
-        # Сохраняем позицию
         try:
             if self.root and self.root.winfo_exists():
                 overlay_x = self.root.winfo_x()
@@ -619,9 +730,19 @@ class OverlayWindow:
                 overlay_w = self.root.winfo_width()
                 overlay_h = self.root.winfo_height()
 
+                screen_width = self.root.winfo_screenwidth()
+                screen_height = self.root.winfo_screenheight()
+
+                if overlay_x < -1000 or overlay_x > screen_width + 1000 or overlay_y < -1000 or overlay_y > screen_height + 1000:
+                    self.logger.warning(f"[DEBUG] Оверлей улетел за экран: ({overlay_x}, {overlay_y})")
+                    if self._saved_position:
+                        prev_x, prev_y = self._saved_position
+                        self.root.geometry(f"{overlay_w}x{overlay_h}+{prev_x}+{prev_y}")
+                        return
+                    return
+
                 self._user_moved = True
 
-                # === ОБНОВЛЯЕМ СМЕЩЕНИЕ В ШАБЛОНЕ ===
                 if self._template_id and hasattr(self, '_overlay_manager') and self._overlay_manager:
                     parent = self._overlay_manager.parent
                     if parent and hasattr(parent, 'translation_monitor'):
@@ -629,11 +750,9 @@ class OverlayWindow:
                         if monitor:
                             for template_data in monitor.templates:
                                 if template_data.get('hash') == self._template_id:
-                                    # Получаем последнюю позицию шаблона
                                     last_template_pos = template_data.get('last_template_position')
                                     if last_template_pos:
                                         template_x, template_y = last_template_pos
-                                        # Вычисляем новое смещение
                                         new_offset_x = overlay_x - template_x
                                         new_offset_y = overlay_y - template_y
                                         template_data['offset_x'] = new_offset_x
@@ -647,9 +766,9 @@ class OverlayWindow:
                                         )
                                     break
 
-                    self._overlay_manager._save_overlay_position(self._template_id, overlay_x, overlay_y)
-                    self.logger.info(
-                        f"[DEBUG] Сохранена позиция оверлея для шаблона {self._template_id[:8]}: ({overlay_x}, {overlay_y})")
+                        self._overlay_manager._save_overlay_position(self._template_id, overlay_x, overlay_y)
+                        self.logger.info(
+                            f"[DEBUG] Сохранена позиция оверлея для шаблона {self._template_id[:8]}: ({overlay_x}, {overlay_y})")
 
                 elif self._last_image_path and hasattr(self, '_overlay_manager') and self._overlay_manager:
                     overlay_id = str(self._last_image_path)
@@ -659,65 +778,42 @@ class OverlayWindow:
         except Exception as e:
             self.logger.warning(f"[DEBUG] Не удалось сохранить позицию оверлея: {e}")
 
-        # Сбрасываем глобальный флаг перетаскивания
         if hasattr(self, '_overlay_manager') and self._overlay_manager:
             self._overlay_manager.set_dragging(False)
             self.logger.info("[DEBUG] Глобальный флаг перетаскивания сброшен")
 
-        # Синхронизируем панель заголовка
-        if self._title_bar_window and self._title_bar_window.winfo_exists():
-            try:
-                overlay_x = self.root.winfo_x()
-                overlay_y = self.root.winfo_y()
-                overlay_width = self.root.winfo_width()
-                title_height = 24
+        # УБИРАЕМ СИНХРОНИЗАЦИЮ С _title_bar_window - панель внутри оверлея
 
-                pos_y_panel = overlay_y - title_height
-                if pos_y_panel < 0:
-                    pos_y_panel = overlay_y + 2
+        if self._edit_frame_visible:
+            self._update_edit_frame_position()
 
-                self._title_bar_window.geometry(f"{overlay_width}x{title_height}+{overlay_x}+{pos_y_panel}")
-                self._title_bar_window.lift()
-                self.logger.info("[DEBUG] _stop_drag: панель синхронизирована")
-            except Exception as e:
-                self.logger.warning(f"[DEBUG] _stop_drag: ошибка синхронизации панели: {e}")
-
-        # Сбрасываем флаги мыши
         self._hidden_by_mouse = False
         self._mouse_over = False
         self.logger.info("[DEBUG] _stop_drag: флаги _hidden_by_mouse и _mouse_over сброшены")
 
-        # === ОПТИМИЗАЦИЯ: Восстанавливаем сохранение состояния с задержкой ===
         if hasattr(self, '_overlay_manager') and self._overlay_manager:
             self._overlay_manager._suppress_save = False
-            # Отложенное сохранение состояния
             if self.root and self.root.winfo_exists():
                 self.root.after(500, self._overlay_manager.save_overlay_state)
                 self.logger.info("[DEBUG] _stop_drag: сохранение состояния запланировано через 500мс")
 
-        # Перезапускаем монитор видимости (если нужно)
         if self.auto_hide_enabled and not self._edit_mode_enabled:
             self._start_visibility_monitor()
             self.logger.info("[DEBUG] _stop_drag: монитор видимости перезапущен")
         elif self._edit_mode_enabled:
             self.logger.info("[DEBUG] _stop_drag: режим редактирования, монитор не запускаем")
-            # Убеждаемся, что панель видна
-            if self.visible and self._image_loaded:
+            if self._mouse_over and self.visible and self._image_loaded:
                 self._show_title_bar()
-                self.logger.info("[DEBUG] _stop_drag: панель заголовка обновлена")
 
-        # === ОПТИМИЗАЦИЯ: Восстанавливаем монитор автозамены с задержкой ===
         if hasattr(self, '_overlay_manager') and self._overlay_manager:
             parent = self._overlay_manager.parent
             if parent and hasattr(parent, 'translation_monitor'):
                 monitor = parent.translation_monitor
                 if monitor and monitor.templates:
-                    # Запускаем с задержкой, чтобы дать время GUI стабилизироваться
                     if self.root and self.root.winfo_exists():
                         self.root.after(300, monitor.start)
                         self.logger.info("[DEBUG] _stop_drag: монитор автозамены будет запущен через 300мс")
 
-        # Таймаут для стабилизации
         if self.root and self.root.winfo_exists():
             if self._drag_stop_timer:
                 try:
@@ -734,27 +830,12 @@ class OverlayWindow:
             self.root.geometry(f"+{x}+{y}")
             self._saved_position = (x, y)
 
-            # === ОПТИМИЗАЦИЯ: Уменьшаем частоту обновления панели ===
-            if hasattr(self, '_drag_counter'):
-                self._drag_counter += 1
-            else:
-                self._drag_counter = 0
+            # Обновляем рамку
+            if self._edit_frame_visible:
+                self._update_edit_frame_position()
 
-            # Обновляем панель реже (каждый 5-й кадр вместо каждого 3-го)
-            if self._drag_counter % 5 == 0:
-                if self._title_bar_window and self._title_bar_window.winfo_exists():
-                    try:
-                        overlay_width = self.root.winfo_width()
-                        title_height = 24
-                        pos_y_panel = y - title_height
-                        if pos_y_panel < 0:
-                            pos_y_panel = y + 2
-
-                        # Используем move вместо geometry (быстрее)
-                        self._title_bar_window.geometry(f"{overlay_width}x{title_height}+{x}+{pos_y_panel}")
-                        self._title_bar_window.lift()
-                    except Exception as e:
-                        self.logger.warning(f"[DEBUG] _on_drag: ошибка обновления панели: {e}")
+            # УБИРАЕМ ОБРАЩЕНИЕ К _title_bar_window - панель теперь внутри оверлея
+            # Синхронизация панели не нужна, так как она часть canvas
 
     def _show_close_button_forced(self):
         """Показывает кнопку закрытия НАД оверлеем (для закрепленных оверлеев)."""
@@ -1283,7 +1364,13 @@ class OverlayWindow:
             img = Image.open(image_path)
             self.logger.info(f"[DEBUG] Изображение открыто: {img.width}x{img.height}")
 
-            ratio = min(win_width / img.width, win_height / img.height)
+            # === ПРИ РАСЧЁТЕ РАЗМЕРА УЧИТЫВАЕМ ВЫСОТУ ПАНЕЛИ ===
+            # Если панель видна, изображение должно быть немного меньше
+            available_height = win_height - self._image_offset_y
+            if available_height < 10:
+                available_height = win_height
+
+            ratio = min(win_width / img.width, available_height / img.height)
             new_w = int(img.width * ratio)
             new_h = int(img.height * ratio)
             self.logger.info(f"[DEBUG] ratio={ratio}, new_w={new_w}, new_h={new_h}")
@@ -1300,11 +1387,18 @@ class OverlayWindow:
 
             self.canvas.delete("all")
             self.canvas.config(width=win_width, height=win_height)
+
+            # Фон
             self.canvas.create_rectangle(0, 0, win_width, win_height, fill='#000000', outline='', tags=('bg_rect',))
 
+            # Изображение с учётом отступа
             x = (win_width - new_w) // 2
-            y = (win_height - new_h) // 2
-            self.canvas.create_image(x, y, anchor=tk.NW, image=self.tk_image)
+            y = (win_height - new_h) // 2 + self._image_offset_y // 2
+            self.canvas.create_image(x, y, anchor=tk.NW, image=self.tk_image, tags=('image',))
+
+            # Если режим редактирования включён - показываем рамку
+            if self._edit_mode_enabled:
+                self._show_edit_frame()
 
             self.root.update_idletasks()
 
@@ -1312,8 +1406,6 @@ class OverlayWindow:
             self._show_time = time.time()
             self._monitor_stable_time = time.time() + 2.0
             self._image_loaded = True
-
-            # === ОБНОВЛЯЕМ _last_window_rect ===
             self._last_window_rect = window_rect
 
             if is_startup:
@@ -1328,6 +1420,9 @@ class OverlayWindow:
                 self.visible = True
                 self._ensure_topmost()
                 self._enable_esc_hook()
+
+                if self._edit_frame_visible:
+                    self._update_edit_frame_position()
 
                 if self.auto_hide_enabled:
                     self.root.after(1500, self._start_visibility_monitor_delayed)
@@ -1444,10 +1539,9 @@ class OverlayWindow:
             self._monitor_timer = self.root.after(200, check_visibility)
 
     def _show_window_safe(self):
-        """Безопасно показывает окно (вызывается из root.after)."""
+        """Безопасно показывает окно."""
         try:
             if self.root and self.root.winfo_exists():
-                # ===== НЕ КОРРЕКТИРУЕМ ПОЗИЦИЮ, ЕСЛИ ЕСТЬ СОХРАНЕННАЯ =====
                 if not (self._saved_position and hasattr(self, '_user_moved') and self._user_moved):
                     if self._last_window_rect:
                         x1, y1, x2, y2 = self._last_window_rect
@@ -1456,19 +1550,18 @@ class OverlayWindow:
                         current_x = self.root.winfo_x()
                         current_y = self.root.winfo_y()
                         if current_x != x1 or current_y != y1:
-                            self.logger.info(
-                                f"[DEBUG] _show_window_safe: корректируем позицию с {current_x},{current_y} на {x1},{y1}")
                             self.root.geometry(f"{width}x{height}+{x1}+{y1}")
                             self.root.update_idletasks()
                 else:
                     self.logger.info("[DEBUG] _show_window_safe: сохраненная позиция есть, не корректируем")
 
                 self.root.deiconify()
-                self.logger.info("[DEBUG] _show_window_safe: root.deiconify() выполнен")
                 self.root.lift()
-                self.logger.info("[DEBUG] _show_window_safe: root.lift() выполнен")
-
                 self.root.update_idletasks()
+
+                # Обновляем рамку после показа
+                if self._edit_frame_visible:
+                    self._update_edit_frame_position()
         except Exception as e:
             self.logger.error(f"[DEBUG] _show_window_safe: ошибка: {e}")
 
@@ -1605,7 +1698,7 @@ class OverlayWindow:
             except:
                 pass
 
-            # === ВСЕГДА СКРЫВАЕМ ПАНЕЛЬ ===
+            # Скрываем панель (теперь на canvas)
             self._hide_title_bar()
 
             self.visible = False
@@ -1790,25 +1883,12 @@ class OverlayWindow:
                 pass
 
     def close(self):
+        """Закрывает оверлей."""
         self.logger.info("close() вызван")
 
-        # === ПРИНУДИТЕЛЬНО УНИЧТОЖАЕМ ПАНЕЛЬ ЗАГОЛОВКА ===
-        try:
-            if self._title_bar_window and self._title_bar_window.winfo_exists():
-                self.logger.info("[DEBUG] close: уничтожаем панель заголовка")
-                self._title_bar_window.destroy()
-            self._title_bar_window = None
-            self._title_canvas = None
-            self._title_bar_visible = False
-        except Exception as e:
-            self.logger.warning(f"[DEBUG] close: ошибка уничтожения панели: {e}")
-            self._title_bar_window = None
-            self._title_canvas = None
-            self._title_bar_visible = False
+        self._hide_edit_frame()
+        self._hide_title_bar()
 
-        self.logger.info("[DEBUG] Панель заголовка уничтожена при закрытии оверлея")
-
-        # === УВЕДОМЛЯЕМ МОНИТОР ===
         if hasattr(self, '_overlay_manager') and self._overlay_manager:
             parent = self._overlay_manager.parent
             if parent and hasattr(parent, 'translation_monitor') and parent.translation_monitor:
@@ -1819,7 +1899,6 @@ class OverlayWindow:
                             f"[MONITOR] Ссылка на оверлей сброшена для шаблона #{template.get('pair_index')}")
                         break
 
-        # Очищаем Canvas
         try:
             if self.canvas and self.canvas.winfo_exists():
                 self.canvas.delete("all")
@@ -1832,7 +1911,6 @@ class OverlayWindow:
         self._disable_esc_hook()
         self._context_menu_visible = False
 
-        # Получаем координаты оверлея до закрытия
         rect = None
         try:
             if self.root and self.root.winfo_exists():
@@ -1852,7 +1930,6 @@ class OverlayWindow:
                 pass
             self._drag_stop_timer = None
 
-        # Скрываем и закрываем окно
         try:
             if self.root and self.root.winfo_exists():
                 self.root.withdraw()
@@ -1875,29 +1952,16 @@ class OverlayWindow:
         except:
             pass
 
-        # Перерисовываем область
         if rect:
             try:
                 import win32gui
                 import win32con
-
                 target_hwnd = self._target_hwnd
-
                 if target_hwnd and win32gui.IsWindow(target_hwnd):
                     win32gui.InvalidateRect(target_hwnd, (rect[0], rect[1], rect[2], rect[3]), True)
                     win32gui.UpdateWindow(target_hwnd)
                     win32gui.RedrawWindow(
                         target_hwnd,
-                        (rect[0], rect[1], rect[2], rect[3]),
-                        None,
-                        win32con.RDW_INVALIDATE | win32con.RDW_UPDATENOW | win32con.RDW_ALLCHILDREN | win32con.RDW_FRAME | win32con.RDW_ERASE
-                    )
-                else:
-                    hwnd_desktop = win32gui.GetDesktopWindow()
-                    win32gui.InvalidateRect(hwnd_desktop, (rect[0], rect[1], rect[2], rect[3]), True)
-                    win32gui.UpdateWindow(hwnd_desktop)
-                    win32gui.RedrawWindow(
-                        hwnd_desktop,
                         (rect[0], rect[1], rect[2], rect[3]),
                         None,
                         win32con.RDW_INVALIDATE | win32con.RDW_UPDATENOW | win32con.RDW_ALLCHILDREN | win32con.RDW_FRAME | win32con.RDW_ERASE

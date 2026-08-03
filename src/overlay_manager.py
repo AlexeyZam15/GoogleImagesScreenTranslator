@@ -185,7 +185,8 @@ class OverlayManager:
                 else:
                     overlay._hidden_by_user = True
                     overlay._is_visible_by_user = False
-                    overlay.hide()
+                    # hide() теперь не использует _title_bar_window
+                    overlay.hide(by_user=True)
             except Exception as e:
                 self.logger.error(f"Ошибка при переключении оверлея: {e}")
 
@@ -1041,6 +1042,8 @@ class OverlayManager:
             try:
                 if overlay is not None:
                     overlay.update_edit_mode(edit_mode_enabled)
+                    # НЕ ПОКАЗЫВАЕМ ПАНЕЛЬ АВТОМАТИЧЕСКИ
+                    # Панель будет показана только при наведении мыши
             except Exception as e:
                 self.logger.warning(f"Ошибка обновления режима редактирования для оверлея: {e}")
 
