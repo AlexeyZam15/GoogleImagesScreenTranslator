@@ -286,7 +286,7 @@ class ScreenshotTranslatorApp:
         self._edit_mode_enabled = not getattr(self, '_edit_mode_enabled', False)
         self.settings.set_edit_mode_enabled(self._edit_mode_enabled)
 
-        # Обновляем все оверлеи
+        # Обновляем все оверлеи (только режим редактирования, без принудительного показа)
         self.overlay_manager.update_edit_mode_for_all(self._edit_mode_enabled)
 
         status_text = "включён" if self._edit_mode_enabled else "выключен"
@@ -301,19 +301,15 @@ class ScreenshotTranslatorApp:
                 try:
                     overlay.auto_hide_enabled = False
                     overlay._stop_visibility_monitor()
-                    # Показываем оверлей если он был скрыт
-                    if not overlay.visible and overlay._is_visible_by_user:
-                        overlay.show()
-                    # НЕ ПОКАЗЫВАЕМ ПАНЕЛЬ АВТОМАТИЧЕСКИ
-                    # Панель будет показана только при наведении мыши
+                    # НЕ ПОКАЗЫВАЕМ ОВЕРЛЕЙ ПРИНУДИТЕЛЬНО!
+                    # Оверлеи показываются только когда монитор находит шаблон
                 except Exception as e:
                     self.logger.warning(f"[EDIT_MODE] Ошибка настройки оверлея: {e}")
         else:
-            # Выключаем режим: включаем автоскрытие и скрываем панели
+            # Выключаем режим: включаем автоскрытие
             for overlay in self.overlay_manager.overlays:
                 try:
                     overlay.auto_hide_enabled = True
-                    overlay._hide_title_bar()  # Скрываем панель при выходе из режима
                     if overlay.visible:
                         overlay._start_visibility_monitor()
                 except Exception as e:
