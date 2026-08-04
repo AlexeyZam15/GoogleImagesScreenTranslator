@@ -48,7 +48,9 @@ class OverlayWindow:
         '_showing_in_progress', '_hiding_in_progress', '_updating_visibility',
         '_overlay_manager', '_update_timer',
         # === НОВЫЕ АТРИБУТЫ ДЛЯ СМЕЩЕНИЯ ===
-        '_offset_x', '_offset_y'
+        '_offset_x', '_offset_y',
+        # === НОВЫЕ АТРИБУТЫ ДЛЯ ГЕОМЕТРИИ ПАНЕЛИ ===
+        '_saved_window_height', '_saved_window_y'
     )
 
     def __init__(self, parent=None, app_title="Перевод скриншотов", auto_hide_enabled=True):
@@ -118,10 +120,14 @@ class OverlayWindow:
         self._close_button_cross2 = None
         self._mouse_over_title_bar = False
 
-        # Отступ для изображения
+        # Отступ для изображения (больше не используется, но оставлен для совместимости)
         self._image_offset_y = 0
 
-        # === НОВЫЕ АТРИБУТЫ ДЛЯ СМЕЩЕНИЯ (ИНИЦИАЛИЗАЦИЯ) ===
+        # === НОВЫЕ АТРИБУТЫ ДЛЯ ГЕОМЕТРИИ ПАНЕЛИ ===
+        self._saved_window_height = None
+        self._saved_window_y = None
+
+        # === НОВЫЕ АТРИБУТЫ ДЛЯ СМЕЩЕНИЯ ===
         self._offset_x = 0
         self._offset_y = 0
 
@@ -314,7 +320,7 @@ class OverlayWindow:
             self.logger.warning(f"[TEMP] Ошибка скрытия индикатора: {e}")
 
     def _update_image_position(self):
-        """Обновляет позицию изображения с учётом отступа панели."""
+        """Обновляет позицию изображения без смещения."""
         try:
             if not self._image_loaded or self.tk_image is None:
                 return
@@ -324,8 +330,9 @@ class OverlayWindow:
             img_width = self.tk_image.width()
             img_height = self.tk_image.height()
 
+            # Центрируем изображение
             x = (width - img_width) // 2
-            y = (height - img_height) // 2 + self._image_offset_y // 2
+            y = (height - img_height) // 2
 
             # Удаляем старое изображение и создаём заново
             self.canvas.delete('image')
@@ -335,7 +342,7 @@ class OverlayWindow:
             if self._edit_frame_visible:
                 self._update_edit_frame_position()
 
-            self.logger.debug(f"[DEBUG] _update_image_position: offset_y={self._image_offset_y}, pos=({x}, {y})")
+            self.logger.debug(f"[DEBUG] _update_image_position: pos=({x}, {y})")
         except Exception as e:
             self.logger.warning(f"[DEBUG] Ошибка обновления позиции изображения: {e}")
 
@@ -597,14 +604,12 @@ class OverlayWindow:
 
     def _show_title_bar(self):
         """Показывает панель заголовка внутри оверлея (только в режиме редактирования)."""
-        # === ПАНЕЛЬ ПОКАЗЫВАЕТСЯ ТОЛЬКО В РЕЖИМЕ РЕДАКТИРОВАНИЯ ===
         if not self._edit_mode_enabled:
             self.logger.debug("[DEBUG] _show_title_bar: режим редактирования выключен, пропускаем")
             return
 
         self.logger.info("[DEBUG] _show_title_bar: НАЧАЛО")
 
-        # Отменяем запланированное скрытие
         self._cancel_hide_title_bar()
 
         if not self.root or not self.root.winfo_exists():
@@ -618,7 +623,22 @@ class OverlayWindow:
             return
 
         try:
-            width = self.root.winfo_width()
+            # Сохраняем текущую геометрию окна
+            current_x = self.root.winfo_x()
+            current_y = self.root.winfo_y()
+            current_width = self.root.winfo_width()
+            current_height = self.root.winfo_height()
+
+            # Сохраняем исходную высоту для восстановления
+            self._saved_window_height = current_height
+            self._saved_window_y = current_y
+
+            # Увеличиваем высоту окна на высоту панели
+            new_height = current_height + self._title_bar_height
+            self.root.geometry(f"{current_width}x{new_height}+{current_x}+{current_y}")
+            self.root.update_idletasks()
+
+            width = current_width
             title_h = self._title_bar_height
             btn_size = 18
             padding = 3
@@ -693,12 +713,11 @@ class OverlayWindow:
             # Поднимаем панель над изображением
             self.canvas.tag_raise('title_bar')
 
-            # Обновляем отступ для изображения
-            self._image_offset_y = title_h
+            # Обновляем позицию изображения (без смещения)
             self._update_image_position()
 
             self._title_bar_visible = True
-            self.logger.info("[DEBUG] Панель заголовка показана")
+            self.logger.info("[DEBUG] Панель заголовка показана, высота окна увеличена")
 
         except Exception as e:
             self.logger.error(f"[DEBUG] Ошибка показа панели: {e}")
@@ -706,21 +725,39 @@ class OverlayWindow:
             traceback.print_exc()
 
     def _hide_title_bar(self):
-        """Скрывает панель заголовка."""
+        """Скрывает панель заголовка и восстанавливает исходную высоту окна."""
         self._cancel_hide_title_bar()
 
         if not self._title_bar_visible:
             return
 
         try:
+            # Восстанавливаем исходную высоту окна
+            if hasattr(self, '_saved_window_height') and self._saved_window_height:
+                current_x = self.root.winfo_x()
+                current_y = self.root.winfo_y()
+                current_width = self.root.winfo_width()
+                original_height = self._saved_window_height
+
+                # Возвращаем окно на исходную позицию (если оно сместилось)
+                original_y = getattr(self, '_saved_window_y', current_y)
+                self.root.geometry(f"{current_width}x{original_height}+{current_x}+{original_y}")
+                self.root.update_idletasks()
+
+                self._saved_window_height = None
+                self._saved_window_y = None
+
+            # Удаляем панель с canvas
             self.canvas.delete('title_bar')
             self._close_button_rect = None
             self._close_button_cross1 = None
             self._close_button_cross2 = None
             self._title_bar_visible = False
-            self._image_offset_y = 0
+
+            # Обновляем позицию изображения
             self._update_image_position()
-            self.logger.info("[DEBUG] Панель заголовка скрыта")
+
+            self.logger.info("[DEBUG] Панель заголовка скрыта, высота окна восстановлена")
         except Exception as e:
             self.logger.warning(f"[DEBUG] Ошибка скрытия панели: {e}")
 

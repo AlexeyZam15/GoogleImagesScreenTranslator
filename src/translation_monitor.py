@@ -100,7 +100,7 @@ class TranslationMonitor:
                 current_time = time.time()
                 elapsed = current_time - last_time
 
-                # Динамическая задержка: сканируем постоянно
+                # --- ИСПРАВЛЕНИЕ: УБРАН ПРОПУСК ИТЕРАЦИЙ ПРИ БЕЗДЕЙСТВИИ ---
                 if elapsed < self.delay_sec:
                     time.sleep(0.02)
                     continue
@@ -130,7 +130,7 @@ class TranslationMonitor:
                     time.sleep(0.02)
                     continue
 
-                # --- ИСПРАВЛЕНИЕ 1: УБРАН ПРОПУСК ИТЕРАЦИЙ ПРИ БЕЗДЕЙСТВИИ ---
+                # --- ИСПРАВЛЕНИЕ: УБРАН ПРОПУСК ИТЕРАЦИЙ ПРИ БЕЗДЕЙСТВИИ ---
                 # Обновляем кэш имени приложения
                 if active_hwnd != self._last_active_hwnd:
                     self._last_active_hwnd = active_hwnd
@@ -444,6 +444,8 @@ class TranslationMonitor:
                 else:
                     # --- ИСПРАВЛЕНИЕ: ПРИНУДИТЕЛЬНО "ПРОБУЖДАЕМ" МОНИТОР ---
                     self.logger.info("Монитор уже запущен, сбрасываем кэш для немедленного сканирования")
+                    # Сбрасываем время последней проверки, чтобы монитор начал сканировать сразу
+                    self._last_check_time = 0
 
             return pair_index, file_hash
 

@@ -136,31 +136,41 @@ class OverlayManager:
                 if overlay._last_window_rect:
                     overlay_data['window_rect'] = overlay._last_window_rect
 
-                # Для автозамены: сохраняем шаблон
+                # --- СОХРАНЯЕМ ШАБЛОН ДЛЯ АВТОЗАМЕНЫ ---
                 if overlay._is_auto_replace and overlay._template_id:
                     if self.parent and hasattr(self.parent, 'translation_monitor'):
                         monitor = self.parent.translation_monitor
                         if monitor:
                             for template in monitor.templates:
                                 if template.get('hash') == overlay._template_id:
+                                    # Сохраняем путь к файлу шаблона
                                     template_path = template.get('template_path')
                                     if template_path and Path(template_path).exists():
                                         overlay_data['region_path'] = str(template_path)
+
+                                    # Сохраняем сам шаблон в base64 (если есть)
+                                    template_img = template.get('template')
+                                    if template_img is not None:
+                                        try:
+                                            import cv2
+                                            import base64
+                                            _, buffer = cv2.imencode('.png', template_img)
+                                            overlay_data['template_base64'] = base64.b64encode(buffer).decode('utf-8')
+                                            self.logger.debug(
+                                                f"[STATE] Шаблон {overlay._template_id[:8]} сохранён в base64")
+                                        except Exception as e:
+                                            self.logger.warning(f"[STATE] Не удалось сохранить шаблон в base64: {e}")
                                     break
 
-                # --- ИСПРАВЛЕНИЕ: формируем уникальный ключ ---
-                # Используем template_id если есть, иначе генерируем уникальный ID
+                # Формируем уникальный ключ
                 if overlay._template_id:
-                    # Проверяем, не занят ли этот template_id другим оверлеем
                     key = f"{app_name}_{overlay._template_id}"
-                    # Если такой ключ уже есть, добавляем суффикс
                     if key in states:
-                        # Добавляем суффикс с временем создания
                         key = f"{app_name}_{overlay._template_id}_{int(overlay._creation_time * 1000)}"
                         self.logger.warning(
-                            f"[STATE] Дублирующийся template_id {overlay._template_id}, используем ключ: {key}")
+                            f"[STATE] Дублирующийся template_id {overlay._template_id}, используем ключ: {key}"
+                        )
                 else:
-                    # Генерируем уникальный ключ на основе пути к изображению и времени
                     img_name = Path(overlay._last_image_path).stem if overlay._last_image_path else "unknown"
                     key = f"{app_name}_{img_name}_{int(overlay._creation_time * 1000)}"
 
@@ -463,7 +473,7 @@ class OverlayManager:
 
         restored_count = 0
 
-        # --- ИСПРАВЛЕНИЕ: СОБИРАЕМ ШАБЛОНЫ ДЛЯ МОНИТОРА ---
+        # --- СОБИРАЕМ ШАБЛОНЫ ДЛЯ МОНИТОРА ---
         templates_to_restore = []
 
         for key, state in states.items():
@@ -565,7 +575,9 @@ class OverlayManager:
                             'offset_x': offset_x,
                             'offset_y': offset_y,
                             'region_path_str': region_path_str,
-                            'template_base64': template_base64
+                            'template_base64': template_base64,
+                            'translated_path': image_path,
+                            'window_rect': window_rect
                         })
 
             except Exception as e:
@@ -575,38 +587,121 @@ class OverlayManager:
 
         self._restoring = False
 
-        # --- ИСПРАВЛЕНИЕ: ВОССТАНАВЛИВАЕМ ШАБЛОНЫ В МОНИТОРЕ ---
+        # --- ВОССТАНАВЛИВАЕМ ШАБЛОНЫ В МОНИТОРЕ ---
         if parent_app and hasattr(parent_app, 'translation_monitor'):
             monitor = parent_app.translation_monitor
             if monitor and templates_to_restore:
                 self.logger.info(f"[STATE] Восстановление {len(templates_to_restore)} шаблонов в мониторе...")
 
                 for template_info in templates_to_restore:
-                    # Ищем существующий шаблон в мониторе
-                    template_exists = False
-                    for template in monitor.templates:
-                        if template.get('hash') == template_info['template_id']:
-                            template_exists = True
-                            template['overlay'] = template_info['overlay']
-                            template['found'] = True
-                            template['offset_x'] = template_info['offset_x']
-                            template['offset_y'] = template_info['offset_y']
-                            template['offset_initialized'] = True
-                            template['overlay_width'] = template_info['saved_w']
-                            template['overlay_height'] = template_info['saved_h']
-                            self.logger.info(
-                                f"[STATE] Обновлена ссылка на оверлей для шаблона #{template.get('pair_index')}"
-                            )
-                            break
+                    try:
+                        template_id = template_info['template_id']
+                        overlay = template_info['overlay']
+                        target_hwnd = template_info['target_hwnd']
+
+                        # Проверяем, есть ли уже такой шаблон в мониторе
+                        template_exists = False
+                        for template in monitor.templates:
+                            if template.get('hash') == template_id:
+                                template_exists = True
+                                template['overlay'] = overlay
+                                template['found'] = False
+                                template['offset_x'] = template_info['offset_x']
+                                template['offset_y'] = template_info['offset_y']
+                                template['offset_initialized'] = True
+                                template['overlay_width'] = template_info['saved_w']
+                                template['overlay_height'] = template_info['saved_h']
+                                self.logger.info(
+                                    f"[STATE] Обновлена ссылка на оверлей для шаблона #{template.get('pair_index')}"
+                                )
+                                break
+
+                        if template_exists:
+                            continue
+
+                        # --- ВОССТАНАВЛИВАЕМ ШАБЛОН ИЗ СОХРАНЁННЫХ ДАННЫХ ---
+                        template_data = None
+                        region_path = None
+
+                        # Пробуем восстановить из region_path_str
+                        if template_info.get('region_path_str'):
+                            region_path = Path(template_info['region_path_str'])
+                            if not region_path.exists():
+                                self.logger.warning(f"[STATE] Файл шаблона не найден: {region_path}")
+                                region_path = None
+
+                        # Если нет region_path, пробуем восстановить из base64
+                        if not region_path and template_info.get('template_base64'):
+                            try:
+                                import cv2
+                                import numpy as np
+                                import tempfile
+
+                                img_data = base64.b64decode(template_info['template_base64'])
+                                nparr = np.frombuffer(img_data, np.uint8)
+                                template_img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+                                if template_img is not None:
+                                    # Сохраняем во временный файл
+                                    temp_dir = Path(tempfile.gettempdir()) / "screenshot_translator" / "templates"
+                                    temp_dir.mkdir(parents=True, exist_ok=True)
+                                    region_path = temp_dir / f"{template_id}.png"
+                                    cv2.imwrite(str(region_path), template_img)
+                                    self.logger.info(f"[STATE] Шаблон восстановлен из base64: {region_path}")
+                            except Exception as e:
+                                self.logger.warning(f"[STATE] Ошибка восстановления из base64: {e}")
+                                region_path = None
+
+                        # Если есть region_path, создаём шаблон в мониторе
+                        if region_path and region_path.exists():
+                            translated_path = template_info.get('translated_path')
+                            if translated_path and Path(translated_path).exists():
+                                # Добавляем шаблон в монитор
+                                pair_index, file_hash = monitor.add_template(
+                                    region_image=region_path,
+                                    translated_image=translated_path,
+                                    target_hwnd=target_hwnd
+                                )
+
+                                if pair_index >= 0:
+                                    # Обновляем ссылку на оверлей
+                                    for template in monitor.templates:
+                                        if template.get('hash') == file_hash:
+                                            template['overlay'] = overlay
+                                            template['found'] = False
+                                            template['offset_x'] = template_info['offset_x']
+                                            template['offset_y'] = template_info['offset_y']
+                                            template['offset_initialized'] = True
+                                            template['overlay_width'] = template_info['saved_w']
+                                            template['overlay_height'] = template_info['saved_h']
+                                            self.logger.info(
+                                                f"[STATE] Шаблон #{pair_index} восстановлен в мониторе"
+                                            )
+                                            break
+                            else:
+                                self.logger.warning(
+                                    f"[STATE] Файл перевода не найден: {translated_path}"
+                                )
+                        else:
+                            self.logger.warning(f"[STATE] Не удалось восстановить шаблон для {template_id}")
+
+                    except Exception as e:
+                        self.logger.error(f"[STATE] Ошибка восстановления шаблона: {e}")
+                        import traceback
+                        traceback.print_exc()
 
                 # --- ЗАПУСКАЕМ МОНИТОР, ЕСЛИ ЕСТЬ ШАБЛОНЫ И ВКЛЮЧЕНА АВТОЗАМЕНА ---
                 if parent_app.settings.get_auto_replace_translated() and monitor.templates:
                     if not monitor.is_running():
-                        self.logger.info("[STATE] Запуск монитора автозамены...")
+                        self.logger.info(f"[STATE] Запуск монитора автозамены с {len(monitor.templates)} шаблонами...")
                         monitor.start()
                         self.logger.info("[STATE] ✅ Монитор автозамены запущен")
                     else:
-                        self.logger.info("[STATE] Монитор уже запущен")
+                        self.logger.info(f"[STATE] Монитор уже запущен, шаблонов: {len(monitor.templates)}")
+                else:
+                    self.logger.info(
+                        f"[STATE] Монитор НЕ запущен: auto_replace={parent_app.settings.get_auto_replace_translated()}, templates={len(monitor.templates)}"
+                    )
 
         self.logger.info(f"[STATE] Восстановлено {restored_count} оверлеев")
 
@@ -647,9 +742,28 @@ class OverlayManager:
                                   is_startup: bool = False,
                                   offset_x: int = 0, offset_y: int = 0,
                                   is_temporary: bool = False,
-                                  lifetime_seconds: int = 180) -> Optional[OverlayWindow]:
+                                  lifetime_seconds: int = 180,
+                                  region_path: Path = None) -> Optional[OverlayWindow]:
         """
         ЕДИНСТВЕННЫЙ метод для создания оверлея.
+
+        Args:
+            image_path: Путь к переведённому изображению
+            window_rect: Прямоугольник окна (x1, y1, x2, y2)
+            target_hwnd: HWND целевого окна
+            is_auto_replace: Флаг автозамены
+            is_window_screenshot: Флаг скриншота окна
+            template_id: ID шаблона (hash)
+            show_immediately: Показывать ли сразу
+            saved_x, saved_y, saved_w, saved_h: Сохранённая позиция
+            is_startup: Флаг запуска при старте
+            offset_x, offset_y: Смещение
+            is_temporary: Временный ли оверлей
+            lifetime_seconds: Время жизни временного оверлея
+            region_path: Путь к файлу шаблона (для автозамены)
+
+        Returns:
+            OverlayWindow или None
         """
         # === ВЫЧИСЛЯЕМ ФИНАЛЬНУЮ ПОЗИЦИЮ ===
         if saved_x != 0 or saved_y != 0:
@@ -696,10 +810,14 @@ class OverlayManager:
             overlay._hidden_by_user = False
             overlay._image_loaded = True
 
-            # === СОХРАНЯЕМ СМЕЩЕНИЕ В ОВЕРЛЕЕ (БЕЗОПАСНО) ===
-            # Используем setattr для гарантии, что атрибут будет создан
+            # === СОХРАНЯЕМ СМЕЩЕНИЕ В ОВЕРЛЕЕ ===
             setattr(overlay, '_offset_x', offset_x)
             setattr(overlay, '_offset_y', offset_y)
+
+            # === СОХРАНЯЕМ ПУТЬ К ШАБЛОНУ (для автозамены) ===
+            if region_path is not None:
+                setattr(overlay, '_region_path', region_path)
+                self.logger.info(f"[OVERLAY] Сохранён путь к шаблону: {region_path}")
 
             if show_immediately:
                 overlay.visible = True
