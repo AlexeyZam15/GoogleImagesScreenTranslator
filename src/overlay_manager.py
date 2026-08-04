@@ -34,11 +34,56 @@ class OverlayManager:
         self._create_context_menu()
         self.logger.info("OverlayManager инициализирован")
 
+    def get_overlays_by_app_name(self, app_name: str):
+        """
+        Возвращает список оверлеев для указанного имени приложения.
+        """
+        from src.window_utils import get_process_name_by_hwnd
+
+        result = []
+        for overlay in self.overlays:
+            try:
+                target_hwnd = overlay.get_target_hwnd()
+                if target_hwnd:
+                    overlay_app_name = get_process_name_by_hwnd(target_hwnd)
+                    if overlay_app_name == app_name:
+                        result.append(overlay)
+            except Exception as e:
+                self.logger.warning(f"[OVERLAY] Ошибка получения имени для оверлея: {e}")
+        return result
+
+    def get_overlays_for_window(self, hwnd: int):
+        """
+        Возвращает список оверлеев для конкретного HWND.
+        СОХРАНЯЕТСЯ ДЛЯ ОБРАТНОЙ СОВМЕСТИМОСТИ.
+        """
+        return self.overlays_by_hwnd.get(hwnd, [])
+
+    def show_all_overlays_for_app(self, app_name: str):
+        """Показывает все оверлеи для указанного приложения"""
+        for overlay in self.get_overlays_by_app_name(app_name):
+            if overlay._is_visible_by_user and not overlay.visible:
+                overlay.show()
+                self.logger.debug(f"[OVERLAY] Показан оверлей для приложения {app_name}")
+
+    def hide_all_overlays_for_other_apps(self, active_app_name: str):
+        """Скрывает все оверлеи, кроме тех, что принадлежат активному приложению"""
+        for overlay in self.overlays:
+            try:
+                target_hwnd = overlay.get_target_hwnd()
+                if target_hwnd:
+                    from src.window_utils import get_process_name_by_hwnd
+                    overlay_app_name = get_process_name_by_hwnd(target_hwnd)
+                    if overlay_app_name != active_app_name and overlay.visible:
+                        overlay.hide()
+                        self.logger.debug(f"[OVERLAY] Скрыт оверлей для {overlay_app_name} (не активно)")
+            except Exception as e:
+                self.logger.warning(f"[OVERLAY] Ошибка при скрытии оверлея: {e}")
+
     def save_overlay_state(self):
         """
         Сохраняет состояние всех оверлеев в JSON-файл.
-        Сохраняет: позицию, путь к изображению, хеш шаблона, видимость, тип,
-        а также сам шаблон (регион) в base64 для автозамены и СМЕЩЕНИЕ.
+        Теперь использует app_name как основной идентификатор.
         """
         if self._suppress_save:
             self.logger.debug("[STATE] Сохранение состояния пропущено (_suppress_save=True)")
@@ -57,7 +102,11 @@ class OverlayManager:
                 w = overlay.root.winfo_width()
                 h = overlay.root.winfo_height()
 
-                app_name = self._get_app_name_for_hwnd(overlay._target_hwnd)
+                # Получаем имя приложения для этого оверлея
+                app_name = self._get_app_name_for_overlay(overlay)
+
+                # HWND сохраняем только для информации, НЕ используем как идентификатор
+                target_hwnd = overlay._target_hwnd
 
                 overlay_data = {
                     'x': x,
@@ -71,11 +120,10 @@ class OverlayManager:
                     'is_window_screenshot': overlay._is_window_screenshot,
                     'is_auto_replace': overlay._is_auto_replace,
                     'template_id': overlay._template_id,
-                    'target_hwnd': overlay._target_hwnd,
+                    'target_hwnd': target_hwnd,  # Для информации, НЕ для идентификации
                     'creation_time': overlay._creation_time,
                     'monitor_stable_time': overlay._monitor_stable_time,
-                    'app_name': app_name,
-                    # === СОХРАНЯЕМ СМЕЩЕНИЕ ===
+                    'app_name': app_name,  # ОСНОВНОЙ ИДЕНТИФИКАТОР
                     'offset_x': getattr(overlay, '_offset_x', 0),
                     'offset_y': getattr(overlay, '_offset_y', 0)
                 }
@@ -83,7 +131,7 @@ class OverlayManager:
                 if overlay._last_window_rect:
                     overlay_data['window_rect'] = overlay._last_window_rect
 
-                # === ДЛЯ АВТОЗАМЕНЫ: СОХРАНЯЕМ ШАБЛОН ===
+                # Для автозамены: сохраняем шаблон
                 if overlay._is_auto_replace and overlay._template_id:
                     if self.parent and hasattr(self.parent, 'translation_monitor'):
                         monitor = self.parent.translation_monitor
@@ -105,9 +153,13 @@ class OverlayManager:
                                             self.logger.warning(f"[STATE] Не удалось сохранить шаблон в base64: {e}")
                                     break
 
-                key = overlay._template_id if overlay._template_id else str(overlay._last_image_path)
-                if key:
-                    states[key] = overlay_data
+                # Используем app_name + template_id как ключ (если есть template_id)
+                if overlay._template_id:
+                    key = f"{app_name}_{overlay._template_id}"
+                else:
+                    key = f"{app_name}_{str(overlay._last_image_path)}"
+
+                states[key] = overlay_data
 
             except Exception as e:
                 self.logger.warning(f"[STATE] Ошибка сохранения состояния оверлея: {e}")
@@ -118,6 +170,16 @@ class OverlayManager:
             self.logger.info(f"[STATE] Сохранено состояние {len(states)} оверлеев в {state_file}")
         except Exception as e:
             self.logger.error(f"[STATE] Ошибка сохранения состояния: {e}")
+
+    def _get_app_name_for_overlay(self, overlay) -> str:
+        """Получает имя приложения для оверлея."""
+        if overlay._target_hwnd:
+            try:
+                from src.window_utils import get_process_name_by_hwnd
+                return get_process_name_by_hwnd(overlay._target_hwnd)
+            except Exception as e:
+                self.logger.warning(f"[STATE] Ошибка получения имени для оверлея: {e}")
+        return "Неизвестно"
 
     def _hide_overlay_under_cursor(self):
         """Скрывает оверлей под курсором (через контекстное меню)."""
@@ -331,7 +393,7 @@ class OverlayManager:
     def restore_overlays_from_state(self, parent_app):
         """
         Восстанавливает оверлеи из сохранённого состояния.
-        Используется при запуске приложения.
+        Использует app_name как основной идентификатор.
         """
         from pathlib import Path
         import base64
@@ -365,33 +427,51 @@ class OverlayManager:
                     self.logger.warning(f"[STATE] Нет rect окна для оверлея: {key}")
                     continue
 
-                target_hwnd = state.get('target_hwnd')
+                # Получаем имя приложения (ОСНОВНОЙ ИДЕНТИФИКАТОР)
+                app_name = state.get('app_name', 'Неизвестно')
+                target_hwnd = state.get('target_hwnd')  # Для информации
                 is_auto_replace = state.get('is_auto_replace', False)
                 is_window_screenshot = state.get('is_window_screenshot', False)
                 template_id = state.get('template_id')
                 region_path_str = state.get('region_path')
                 template_base64 = state.get('template_base64')
-                app_name = state.get('app_name', 'Неизвестно')
 
                 saved_x = state.get('x', 0)
                 saved_y = state.get('y', 0)
                 saved_w = state.get('width', 300)
                 saved_h = state.get('height', 200)
 
-                # === ВОССТАНАВЛИВАЕМ СМЕЩЕНИЕ ===
                 offset_x = state.get('offset_x', 0)
                 offset_y = state.get('offset_y', 0)
 
                 self.logger.info(
-                    f"[STATE] Восстановление оверлея: {key}, auto_replace={is_auto_replace}, "
-                    f"template_id={template_id}, target_hwnd={target_hwnd}, app_name={app_name}, "
-                    f"offset=({offset_x}, {offset_y})"
+                    f"[STATE] Восстановление оверлея: {key}, app_name={app_name}, "
+                    f"auto_replace={is_auto_replace}, template_id={template_id}"
                 )
 
+                # Если имя приложения "Неизвестно" - пробуем определить по HWND
+                if app_name == 'Неизвестно' and target_hwnd:
+                    try:
+                        from src.window_utils import get_process_name_by_hwnd
+                        app_name = get_process_name_by_hwnd(target_hwnd, default_name=app_name)
+                    except Exception as e:
+                        self.logger.warning(f"[STATE] Ошибка получения имени по HWND: {e}")
+
+                # Ищем окно с таким именем приложения
+                target_hwnd_to_use = None
+                if app_name != 'Неизвестно':
+                    target_hwnd_to_use = self._find_window_by_app_name(app_name)
+                    if target_hwnd_to_use:
+                        self.logger.info(f"[STATE] Найдено окно для {app_name}: HWND={target_hwnd_to_use}")
+                    else:
+                        self.logger.info(
+                            f"[STATE] Окно для {app_name} не найдено, оверлей будет скрыт до появления окна")
+
+                # Создаём оверлей
                 overlay = self._create_overlay_from_data(
                     image_path=image_path,
                     window_rect=window_rect,
-                    target_hwnd=target_hwnd,
+                    target_hwnd=target_hwnd_to_use or target_hwnd,
                     is_auto_replace=is_auto_replace,
                     is_window_screenshot=is_window_screenshot,
                     template_id=template_id,
@@ -401,24 +481,25 @@ class OverlayManager:
                     saved_w=saved_w,
                     saved_h=saved_h,
                     is_startup=True,
-                    offset_x=offset_x,  # <-- НОВЫЙ ПАРАМЕТР
-                    offset_y=offset_y  # <-- НОВЫЙ ПАРАМЕТР
+                    offset_x=offset_x,
+                    offset_y=offset_y
                 )
 
                 if overlay:
                     self.logger.info(
-                        f"[STATE] Оверлей {key} загружен, но НЕ ПОКАЗАН, HWND={target_hwnd}, app_name={app_name}"
+                        f"[STATE] Оверлей {key} загружен, app_name={app_name}"
                     )
                     restored_count += 1
 
-                    if target_hwnd not in self.overlays_by_hwnd:
-                        self.overlays_by_hwnd[target_hwnd] = []
-                    if overlay not in self.overlays_by_hwnd[target_hwnd]:
-                        self.overlays_by_hwnd[target_hwnd].append(overlay)
+                    if target_hwnd_to_use:
+                        if target_hwnd_to_use not in self.overlays_by_hwnd:
+                            self.overlays_by_hwnd[target_hwnd_to_use] = []
+                        if overlay not in self.overlays_by_hwnd[target_hwnd_to_use]:
+                            self.overlays_by_hwnd[target_hwnd_to_use].append(overlay)
                     if overlay not in self.overlays:
                         self.overlays.append(overlay)
 
-                    # === ДЛЯ АВТОЗАМЕНЫ: ВОССТАНАВЛИВАЕМ ШАБЛОН И СМЕЩЕНИЕ ===
+                    # Для автозамены: восстанавливаем шаблон
                     if is_auto_replace and parent_app and hasattr(parent_app, 'translation_monitor'):
                         monitor = parent_app.translation_monitor
                         if monitor and template_id:
@@ -429,15 +510,13 @@ class OverlayManager:
                                     template['overlay'] = overlay
                                     template['found'] = True
                                     template['last_position'] = (saved_x, saved_y, saved_w, saved_h)
-                                    # === ВОССТАНАВЛИВАЕМ СМЕЩЕНИЕ ===
                                     template['offset_x'] = offset_x
                                     template['offset_y'] = offset_y
                                     template['offset_initialized'] = True
                                     template['overlay_width'] = saved_w
                                     template['overlay_height'] = saved_h
                                     self.logger.info(
-                                        f"[STATE] Обновлена ссылка на оверлей для шаблона #{template.get('pair_index')}, "
-                                        f"смещение=({offset_x}, {offset_y})"
+                                        f"[STATE] Обновлена ссылка на оверлей для шаблона #{template.get('pair_index')}"
                                     )
                                     break
 
@@ -449,7 +528,8 @@ class OverlayManager:
                                     with open(region_path, 'wb') as f:
                                         f.write(base64.b64decode(template_base64))
 
-                                    add_result = monitor.add_template(region_path, image_path, target_hwnd)
+                                    add_result = monitor.add_template(region_path, image_path,
+                                                                      target_hwnd_to_use or target_hwnd)
                                     if add_result is not None and len(add_result) == 2:
                                         pair_index, file_hash = add_result
                                         if pair_index >= 0 and file_hash:
@@ -458,16 +538,11 @@ class OverlayManager:
                                                     template['overlay'] = overlay
                                                     template['found'] = True
                                                     template['last_position'] = (saved_x, saved_y, saved_w, saved_h)
-                                                    # === ВОССТАНАВЛИВАЕМ СМЕЩЕНИЕ ===
                                                     template['offset_x'] = offset_x
                                                     template['offset_y'] = offset_y
                                                     template['offset_initialized'] = True
                                                     template['overlay_width'] = saved_w
                                                     template['overlay_height'] = saved_h
-                                                    self.logger.info(
-                                                        f"[STATE] Связан оверлей с новым шаблоном #{pair_index}, "
-                                                        f"смещение=({offset_x}, {offset_y})"
-                                                    )
                                                     break
                                 except Exception as e:
                                     self.logger.error(f"[STATE] Ошибка восстановления шаблона: {e}")
@@ -495,6 +570,29 @@ class OverlayManager:
             parent_app.window_list.refresh()
 
         return restored_count
+
+    def _find_window_by_app_name(self, app_name: str) -> Optional[int]:
+        """Находит HWND окна по имени приложения."""
+        try:
+            import win32gui
+
+            def enum_callback(hwnd, hwnds):
+                if win32gui.IsWindowVisible(hwnd):
+                    try:
+                        from src.window_utils import get_process_name_by_hwnd
+                        if get_process_name_by_hwnd(hwnd) == app_name:
+                            hwnds.append(hwnd)
+                            return False  # Останавливаем поиск
+                    except:
+                        pass
+                return True
+
+            hwnds = []
+            win32gui.EnumWindows(enum_callback, hwnds)
+            return hwnds[0] if hwnds else None
+        except Exception as e:
+            self.logger.warning(f"[STATE] Ошибка поиска окна по имени {app_name}: {e}")
+            return None
 
     def _create_overlay_from_data(self, image_path: Path, window_rect: tuple, target_hwnd: int,
                                   is_auto_replace: bool, is_window_screenshot: bool,
@@ -963,10 +1061,6 @@ class OverlayManager:
             if x is not None and y is not None:
                 return (x, y)
         return None
-
-    def get_overlays_for_window(self, hwnd: int) -> List[OverlayWindow]:
-        """Возвращает список оверлеев для конкретного окна."""
-        return self.overlays_by_hwnd.get(hwnd, [])
 
     def show_all_overlays_for_window(self, hwnd: int):
         """Показывает все оверлеи для указанного окна."""

@@ -188,6 +188,13 @@ class TranslationMonitor:
                 try:
                     # Проверяем, что оверлей всё ещё существует и его окно живо
                     if overlay.root and overlay.root.winfo_exists():
+                        # УБИРАЕМ ПРОВЕРКУ _is_visible_by_user - оверлей должен показываться всегда,
+                        # если найден шаблон (кроме случая, когда пользователь явно скрыл через F1)
+                        # Проверяем только _hidden_by_user (F1)
+                        if overlay._hidden_by_user:
+                            self.logger.info(f"[DEBUG] Оверлей #{pair_index} скрыт пользователем (F1), не показываем")
+                            return
+
                         if last_template_pos is None or last_template_pos != current_template_pos:
                             self.logger.info(
                                 f"[DEBUG] Позиция шаблона изменилась: {last_template_pos} -> {current_template_pos}")
@@ -201,8 +208,8 @@ class TranslationMonitor:
 
                         if not overlay.visible:
                             self.logger.info(f"[DEBUG] Шаблон #{pair_index} найден, показываем оверлей")
+                            # Сбрасываем флаги скрытия, чтобы оверлей точно показался
                             overlay._hidden_by_user = False
-                            overlay._hidden_by_mouse = False
                             overlay._is_visible_by_user = True
                             overlay.show()
                         else:
@@ -250,6 +257,7 @@ class TranslationMonitor:
                         template_data['overlay'] = new_overlay
                         template_data['last_template_position'] = current_template_pos
                         new_overlay._is_visible_by_user = True
+                        new_overlay._hidden_by_user = False
                         new_overlay._is_auto_replace = True
                         new_overlay._creation_time = time.time()
                         new_overlay._monitor_stable_time = time.time() + 3.0
@@ -281,12 +289,14 @@ class TranslationMonitor:
             traceback.print_exc()
 
     def _monitor_loop(self):
-        """Основной цикл мониторинга — проверяет ТОЛЬКО шаблоны активного окна."""
+        """Основной цикл мониторинга — проверяет ТОЛЬКО шаблоны активного приложения"""
         last_time = time.time()
         self.logger.info("[MONITOR] Цикл мониторинга запущен")
 
         iteration_count = 0
         last_found_time = {}
+
+        from src.window_utils import get_process_name_by_hwnd
 
         while self.monitoring:
             try:
@@ -305,12 +315,12 @@ class TranslationMonitor:
                         time.sleep(0.1)
                         continue
 
-                    # === ПРОВЕРКА: ИДЕТ ЛИ ПЕРЕТАСКИВАНИЕ ОВЕРЛЕЯ ===
+                    # Проверка: идет ли перетаскивание оверлея
                     if self.overlay_manager and self.overlay_manager.is_dragging():
                         time.sleep(0.05)
                         continue
 
-                    # === ПОЛУЧАЕМ АКТИВНОЕ ОКНО ===
+                    # Получаем активное окно
                     try:
                         import win32gui
                         active_hwnd = win32gui.GetForegroundWindow()
@@ -321,7 +331,10 @@ class TranslationMonitor:
                         time.sleep(0.05)
                         continue
 
-                    # === ПРОВЕРКА: ЯВЛЯЕТСЯ ЛИ АКТИВНОЕ ОКНО ОКНОМ ВЫДЕЛЕНИЯ ===
+                    # Получаем имя активного приложения
+                    active_app_name = get_process_name_by_hwnd(active_hwnd) if active_hwnd else None
+
+                    # Проверка: является ли активное окно окном выделения
                     is_selection_window = False
                     try:
                         if hasattr(self, 'parent') and self.parent:
@@ -335,7 +348,7 @@ class TranslationMonitor:
                         time.sleep(0.05)
                         continue
 
-                    # === ПРОВЕРЯЕМ ТОЛЬКО ШАБЛОНЫ ДЛЯ АКТИВНОГО ОКНА ===
+                    # Проверяем только шаблоны для активного приложения
                     for template_data in self.templates:
                         if not template_data.get('enabled', True):
                             continue
@@ -344,23 +357,24 @@ class TranslationMonitor:
                         if not target_hwnd:
                             continue
 
+                        # Получаем имя приложения для этого шаблона
+                        template_app_name = get_process_name_by_hwnd(target_hwnd) if target_hwnd else None
+
                         overlay = template_data.get('overlay')
                         is_overlay_visible_by_user = overlay._is_visible_by_user if overlay else False
 
-                        # === ЕСЛИ ОКНО НЕ АКТИВНО — ПРИНУДИТЕЛЬНО СКРЫВАЕМ ОВЕРЛЕЙ ===
-                        # НО НЕ СКРЫВАЕМ, ЕСЛИ ИДЕТ ПЕРЕТАСКИВАНИЕ (уже проверили выше)
-                        if target_hwnd != active_hwnd:
-                            # Проверяем режим редактирования: если оверлей в режиме редактирования, НЕ СКРЫВАЕМ
+                        # Если приложение не активно — принудительно скрываем оверлей
+                        if template_app_name != active_app_name:
+                            # Проверяем режим редактирования
                             if overlay and hasattr(overlay, '_edit_mode_enabled') and overlay._edit_mode_enabled:
                                 self.logger.debug(
                                     f"[MONITOR] Шаблон #{template_data.get('pair_index')} в режиме редактирования, не скрываем при смене окна")
                                 continue
                             if overlay and overlay.visible:
-                                # Скрываем в главном потоке
                                 self._hide_overlay_in_main_thread(overlay, template_data.get('pair_index', 0))
                             continue
 
-                        # === ПРОВЕРЯЕМ СУЩЕСТВОВАНИЕ ОКНА ===
+                        # Проверяем существование окна
                         try:
                             if not win32gui.IsWindow(target_hwnd) or not win32gui.IsWindowVisible(target_hwnd):
                                 if template_data.get('found', False):
@@ -371,11 +385,11 @@ class TranslationMonitor:
                         except:
                             continue
 
-                        # === ЕСЛИ ПОЛЬЗОВАТЕЛЬ СКРЫЛ ОВЕРЛЕЙ (F1) — НЕ ПОКАЗЫВАЕМ ЕГО ===
+                        # Если пользователь скрыл оверлей (F1) — не показываем его
                         if overlay and not is_overlay_visible_by_user:
                             continue
 
-                        # === ПРОВЕРКА: НЕ НАХОДИЛИ ЛИ ШАБЛОН СЛИШКОМ НЕДАВНО ===
+                        # Проверка: не находили ли шаблон слишком недавно
                         pair_index = template_data.get('pair_index', 0)
                         if pair_index in last_found_time:
                             time_since_found = time.time() - last_found_time[pair_index]
@@ -383,19 +397,19 @@ class TranslationMonitor:
                                                  False) and overlay and overlay.visible and time_since_found < 2.0:
                                 continue
 
-                        # === ЗАХВАТЫВАЕМ СКРИНШОТ АКТИВНОГО ОКНА ===
+                        # Захватываем скриншот активного окна
                         image = self._capture_window(target_hwnd)
                         if image is None:
                             continue
 
-                        # === ИЩЕМ ШАБЛОН В ЭТОМ ОКНЕ ===
+                        # Ищем шаблон в этом окне
                         self._find_in_window(image, template_data)
 
                         # Обновляем время последнего поиска для этого шаблона
                         if template_data.get('found', False):
                             last_found_time[pair_index] = time.time()
 
-                    time.sleep(0.05)
+                        time.sleep(0.05)
 
             except Exception as e:
                 self.logger.error(f"[MONITOR] Ошибка: {e}")

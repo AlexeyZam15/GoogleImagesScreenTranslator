@@ -541,7 +541,7 @@ class OverlayWindow:
 
         self._created_at_startup = False
 
-        # Скрываем панель (теперь она на canvas)
+        # Скрываем панель
         self._hide_title_bar()
 
         try:
@@ -553,9 +553,17 @@ class OverlayWindow:
         except Exception as e:
             self.logger.warning(f"[DEBUG][hide] Ошибка сохранения позиции: {e}")
 
+        # by_user=False означает, что оверлей скрывается системой (переключение окна)
         if by_user:
             self._hidden_by_user = True
-        self._is_visible_by_user = False
+            self._is_visible_by_user = False
+        else:
+            # При системном скрытии НЕ сбрасываем _is_visible_by_user,
+            # чтобы оверлей мог быть показан автоматически при возврате в окно
+            self._hidden_by_user = False
+            # _is_visible_by_user ОСТАЁТСЯ True - оверлей должен быть показан снова
+            # self._is_visible_by_user = False  # <-- НЕ СБРАСЫВАЕМ!
+
         self.visible = False
 
         self._stop_visibility_monitor()
