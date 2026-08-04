@@ -51,7 +51,8 @@ class TranslationMonitor:
         self.monitoring = False
         self.monitor_thread = None
         self.confidence_threshold = 0.8
-        self.delay_sec = 0.3
+        # --- ИСПРАВЛЕНИЕ: УМЕНЬШАЕМ ЗАДЕРЖКУ ---
+        self.delay_sec = 0.15  # было 0.3
         self._template_counter = 0
 
         # Кэш для имён приложений
@@ -69,7 +70,8 @@ class TranslationMonitor:
         self._frame_cache = None
         self._frame_cache_hwnd = None
         self._frame_cache_time = 0
-        self._frame_cache_ttl = 0.1  # 100ms кэш
+        # --- ИСПРАВЛЕНИЕ: УМЕНЬШАЕМ TTL КЭША ---
+        self._frame_cache_ttl = 0.05  # было 0.1
 
         # Дополнительные атрибуты
         self._updating_overlay = False
@@ -90,8 +92,6 @@ class TranslationMonitor:
 
         iteration_count = 0
         last_found_time = {}
-        idle_skip_count = 0
-        max_idle_skips = 5  # Максимальное количество пропусков при бездействии
 
         from src.window_utils import get_process_name_by_hwnd
 
@@ -100,7 +100,7 @@ class TranslationMonitor:
                 current_time = time.time()
                 elapsed = current_time - last_time
 
-                # Динамическая задержка: если окно не активно, увеличиваем интервал
+                # Динамическая задержка: сканируем постоянно
                 if elapsed < self.delay_sec:
                     time.sleep(0.02)
                     continue
@@ -120,7 +120,7 @@ class TranslationMonitor:
                     time.sleep(0.02)
                     continue
 
-                # Получаем активное окно (с проверкой на изменение)
+                # Получаем активное окно
                 try:
                     active_hwnd = win32gui.GetForegroundWindow()
                     if not active_hwnd:
@@ -130,7 +130,8 @@ class TranslationMonitor:
                     time.sleep(0.02)
                     continue
 
-                # === ОПТИМИЗАЦИЯ: кэширование имени приложения ===
+                # --- ИСПРАВЛЕНИЕ 1: УБРАН ПРОПУСК ИТЕРАЦИЙ ПРИ БЕЗДЕЙСТВИИ ---
+                # Обновляем кэш имени приложения
                 if active_hwnd != self._last_active_hwnd:
                     self._last_active_hwnd = active_hwnd
                     # Сбрасываем кэш имени
@@ -143,23 +144,9 @@ class TranslationMonitor:
                     # Сбрасываем кэш скриншота при смене окна
                     self._frame_cache = None
                     self._frame_cache_hwnd = None
-                    self._idle_counter = 0
 
                 # Получаем имя активного приложения
                 active_app_name = self._get_cached_app_name(active_hwnd)
-
-                # === ОПТИМИЗАЦИЯ: пропуск при бездействии ===
-                if (active_hwnd == self._last_active_hwnd and
-                        active_app_name == self._last_active_app_name):
-                    self._idle_counter += 1
-                    if self._idle_counter > max_idle_skips:
-                        # Увеличиваем задержку при длительном бездействии
-                        time.sleep(min(self.delay_sec * 0.5, 0.1))
-                        continue
-                    time.sleep(0.02)
-                    continue
-
-                self._idle_counter = 0
                 self._last_active_app_name = active_app_name
 
                 # Проверка: является ли активное окно окном выделения
@@ -168,8 +155,8 @@ class TranslationMonitor:
                         time.sleep(0.02)
                         continue
 
-                # === ОПТИМИЗАЦИЯ: кэширование скриншота ===
-                # Получаем скриншот только если окно изменилось или кэш устарел
+                # --- ИСПРАВЛЕНИЕ 2: УЛУЧШЕННОЕ КЭШИРОВАНИЕ СКРИНШОТА ---
+                # Получаем скриншот с меньшим TTL для более частого обновления
                 if (self._frame_cache_hwnd != active_hwnd or
                         current_time - self._frame_cache_time > self._frame_cache_ttl):
                     image = self._capture_window(active_hwnd)
@@ -178,7 +165,6 @@ class TranslationMonitor:
                         self._frame_cache_hwnd = active_hwnd
                         self._frame_cache_time = current_time
                     else:
-                        # Если не удалось захватить, используем старый кэш
                         image = self._frame_cache
                 else:
                     image = self._frame_cache
@@ -186,7 +172,7 @@ class TranslationMonitor:
                 if image is None:
                     continue
 
-                # === ОПТИМИЗАЦИЯ: проверяем только шаблоны для активного приложения ===
+                # Проверяем только шаблоны для активного приложения
                 active_templates = []
                 for template_data in self.templates:
                     if not template_data.get('enabled', True):
@@ -204,7 +190,7 @@ class TranslationMonitor:
                     time.sleep(0.02)
                     continue
 
-                # === ОПТИМИЗАЦИЯ: используем локальные переменные для скорости ===
+                # Используем локальные переменные для скорости
                 img_h, img_w = image.shape[:2]
 
                 for template_data in active_templates:
@@ -238,7 +224,7 @@ class TranslationMonitor:
                     except:
                         continue
 
-                    # Ищем шаблон в окне (с проверкой размера)
+                    # Ищем шаблон в окне
                     self._find_in_window_optimized(image, template_data, img_h, img_w)
 
                     if template_data.get('found', False):
@@ -407,6 +393,7 @@ class TranslationMonitor:
             with open(region_image, 'rb') as f:
                 file_hash = hashlib.md5(f.read()).hexdigest()
 
+            # Проверяем, нет ли уже такого шаблона
             for template_data in self.templates:
                 if template_data.get('hash') == file_hash:
                     self.logger.info(f"Шаблон с хешем {file_hash[:8]} уже существует, обновляем перевод")
@@ -439,10 +426,24 @@ class TranslationMonitor:
             self.templates.append(template_data)
             self.logger.info(f"Добавлен шаблон #{pair_index} (хеш: {file_hash[:8]}) для окна HWND={target_hwnd}")
 
+            # --- ИСПРАВЛЕНИЕ: СБРАСЫВАЕМ КЭШ, ЧТОБЫ МОНИТОР НАЧАЛ СКАНИРОВАТЬ СРАЗУ ---
+            # Сбрасываем кэш скриншота, чтобы монитор сделал новый снимок
+            self._frame_cache = None
+            self._frame_cache_hwnd = None
+            self._frame_cache_time = 0
+
+            # Сбрасываем кэш активного окна, чтобы монитор не пропускал итерации
+            self._last_active_hwnd = None
+            self._last_active_app_name = None
+            self._idle_counter = 0
+
             if self.settings and self.settings.get_auto_replace_translated():
                 if not self.monitoring:
                     self.start()
                     self.logger.info("Монитор запущен после добавления шаблона")
+                else:
+                    # --- ИСПРАВЛЕНИЕ: ПРИНУДИТЕЛЬНО "ПРОБУЖДАЕМ" МОНИТОР ---
+                    self.logger.info("Монитор уже запущен, сбрасываем кэш для немедленного сканирования")
 
             return pair_index, file_hash
 

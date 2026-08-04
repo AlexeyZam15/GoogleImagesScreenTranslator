@@ -45,8 +45,11 @@ class WindowListManager:
                 self.logger.info("[WINDOW_LIST] Нет сохранённых оверлеев")
                 return
 
-            # Группируем оверлеи по ИМЕНИ ПРИЛОЖЕНИЯ (а не по HWND)
-            apps_data = {}  # {app_name: {'hwnds': [hwnd1, hwnd2], 'overlay_count': int, 'visible_count': int}}
+            # --- ДОБАВЛЕНО ЛОГИРОВАНИЕ ---
+            self.logger.info(f"[WINDOW_LIST] Загружено {len(states)} записей из файла состояния")
+
+            # Группируем оверлеи по ИМЕНИ ПРИЛОЖЕНИЯ
+            apps_data = {}
 
             for key, state in states.items():
                 target_hwnd = state.get('target_hwnd')
@@ -63,16 +66,15 @@ class WindowListManager:
                 # Если имя приложения = "Неизвестно" или окно закрыто - пробуем получить имя заново
                 if app_name == 'Неизвестно' or not is_window_alive:
                     try:
-                        # Передаём сохранённое имя как default, чтобы не терять его
                         saved_name = app_name if app_name != 'Неизвестно' else None
                         new_app_name = get_process_name_by_hwnd(target_hwnd, default_name=saved_name)
                         if new_app_name and new_app_name != 'Неизвестно':
                             app_name = new_app_name
-                            # Обновляем состояние для будущих запусков
                             state['app_name'] = app_name
                     except Exception as e:
                         self.logger.warning(f"[WINDOW_LIST] Ошибка получения имени для HWND {target_hwnd}: {e}")
 
+                # Инициализируем данные для приложения
                 if app_name not in apps_data:
                     apps_data[app_name] = {
                         'hwnds': [],
@@ -95,6 +97,10 @@ class WindowListManager:
                 self.logger.info("[WINDOW_LIST] Нет приложений с оверлеями")
                 return
 
+            # --- ДОБАВЛЕНО ЛОГИРОВАНИЕ ---
+            total_overlays = sum(d['overlay_count'] for d in apps_data.values())
+            self.logger.info(f"[WINDOW_LIST] Всего оверлеев по приложениям: {total_overlays}")
+
             # Сортируем по имени приложения
             sorted_apps = sorted(apps_data.items(), key=lambda x: x[0].lower())
 
@@ -103,7 +109,6 @@ class WindowListManager:
                 total_count = data['overlay_count']
                 visible_count = data['visible_count']
                 is_alive = data['is_alive']
-                hwnds = data['hwnds']
 
                 # Формируем отображение
                 if is_alive:
@@ -117,12 +122,18 @@ class WindowListManager:
                     display = f"{status_icon}{app_name[:34] + '...' if len(app_name) > 37 else app_name} ({total_count})"
 
                 self.window_listbox.insert('end', display)
+
+                # Сохраняем первый HWND для этого приложения
+                hwnds = data['hwnds']
                 self._window_hwnd_map[idx] = hwnds[0] if hwnds else None
                 self._window_app_map[idx] = app_name
                 idx += 1
 
+                self.logger.info(f"[WINDOW_LIST] Добавлено приложение: {app_name} ({total_count} оверлеев)")
+
             self.logger.info(
-                f"[WINDOW_LIST] Найдено {len(apps_data)} приложений с оверлеями (всего оверлеев: {sum(d['overlay_count'] for d in apps_data.values())})")
+                f"[WINDOW_LIST] Найдено {len(apps_data)} приложений с оверлеями (всего оверлеев: {total_overlays})"
+            )
 
             # Если были обновлены имена в состоянии - сохраняем
             try:
@@ -196,18 +207,47 @@ class WindowListManager:
             self.refresh()
             return
 
-        # Удаляем каждый оверлей
+        self.logger.info(f"[WINDOW_LIST] Удаление {len(overlays_to_remove)} оверлеев для {app_name}")
+
+        # Останавливаем монитор, чтобы он не создавал новые оверлеи во время удаления
+        if hasattr(self.app, 'translation_monitor') and self.app.translation_monitor:
+            monitor = self.app.translation_monitor
+            was_running = monitor.is_running()
+            if was_running:
+                monitor.stop()
+                self.logger.info("[WINDOW_LIST] Монитор остановлен на время удаления")
+
+        # --- ИСПРАВЛЕНИЕ: ОТКЛЮЧАЕМ СОХРАНЕНИЕ СОСТОЯНИЯ ВО ВРЕМЯ УДАЛЕНИЯ ---
+        if hasattr(self.app.overlay_manager, '_suppress_save'):
+            self.app.overlay_manager._suppress_save = True
+
+        # Удаляем все оверлеи
         removed_count = 0
         for overlay in overlays_to_remove:
             try:
-                self.logger.info(f"[WINDOW_LIST] Удаление оверлея для {app_name}")
                 self.app.overlay_manager.remove_overlay(overlay)
                 removed_count += 1
             except Exception as e:
                 self.logger.error(f"[WINDOW_LIST] Ошибка удаления оверлея: {e}")
 
+        # --- ИСПРАВЛЕНИЕ: ВКЛЮЧАЕМ СОХРАНЕНИЕ И СОХРАНЯЕМ СОСТОЯНИЕ ОДИН РАЗ ---
+        if hasattr(self.app.overlay_manager, '_suppress_save'):
+            self.app.overlay_manager._suppress_save = False
+
+        # Принудительно сохраняем состояние после удаления всех оверлеев
+        if hasattr(self.app.overlay_manager, 'save_overlay_state'):
+            self.app.overlay_manager.save_overlay_state(immediate=True)
+            self.logger.info("[WINDOW_LIST] Состояние сохранено после удаления всех оверлеев")
+
+        # Перезапускаем монитор, если он был запущен и остались шаблоны
+        if hasattr(self.app, 'translation_monitor') and self.app.translation_monitor:
+            monitor = self.app.translation_monitor
+            if was_running and monitor.templates:
+                monitor.start()
+                self.logger.info(f"[WINDOW_LIST] Монитор перезапущен, осталось {len(monitor.templates)} шаблонов")
+
         self.logger.info(f"[WINDOW_LIST] Удалено {removed_count} оверлеев для {app_name}")
 
-        # Обновляем список окон
+        # --- ИСПРАВЛЕНИЕ: ОБНОВЛЯЕМ СПИСОК ТОЛЬКО ОДИН РАЗ ПОСЛЕ ВСЕХ УДАЛЕНИЙ ---
         self.refresh()
         self.logger.info("[WINDOW_LIST] === remove_overlays_for_selected ЗАВЕРШЕН ===")
