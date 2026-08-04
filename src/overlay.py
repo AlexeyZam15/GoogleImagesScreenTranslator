@@ -7,9 +7,17 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Optional, Tuple
+
+# PIL
 from PIL import Image, ImageTk
+
+# Tkinter
 import tkinter as tk
+
+# Keyboard
 import keyboard
+
+# Windows API - ИСПРАВЛЕННЫЕ ИМПОРТЫ
 import win32gui
 import win32con
 import win32api
@@ -18,7 +26,33 @@ import win32api
 class OverlayWindow:
     """Класс для оверлейного окна (Toplevel, работает в главном потоке)"""
 
+    __slots__ = (
+        'logger', 'visible', 'temp_dir', 'tk_image', '_target_rect',
+        '_esc_hook_active', '_use_manager_esc', '_images', '_last_image_path',
+        '_last_window_rect', '_target_hwnd', '_app_title', '_monitor_timer',
+        '_is_visible_by_user', '_is_dragging', '_drag_stop_timer',
+        '_saved_position', '_is_fullscreen_target', '_fullscreen_restore_needed',
+        '_show_time', 'auto_hide_enabled', '_image_loaded', '_overlay_active',
+        '_last_active_hwnd', '_monitor_initialized', '_monitor_stable_time',
+        '_edit_mode_enabled', '_mouse_over', '_hidden_by_mouse',
+        '_is_window_screenshot', '_context_menu_visible', '_right_click_processing',
+        '_hidden_by_user', '_is_auto_replace', '_creation_time', '_template_id',
+        '_suppress_enter_events', '_last_mouse_x', '_last_mouse_y',
+        '_mouse_position_known', '_user_moved', '_created_at_startup',
+        '_is_temporary', '_temp_timer', '_temp_created_at', '_temp_lifetime',
+        '_edit_frame', '_edit_frame_visible', '_title_bar_visible',
+        '_title_bar_height', '_title_bar_hide_timer', '_title_bar_hide_delay_ms',
+        '_close_button_rect', '_close_button_cross1', '_close_button_cross2',
+        '_mouse_over_title_bar', '_image_offset_y', 'root', 'canvas',
+        '_drag_data', '_close_button_window', '_close_button_visible',
+        '_showing_in_progress', '_hiding_in_progress', '_updating_visibility',
+        '_overlay_manager', '_update_timer',
+        # === НОВЫЕ АТРИБУТЫ ДЛЯ СМЕЩЕНИЯ ===
+        '_offset_x', '_offset_y'
+    )
+
     def __init__(self, parent=None, app_title="Перевод скриншотов", auto_hide_enabled=True):
+        """Инициализация оверлейного окна"""
         self.logger = logging.getLogger(__name__)
         self.logger.info("Инициализация OverlayWindow")
         self.visible = False
@@ -64,11 +98,17 @@ class OverlayWindow:
         self._user_moved = False
         self._created_at_startup = False
 
-        # === АТРИБУТЫ ДЛЯ РАМКИ ===
+        # Временный режим
+        self._is_temporary = False
+        self._temp_timer = None
+        self._temp_created_at = 0
+        self._temp_lifetime = 180
+
+        # Рамка
         self._edit_frame = None
         self._edit_frame_visible = False
 
-        # === ПАНЕЛЬ ЗАГОЛОВКА (внутри оверлея) ===
+        # Панель заголовка
         self._title_bar_visible = False
         self._title_bar_height = 24
         self._title_bar_hide_timer = None
@@ -78,9 +118,14 @@ class OverlayWindow:
         self._close_button_cross2 = None
         self._mouse_over_title_bar = False
 
-        # === ОТСТУП ДЛЯ ИЗОБРАЖЕНИЯ КОГДА ПАНЕЛЬ ВИДНА ===
+        # Отступ для изображения
         self._image_offset_y = 0
 
+        # === НОВЫЕ АТРИБУТЫ ДЛЯ СМЕЩЕНИЯ (ИНИЦИАЛИЗАЦИЯ) ===
+        self._offset_x = 0
+        self._offset_y = 0
+
+        # Создаем окно
         self.root = tk.Toplevel(parent) if parent else tk.Toplevel()
         self.root.title("Перевод")
         self.root.overrideredirect(True)
@@ -93,7 +138,7 @@ class OverlayWindow:
 
         self._drag_data = {"x": 0, "y": 0}
 
-        # === ПРИВЯЗКИ ТОЛЬКО К CANVAS ===
+        # Привязки событий
         self.canvas.bind('<ButtonPress-1>', self._start_drag)
         self.canvas.bind('<B1-Motion>', self._on_drag)
         self.canvas.bind('<ButtonRelease-1>', self._stop_drag)
@@ -107,6 +152,166 @@ class OverlayWindow:
         self.root.bind('<Leave>', self._on_mouse_leave)
 
         self.logger.info("OverlayWindow инициализирован")
+
+    def set_temporary_mode(self, enabled: bool, lifetime_seconds: int = 180):
+        """
+        Устанавливает режим временного оверлея.
+        enabled: True - оверлей будет удалён через lifetime_seconds
+        lifetime_seconds: время жизни в секундах (по умолчанию 180 = 3 минуты)
+        """
+        self._is_temporary = enabled
+        if enabled:
+            self._temp_created_at = time.time()
+            self._temp_lifetime = lifetime_seconds
+            self._start_temp_timer(lifetime_seconds)
+            # Добавляем визуальное отличие - оранжевую рамку и индикатор
+            if self.root and self.root.winfo_exists():
+                self.root.after(100, self._show_temporary_indicator)
+            else:
+                self._show_temporary_indicator()
+            self.logger.info(f"[TEMP] Временный режим включен, время жизни: {lifetime_seconds}с")
+        else:
+            self._stop_temp_timer()
+            self._hide_temporary_indicator()
+            self.logger.info("[TEMP] Временный режим выключен")
+
+    def _start_temp_timer(self, lifetime_seconds: int):
+        """Запускает таймер для автоматического удаления оверлея"""
+        self._stop_temp_timer()
+        if self.root and self.root.winfo_exists():
+            self._temp_timer = self.root.after(
+                lifetime_seconds * 1000,
+                self._on_temp_timeout
+            )
+            self.logger.info(f"[TEMP] Таймер запущен: {lifetime_seconds}с, оверлей будет удалён")
+
+    def _stop_temp_timer(self):
+        """Останавливает таймер удаления"""
+        if self._temp_timer is not None:
+            try:
+                if self.root and self.root.winfo_exists():
+                    self.root.after_cancel(self._temp_timer)
+            except Exception as e:
+                self.logger.warning(f"[TEMP] Ошибка отмены таймера: {e}")
+            self._temp_timer = None
+
+    def _on_temp_timeout(self):
+        """Обработчик таймаута - удаляет оверлей"""
+        self.logger.info("[TEMP] Время жизни истекло, удаляем оверлей")
+        self._stop_temp_timer()
+        # Удаляем через менеджер
+        if hasattr(self, '_overlay_manager') and self._overlay_manager:
+            self._overlay_manager.remove_overlay(self)
+
+    def _show_temporary_indicator(self):
+        """Показывает индикатор временного оверлея (оранжевая рамка и надпись)"""
+        if not self.root or not self.root.winfo_exists():
+            return
+        try:
+            # Удаляем старый индикатор
+            self._hide_temporary_indicator()
+
+            # Ждём, пока окно полностью отрисуется
+            self.root.update_idletasks()
+
+            width = self.root.winfo_width()
+            height = self.root.winfo_height()
+
+            # Если размеры ещё не определены, используем запасные
+            if width < 10 or height < 10:
+                width = 300
+                height = 200
+
+            # Оранжевая рамка
+            self.canvas.create_rectangle(
+                2, 2, width - 2, height - 2,
+                outline='#FF6B00',
+                width=2,
+                tags=('temp_indicator',)
+            )
+
+            # Получаем время жизни для отображения
+            lifetime = getattr(self, '_temp_lifetime', 180)
+            minutes = lifetime // 60
+            seconds = lifetime % 60
+
+            # Текст "⏱ Временный" в левом верхнем углу
+            self.canvas.create_text(
+                8, 8,
+                text=f"⏱ Временный ({minutes}:{seconds:02d})",
+                fill='#FF6B00',
+                font=("Segoe UI", 10, "bold"),
+                anchor='nw',
+                tags=('temp_indicator',)
+            )
+            # Текст с таймером в правом нижнем углу
+            self.canvas.create_text(
+                width - 8, height - 8,
+                text=f"⏳ {minutes}:{seconds:02d}",
+                fill='#FF6B00',
+                font=("Segoe UI", 9),
+                anchor='se',
+                tags=('temp_indicator', 'temp_timer')
+            )
+            # Запускаем обновление таймера
+            self._start_temp_timer_update()
+        except Exception as e:
+            self.logger.warning(f"[TEMP] Ошибка показа индикатора: {e}")
+
+    def _start_temp_timer_update(self):
+        """Запускает обновление отображения оставшегося времени"""
+        if not self._is_temporary:
+            return
+        try:
+            # Обновляем каждую секунду
+            if self.root and self.root.winfo_exists():
+                self.root.after(1000, self._update_temp_timer_display)
+        except Exception as e:
+            self.logger.warning(f"[TEMP] Ошибка запуска обновления таймера: {e}")
+
+    def _update_temp_timer_display(self):
+        """Обновляет отображение оставшегося времени"""
+        if not self._is_temporary or not self.root or not self.root.winfo_exists():
+            return
+
+        try:
+            lifetime = getattr(self, '_temp_lifetime', 180)
+            elapsed = time.time() - self._temp_created_at
+            remaining = max(0, lifetime - int(elapsed))
+            minutes = remaining // 60
+            seconds = remaining % 60
+
+            # Обновляем текст таймера
+            self.canvas.delete('temp_timer')
+            width = self.root.winfo_width()
+            height = self.root.winfo_height()
+
+            if remaining > 0:
+                timer_text = f"⏳ {minutes}:{seconds:02d}"
+                self.canvas.create_text(
+                    width - 8, height - 8,
+                    text=timer_text,
+                    fill='#FF6B00',
+                    font=("Segoe UI", 9),
+                    anchor='se',
+                    tags=('temp_indicator', 'temp_timer')
+                )
+                # Продолжаем обновление
+                if self.root and self.root.winfo_exists():
+                    self.root.after(1000, self._update_temp_timer_display)
+            else:
+                # Время вышло - удаляем оверлей
+                self._on_temp_timeout()
+        except Exception as e:
+            self.logger.warning(f"[TEMP] Ошибка обновления таймера: {e}")
+
+    def _hide_temporary_indicator(self):
+        """Скрывает индикатор временного оверлея"""
+        try:
+            self.canvas.delete('temp_indicator')
+            self.canvas.delete('temp_timer')
+        except Exception as e:
+            self.logger.warning(f"[TEMP] Ошибка скрытия индикатора: {e}")
 
     def _update_image_position(self):
         """Обновляет позицию изображения с учётом отступа панели."""
@@ -1289,7 +1494,8 @@ class OverlayWindow:
 
     def show_for_window(self, image_path: Path, window_rect: tuple, target_hwnd: int = None,
                         is_fullscreen: bool = None, show_immediately: bool = True,
-                        is_startup: bool = False):
+                        is_startup: bool = False, is_temporary: bool = False,
+                        lifetime_seconds: int = 180):
         """Показывает оверлей для указанного окна."""
         self.logger.info(f"[DEBUG] === show_for_window НАЧАЛО ===")
         self.logger.info(f"[DEBUG] image_path={image_path}")
@@ -1297,6 +1503,8 @@ class OverlayWindow:
         self.logger.info(f"[DEBUG] target_hwnd={target_hwnd}")
         self.logger.info(f"[DEBUG] show_immediately={show_immediately}")
         self.logger.info(f"[DEBUG] is_startup={is_startup}")
+        self.logger.info(f"[DEBUG] is_temporary={is_temporary}")
+        self.logger.info(f"[DEBUG] lifetime_seconds={lifetime_seconds}")
 
         if target_hwnd is not None:
             self._target_hwnd = target_hwnd
@@ -1318,6 +1526,11 @@ class OverlayWindow:
         self.logger.info(f"[DEBUG] _last_window_rect={self._last_window_rect}")
 
         self._created_at_startup = is_startup
+
+        # Устанавливаем временный режим, если нужно
+        if is_temporary:
+            self.set_temporary_mode(True, lifetime_seconds)
+            self.logger.info(f"[TEMP] Оверлей создан как временный ({lifetime_seconds} секунд)")
 
         if is_startup:
             self.logger.info("[DEBUG] Режим запуска: загружаем изображение, но НЕ показываем оверлей")
@@ -1893,6 +2106,10 @@ class OverlayWindow:
     def close(self):
         """Закрывает оверлей."""
         self.logger.info("close() вызван")
+
+        # Останавливаем временный таймер
+        self._stop_temp_timer()
+        self._hide_temporary_indicator()
 
         self._hide_edit_frame()
         self._hide_title_bar()

@@ -25,7 +25,8 @@ class Settings:
         "auto_hide_overlay": True,
         "auto_windowed_fullscreen": True,
         "edit_mode_enabled": False,
-        "auto_replace_translated": True
+        "auto_replace_translated": True,
+        "temporary_lifetime": 180
     }
 
     # Значения горячих клавиш по умолчанию
@@ -35,7 +36,8 @@ class Settings:
         "toggle_overlay": "f1",
         "clear_all": "f4",
         "edit_mode": "f5",
-        "auto_replace": "f6"  # <-- НОВЫЙ ХОТКЕЙ
+        "auto_replace": "f6",
+        "area_temporary": "ctrl+f3"
     }
 
     def __init__(self):
@@ -91,6 +93,15 @@ class Settings:
         self.settings["monitor_delay"] = max(0.1, value)
         self.save()
 
+    def get_temporary_lifetime(self) -> int:
+        """Возвращает время жизни временного оверлея в секундах."""
+        return self.settings.get("temporary_lifetime", 180)
+
+    def set_temporary_lifetime(self, seconds: int):
+        """Устанавливает время жизни временного оверлея в секундах."""
+        self.settings["temporary_lifetime"] = max(10, min(600, seconds))
+        self.save()
+
     # === МЕТОДЫ ДЛЯ ГОРЯЧИХ КЛАВИШ ===
 
     def get_hotkey(self, action: str) -> str:
@@ -102,9 +113,7 @@ class Settings:
 
     def set_hotkey(self, action: str, key: str):
         """Устанавливает горячую клавишу для действия. Нормализует строку."""
-        # Нормализуем: приводим к нижнему регистру, убираем лишние пробелы
         normalized = key.lower().strip()
-        # Убираем дублирующиеся модификаторы
         parts = normalized.split('+')
         unique_parts = []
         seen = set()
@@ -125,7 +134,8 @@ class Settings:
             "toggle_overlay": self.get_hotkey("toggle_overlay"),
             "clear_all": self.get_hotkey("clear_all"),
             "edit_mode": self.get_hotkey("edit_mode"),
-            "auto_replace": self.get_hotkey("auto_replace")  # <-- НОВЫЙ ХОТКЕЙ
+            "auto_replace": self.get_hotkey("auto_replace"),
+            "area_temporary": self.get_hotkey("area_temporary")
         }
 
     def reset_hotkeys_to_default(self):

@@ -82,6 +82,16 @@ class SettingsWindow:
         self.window.lift()
         self.window.focus_force()
 
+    def _format_lifetime(self, seconds: int) -> str:
+        """Форматирует время жизни в читаемый вид."""
+        if seconds < 60:
+            return f"{seconds} сек"
+        minutes = seconds // 60
+        secs = seconds % 60
+        if secs == 0:
+            return f"{minutes} мин"
+        return f"{minutes} мин {secs} сек"
+
     def reset_settings(self):
         """Сбрасывает настройки к значениям по умолчанию"""
         import logging
@@ -205,6 +215,7 @@ class SettingsWindow:
         """Сохраняет настройки."""
         logger = logging.getLogger(__name__)
 
+        # Если идет захват горячей клавиши - отменяем его
         for action in self.hotkey_capture_manager.hotkey_capturing:
             if self.hotkey_capture_manager.hotkey_capturing[action]:
                 self.hotkey_capture_manager.hotkey_capturing[action] = False
@@ -218,6 +229,7 @@ class SettingsWindow:
                     self.app.set_actions_blocked(False)
                 break
 
+        # Проверяем путь к браузеру
         old_browser_path = self.settings.get_browser_path()
         new_browser_path = self.browser_path_var.get().strip()
 
@@ -228,6 +240,7 @@ class SettingsWindow:
             )
             return
 
+        # Сохраняем все настройки
         self.settings.set_browser_path(new_browser_path)
         self.settings.set_show_translation_indicator(self.show_indicator_var.get())
         self.settings.set_auto_hide_overlay(self.auto_hide_var.get())
@@ -235,10 +248,12 @@ class SettingsWindow:
         self.settings.set_auto_replace_translated(self.auto_replace_translated_var.get())
         self.settings.set_confidence_threshold(self.confidence_var.get())
         self.settings.set_monitor_delay(self.monitor_delay_var.get())
+        self.settings.set_temporary_lifetime(self.temp_lifetime_var.get())
 
         edit_mode = self.edit_mode_var.get()
         self.settings.set_edit_mode_enabled(edit_mode)
 
+        # Сохраняем горячие клавиши
         if hasattr(self, 'hotkey_capture_manager'):
             for action, var in self.hotkey_capture_manager.hotkey_vars.items():
                 key = var.get().strip()
@@ -247,6 +262,7 @@ class SettingsWindow:
 
         self.settings.save()
 
+        # Обновляем монитор
         if hasattr(self, 'app') and hasattr(self.app, 'translation_monitor'):
             monitor = self.app.translation_monitor
             if monitor:
@@ -260,6 +276,7 @@ class SettingsWindow:
                     if monitor.is_running():
                         monitor.stop()
 
+        # Перезапускаем браузер если изменился путь
         browser_path_changed = (old_browser_path != new_browser_path)
         if browser_path_changed:
             logger.info(f"[SETTINGS] Путь к браузеру изменен: {old_browser_path} -> {new_browser_path}")
@@ -274,6 +291,7 @@ class SettingsWindow:
                 if hasattr(self.app, 'update_status'):
                     self.app.update_status("● Настройки сохранены", '#4CAF50')
 
+        # Обновляем режим редактирования
         if hasattr(self, 'app') and hasattr(self.app, '_edit_mode_enabled'):
             self.app._edit_mode_enabled = edit_mode
             if hasattr(self.app, 'btn_edit_mode'):
@@ -284,6 +302,7 @@ class SettingsWindow:
                 )
             self.app.logger.info(f"Режим редактирования из настроек: {edit_mode}")
 
+        # Переустанавливаем горячие клавиши
         if hasattr(self, 'app') and hasattr(self.app, 'setup_hotkeys'):
             self.app.setup_hotkeys()
 
@@ -293,9 +312,11 @@ class SettingsWindow:
         if self.on_settings_changed:
             self.on_settings_changed()
 
+        # Разблокируем выполнение хоткеев
         if hasattr(self.app, 'set_actions_blocked'):
             self.app.set_actions_blocked(False)
 
+        # Закрываем окно настроек
         self.window.destroy()
 
     def on_close(self):
@@ -331,7 +352,8 @@ class SettingsWindow:
             "toggle_overlay": "f1",
             "clear_all": "f4",
             "edit_mode": "f5",
-            "auto_replace": "f6"
+            "auto_replace": "f6",
+            "area_temporary": "ctrl+f3"
         }
         for action, default_key in default_hotkeys.items():
             self.settings.set_hotkey(action, default_key)
@@ -594,6 +616,48 @@ class SettingsWindow:
         edit_mode_cb.pack(anchor=tk.W, pady=4)
         self._add_tooltip(edit_mode_cb, self.get_string('edit_mode_tooltip'))
 
+        # === НОВАЯ СЕКЦИЯ: ВРЕМЯ ЖИЗНИ ВРЕМЕННОГО ОВЕРЛЕЯ ===
+        temp_lifetime_label = tk.Label(
+            ui_inner,
+            text=self.get_string('temporary_lifetime'),
+            bg='#1e1e1e',
+            fg='#cccccc',
+            font=('Segoe UI', 10),
+            anchor='w'
+        )
+        temp_lifetime_label.pack(anchor=tk.W, pady=(12, 3))
+        self._add_tooltip(temp_lifetime_label, self.get_string('temporary_lifetime_tooltip'))
+
+        self.temp_lifetime_var = tk.IntVar(value=self.settings.get_temporary_lifetime())
+
+        temp_lifetime_scale = tk.Scale(
+            ui_inner,
+            from_=10, to=600, resolution=10,
+            orient=tk.HORIZONTAL,
+            variable=self.temp_lifetime_var,
+            bg='#3c3c3c',
+            fg='white',
+            highlightthickness=0,
+            width=16,
+            length=300
+        )
+        temp_lifetime_scale.pack(fill=tk.X, pady=(0, 5))
+
+        temp_lifetime_display = tk.Label(
+            ui_inner,
+            text=self._format_lifetime(self.temp_lifetime_var.get()),
+            bg='#1e1e1e',
+            fg='#4CAF50',
+            font=('Segoe UI', 11, 'bold')
+        )
+        temp_lifetime_display.pack(anchor=tk.W, pady=(0, 8))
+
+        def update_lifetime_label(val):
+            seconds = int(float(val))
+            temp_lifetime_display.config(text=self._format_lifetime(seconds))
+
+        temp_lifetime_scale.configure(command=update_lifetime_label)
+
         # Вкладка 3: Мониторинг
         monitor_frame = tk.Frame(notebook, bg='#1e1e1e')
         notebook.add(monitor_frame, text="  🔍 " + self.get_string('settings_monitor'))
@@ -694,6 +758,7 @@ class SettingsWindow:
         hotkey_actions = [
             ("screenshot", "settings_hotkeys_action_screenshot"),
             ("area", "settings_hotkeys_action_area"),
+            ("area_temporary", "settings_hotkeys_action_area_temporary"),
             ("toggle_overlay", "settings_hotkeys_action_toggle_overlay"),
             ("clear_all", "settings_hotkeys_action_clear_all"),
             ("edit_mode", "settings_hotkeys_action_edit_mode"),

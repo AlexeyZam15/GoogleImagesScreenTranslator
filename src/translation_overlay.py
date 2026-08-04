@@ -5,7 +5,7 @@
 import tkinter as tk
 from tkinter import ttk
 import time
-import logging  # <-- ДОБАВЛЯЕМ
+import logging
 import win32gui
 import win32con
 import win32api

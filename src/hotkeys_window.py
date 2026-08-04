@@ -139,6 +139,7 @@ class HotkeysWindow:
             ('toggle_overlay', '🔄', 'hotkey_toggle_overlay', self.get_string('hotkey_toggle_overlay_desc')),
             ('screenshot', '📸', 'hotkey_screenshot', self.get_string('hotkey_screenshot_desc')),
             ('area', '✂️', 'hotkey_area', self.get_string('hotkey_area_desc')),
+            ('area_temporary', '⏱️', 'hotkey_area_temporary', self.get_string('hotkey_area_temporary_desc')),
             ('clear_all', '🗑️', 'hotkey_clear_all', self.get_string('hotkey_clear_all_desc')),
             ('edit_mode', '✏️', 'hotkey_edit_mode', self.get_string('hotkey_edit_mode_desc')),
             ('auto_replace', '🔄', 'hotkey_auto_replace', self.get_string('hotkey_auto_replace_desc')),
@@ -288,6 +289,22 @@ class HotkeysWindow:
         )
         esc_desc.pack(fill=tk.X, padx=15, pady=(0, 12))
 
+        # === НОВАЯ СТРОКА С ПОДСКАЗКОЙ О НАСТРОЙКЕ ВРЕМЕНИ ===
+        hint_frame = tk.Frame(main_frame, bg='#1e1e1e')
+        hint_frame.pack(fill=tk.X, pady=(10, 5))
+
+        time_hint = tk.Label(
+            hint_frame,
+            text=self.get_string('hotkey_area_temporary_time_hint'),
+            bg='#1e1e1e',
+            fg='#FF6B00',
+            font=("Segoe UI", 10),
+            anchor='w',
+            wraplength=600,
+            justify='left'
+        )
+        time_hint.pack(fill=tk.X)
+
         btn_frame = tk.Frame(main_frame, bg='#1e1e1e')
         btn_frame.pack(fill=tk.X, pady=(20, 0))
 
@@ -295,7 +312,7 @@ class HotkeysWindow:
             btn_frame,
             text="↺ Сбросить хоткеи",
             command=self.reset_hotkeys,
-            bg='#3c3c3c',  # <-- ИЗМЕНЕНО: убран желтый цвет (#ff9800), теперь серый как у других кнопок
+            bg='#3c3c3c',
             fg='white',
             font=('Segoe UI', 10, 'bold'),
             relief=tk.FLAT,
@@ -327,7 +344,8 @@ class HotkeysWindow:
             "toggle_overlay": "f1",
             "clear_all": "f4",
             "edit_mode": "f5",
-            "auto_replace": "f6"
+            "auto_replace": "f6",
+            "area_temporary": "ctrl+f3"
         }
 
         for action, default_key in default_hotkeys.items():

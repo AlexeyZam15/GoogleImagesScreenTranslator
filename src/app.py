@@ -1,7 +1,5 @@
 """
-
 Главный модуль приложения - объединяет все компоненты
-
 """
 
 # Стандартные библиотеки
@@ -131,6 +129,9 @@ class ScreenshotTranslatorApp:
         self._pending_region_path = None
         self._translated_templates = {}
         self.translation_overlay = None
+
+        # Флаг временного перевода
+        self._is_temporary_translation = False
 
         # Инициализация
         self._init_attempts = 0
@@ -399,6 +400,25 @@ class ScreenshotTranslatorApp:
 
         threading.Thread(target=capture_task, daemon=True).start()
 
+    def capture_area_temporary(self):
+        """Захват области для временного перевода (Ctrl+F3) - оверлей удалится через заданное время"""
+        if not self.ready or self.initializing or self._capture_mode:
+            return
+
+        self.logger.info("[AREA_TEMP] Захват временной области (Ctrl+F3)")
+
+        # Устанавливаем флаг, что это временный перевод
+        self._is_temporary_translation = True
+
+        self.set_actions_blocked(True)
+        self._capture_mode = True
+        self.show_notification("Выберите область (временный перевод)...")
+        try:
+            self.ui.root.iconify()
+        except:
+            pass
+        self.ui.root.after(300, self._capture_window_for_area)
+
     def _on_translate_finished(self, result, error):
         """Завершение перевода"""
         self.logger.info(f"[DEBUG] === _on_translate_finished НАЧАЛО ===")
@@ -422,6 +442,10 @@ class ScreenshotTranslatorApp:
                 self.logger.error(f"Ошибка перевода: {error}")
                 self._on_translate_error(error)
                 return
+
+            # Определяем, является ли это временным переводом
+            is_temporary = getattr(self, '_is_temporary_translation', False)
+            self._is_temporary_translation = False  # Сбрасываем флаг
 
             if result and self.overlay_manager:
                 self.logger.info(f"Результат перевода получен: {result}")
@@ -447,6 +471,9 @@ class ScreenshotTranslatorApp:
                     if target_hwnd and window_rect:
                         self.logger.info(f"[DEBUG] Создаем оверлей сразу (автозамена выключена или нет region_path)")
 
+                        # Получаем время жизни из настроек
+                        lifetime_seconds = self.settings.get_temporary_lifetime() if is_temporary else 180
+
                         overlay = self.overlay_manager._create_overlay_from_data(
                             image_path=result,
                             window_rect=window_rect,
@@ -454,7 +481,9 @@ class ScreenshotTranslatorApp:
                             is_auto_replace=False,
                             is_window_screenshot=(region_path is None),
                             template_id=None,
-                            show_immediately=True
+                            show_immediately=True,
+                            is_temporary=is_temporary,
+                            lifetime_seconds=lifetime_seconds
                         )
 
                         if overlay:
@@ -629,6 +658,8 @@ class ScreenshotTranslatorApp:
                         self.process()
                     elif action == 'area':
                         self.capture_area()
+                    elif action == 'area_temporary':
+                        self.capture_area_temporary()
                     elif action == 'clear_all':
                         self.clear_all_overlays()
                     elif action == 'edit_mode':

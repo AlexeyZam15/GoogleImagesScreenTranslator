@@ -1,8 +1,62 @@
 """
-
 Строки локализации для приложения GoogleScreenTranslate
-
 """
+
+
+def get_russian_hotkeys_strings():
+    """Возвращает русские строки для окна горячих клавиш"""
+    return {
+        'menu_hotkeys': "Хоткеи",
+        'menu_hotkeys_show': "Показать горячие клавиши",
+        'hotkeys_title': "Горячие клавиши",
+        'hotkeys_change_in_settings': "⚙️ Изменить горячие клавиши",
+        'hotkeys_close': "Закрыть",
+        'hotkey_toggle_overlay': "Показать/скрыть оверлей",
+        'hotkey_toggle_overlay_desc': "Переключает видимость всех оверлеев (переводов) на экране",
+        'hotkey_screenshot': "Скриншот окна",
+        'hotkey_screenshot_desc': "Делает скриншот активного окна и переводит его",
+        'hotkey_area': "Выделение области",
+        'hotkey_area_desc': "Позволяет выбрать произвольную область экрана для перевода",
+        'hotkey_area_temporary': "Временная область",
+        'hotkey_area_temporary_desc': "Выделить область для временного перевода — оверлей автоматически удалится через заданное время",
+        'hotkey_area_temporary_time_hint': "💡 Время жизни временного оверлея настраивается в Настройках → Интерфейс → ползунок «Время жизни временного оверлея»",
+        'hotkey_clear_all': "Удалить все оверлеи",
+        'hotkey_clear_all_desc': "Удаляет все оверлеи с экрана и очищает историю переводов",
+        'hotkey_edit_mode': "Режим редактирования",
+        'hotkey_edit_mode_desc': "Включает/выключает режим, в котором оверлеи можно перемещать и удалять",
+        'hotkey_auto_replace': "Автозамена областей",
+        'hotkey_auto_replace_desc': "Включает/выключает автоматический поиск и замену уже переведённых областей",
+        'hotkey_esc': "ESC — удалить оверлей",
+        'hotkey_esc_desc': "В режиме редактирования удаляет оверлей под курсором",
+    }
+
+
+def get_english_hotkeys_strings():
+    """Возвращает английские строки для окна горячих клавиш"""
+    return {
+        'menu_hotkeys': "Hotkeys",
+        'menu_hotkeys_show': "Show hotkeys",
+        'hotkeys_title': "Hotkeys",
+        'hotkeys_change_in_settings': "⚙️ Change hotkeys",
+        'hotkeys_close': "Close",
+        'hotkey_toggle_overlay': "Show/Hide overlay",
+        'hotkey_toggle_overlay_desc': "Toggles visibility of all overlays (translations) on screen",
+        'hotkey_screenshot': "Window screenshot",
+        'hotkey_screenshot_desc': "Takes a screenshot of the active window and translates it",
+        'hotkey_area': "Area selection",
+        'hotkey_area_desc': "Allows selecting any area of the screen for translation",
+        'hotkey_area_temporary': "Temporary area",
+        'hotkey_area_temporary_desc': "Select area for temporary translation — the overlay will be automatically removed after the specified time",
+        'hotkey_area_temporary_time_hint': "💡 Temporary overlay lifetime can be adjusted in Settings → Interface → «Temporary overlay lifetime» slider",
+        'hotkey_clear_all': "Clear all overlays",
+        'hotkey_clear_all_desc': "Removes all overlays from screen and clears translation history",
+        'hotkey_edit_mode': "Edit mode",
+        'hotkey_edit_mode_desc': "Toggles edit mode where overlays can be moved and removed",
+        'hotkey_auto_replace': "Auto-replace areas",
+        'hotkey_auto_replace_desc': "Toggles automatic detection and replacement of already translated areas",
+        'hotkey_esc': "ESC — remove overlay",
+        'hotkey_esc_desc': "In edit mode, removes the overlay under the mouse cursor",
+    }
 
 
 def get_russian_all_strings():
@@ -22,6 +76,8 @@ def get_russian_all_strings():
     strings['area_selector_error_title'] = "Ошибка"
     strings['area_selector_error_too_small'] = "Выделите область размером больше {min_size}x{min_size} пикселей"
     strings['context_menu_remove_overlays'] = "🗑️ Удалить оверлеи"
+    strings['temporary_lifetime'] = "⏱ Время жизни временного оверлея (Ctrl+F3):"
+    strings['temporary_lifetime_tooltip'] = "Время в секундах, через которое временный оверлей автоматически удалится"
     return strings
 
 
@@ -42,6 +98,9 @@ def get_english_all_strings():
     strings['area_selector_error_title'] = "Error"
     strings['area_selector_error_too_small'] = "Select an area larger than {min_size}x{min_size} pixels"
     strings['context_menu_remove_overlays'] = "🗑️ Remove overlays"
+    strings['temporary_lifetime'] = "⏱ Temporary overlay lifetime (Ctrl+F3):"
+    strings[
+        'temporary_lifetime_tooltip'] = "Time in seconds after which the temporary overlay will be automatically removed"
     return strings
 
 
@@ -214,56 +273,6 @@ def get_english_main_strings():
         'edit_mode_on': "ON",
         'edit_mode_off': "OFF",
         'windows_with_translations': "📋 Windows with translations:",
-    }
-
-
-def get_russian_hotkeys_strings():
-    """Возвращает русские строки для окна горячих клавиш"""
-    return {
-        'menu_hotkeys': "Хоткеи",
-        'menu_hotkeys_show': "Показать горячие клавиши",
-        'hotkeys_title': "Горячие клавиши",
-        'hotkeys_change_in_settings': "⚙️ Изменить горячие клавиши",
-        'hotkeys_close': "Закрыть",
-        'hotkey_toggle_overlay': "Показать/скрыть оверлей",
-        'hotkey_toggle_overlay_desc': "Переключает видимость всех оверлеев (переводов) на экране",
-        'hotkey_screenshot': "Скриншот окна",
-        'hotkey_screenshot_desc': "Делает скриншот активного окна и переводит его",
-        'hotkey_area': "Выделение области",
-        'hotkey_area_desc': "Позволяет выбрать произвольную область экрана для перевода",
-        'hotkey_clear_all': "Удалить все оверлеи",
-        'hotkey_clear_all_desc': "Удаляет все оверлеи с экрана и очищает историю переводов",
-        'hotkey_edit_mode': "Режим редактирования",
-        'hotkey_edit_mode_desc': "Включает/выключает режим, в котором оверлеи можно перемещать и удалять",
-        'hotkey_auto_replace': "Автозамена областей",
-        'hotkey_auto_replace_desc': "Включает/выключает автоматический поиск и замену уже переведённых областей",
-        'hotkey_esc': "ESC - удалить оверлей",
-        'hotkey_esc_desc': "В режиме редактирования удаляет оверлей под курсором",
-    }
-
-
-def get_english_hotkeys_strings():
-    """Возвращает английские строки для окна горячих клавиш"""
-    return {
-        'menu_hotkeys': "Hotkeys",
-        'menu_hotkeys_show': "Show hotkeys",
-        'hotkeys_title': "Hotkeys",
-        'hotkeys_change_in_settings': "⚙️ Change hotkeys",
-        'hotkeys_close': "Close",
-        'hotkey_toggle_overlay': "Show/Hide overlay",
-        'hotkey_toggle_overlay_desc': "Toggles visibility of all overlays (translations) on screen",
-        'hotkey_screenshot': "Window screenshot",
-        'hotkey_screenshot_desc': "Takes a screenshot of the active window and translates it",
-        'hotkey_area': "Area selection",
-        'hotkey_area_desc': "Allows selecting any area of the screen for translation",
-        'hotkey_clear_all': "Clear all overlays",
-        'hotkey_clear_all_desc': "Removes all overlays from screen and clears translation history",
-        'hotkey_edit_mode': "Edit mode",
-        'hotkey_edit_mode_desc': "Toggles edit mode where overlays can be moved and removed",
-        'hotkey_auto_replace': "Auto-replace areas",
-        'hotkey_auto_replace_desc': "Toggles automatic detection and replacement of already translated areas",
-        'hotkey_esc': "ESC - remove overlay",
-        'hotkey_esc_desc': "In edit mode, removes the overlay under the mouse cursor",
     }
 
 

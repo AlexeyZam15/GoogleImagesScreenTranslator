@@ -1,9 +1,6 @@
 """
-
 Модуль для автоматического мониторинга экрана и замены областей на их переводы.
-
 Адаптирован из AutoArtReplacer ScreenMonitor.
-
 """
 
 import logging
@@ -12,19 +9,36 @@ import time
 import traceback
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple
+from functools import lru_cache
 
+# Третьи стороны (сначала тяжелые библиотеки)
 import cv2
 import numpy as np
+
+# Windows API - ИСПРАВЛЕННЫЕ ИМПОРТЫ
 import win32gui
 import win32ui
 import win32con
 import ctypes
+from ctypes import wintypes
+
+# PIL
 from PIL import Image, ImageGrab
-import ctypes
 
 
 class TranslationMonitor:
     """Мониторит экран, ищет сохраненные области (шаблоны) и показывает их переводы."""
+
+    __slots__ = (
+        'parent', 'overlay_manager', 'settings', 'logger', 'debug_mode',
+        'templates', 'monitoring', 'monitor_thread', 'confidence_threshold',
+        'delay_sec', '_template_counter', '_app_name_cache', '_cache_max_size',
+        '_last_active_hwnd', '_last_active_app_name', '_skip_count',
+        '_last_capture_time', '_last_captured_image', '_last_captured_hwnd',
+        '_updating_overlay', '_idle_counter', '_last_check_time',
+        '_frame_cache', '_frame_cache_hwnd', '_frame_cache_time',
+        '_frame_cache_ttl'
+    )
 
     def __init__(self, parent, overlay_manager, settings, debug_mode=False):
         self.parent = parent
@@ -40,11 +54,338 @@ class TranslationMonitor:
         self.delay_sec = 0.3
         self._template_counter = 0
 
+        # Кэш для имён приложений
+        self._app_name_cache = {}
+        self._cache_max_size = 100
+
+        # Флаг активного окна для оптимизации
+        self._last_active_hwnd = None
+        self._last_active_app_name = None
+        self._skip_count = 0
+        self._idle_counter = 0
+        self._last_check_time = 0
+
+        # Кэш для скриншотов
+        self._frame_cache = None
+        self._frame_cache_hwnd = None
+        self._frame_cache_time = 0
+        self._frame_cache_ttl = 0.1  # 100ms кэш
+
+        # Дополнительные атрибуты
+        self._updating_overlay = False
+        self._last_capture_time = 0
+        self._last_captured_image = None
+        self._last_captured_hwnd = None
+
         if settings:
             self.confidence_threshold = settings.get_confidence_threshold()
             self.delay_sec = settings.get_monitor_delay()
 
         self.logger.info("TranslationMonitor инициализирован")
+
+    def _monitor_loop(self):
+        """Основной цикл мониторинга — оптимизированная версия"""
+        last_time = time.time()
+        self.logger.info("[MONITOR] Цикл мониторинга запущен (оптимизированный)")
+
+        iteration_count = 0
+        last_found_time = {}
+        idle_skip_count = 0
+        max_idle_skips = 5  # Максимальное количество пропусков при бездействии
+
+        from src.window_utils import get_process_name_by_hwnd
+
+        while self.monitoring:
+            try:
+                current_time = time.time()
+                elapsed = current_time - last_time
+
+                # Динамическая задержка: если окно не активно, увеличиваем интервал
+                if elapsed < self.delay_sec:
+                    time.sleep(0.02)
+                    continue
+
+                last_time = current_time
+                iteration_count += 1
+
+                if iteration_count % 100 == 0:
+                    self.logger.info(f"[MONITOR] Итерация #{iteration_count}, шаблонов: {len(self.templates)}")
+
+                if not self.monitoring or not self.templates:
+                    time.sleep(0.05)
+                    continue
+
+                # Проверка: идет ли перетаскивание оверлея
+                if self.overlay_manager and self.overlay_manager.is_dragging():
+                    time.sleep(0.02)
+                    continue
+
+                # Получаем активное окно (с проверкой на изменение)
+                try:
+                    active_hwnd = win32gui.GetForegroundWindow()
+                    if not active_hwnd:
+                        time.sleep(0.02)
+                        continue
+                except:
+                    time.sleep(0.02)
+                    continue
+
+                # === ОПТИМИЗАЦИЯ: кэширование имени приложения ===
+                if active_hwnd != self._last_active_hwnd:
+                    self._last_active_hwnd = active_hwnd
+                    # Сбрасываем кэш имени
+                    self._app_name_cache.pop(active_hwnd, None)
+                    # Ограничиваем размер кэша
+                    if len(self._app_name_cache) > self._cache_max_size:
+                        keys = list(self._app_name_cache.keys())
+                        for key in keys[:len(keys) // 2]:
+                            del self._app_name_cache[key]
+                    # Сбрасываем кэш скриншота при смене окна
+                    self._frame_cache = None
+                    self._frame_cache_hwnd = None
+                    self._idle_counter = 0
+
+                # Получаем имя активного приложения
+                active_app_name = self._get_cached_app_name(active_hwnd)
+
+                # === ОПТИМИЗАЦИЯ: пропуск при бездействии ===
+                if (active_hwnd == self._last_active_hwnd and
+                        active_app_name == self._last_active_app_name):
+                    self._idle_counter += 1
+                    if self._idle_counter > max_idle_skips:
+                        # Увеличиваем задержку при длительном бездействии
+                        time.sleep(min(self.delay_sec * 0.5, 0.1))
+                        continue
+                    time.sleep(0.02)
+                    continue
+
+                self._idle_counter = 0
+                self._last_active_app_name = active_app_name
+
+                # Проверка: является ли активное окно окном выделения
+                if hasattr(self, 'parent') and self.parent:
+                    if hasattr(self.parent, '_capture_mode') and self.parent._capture_mode:
+                        time.sleep(0.02)
+                        continue
+
+                # === ОПТИМИЗАЦИЯ: кэширование скриншота ===
+                # Получаем скриншот только если окно изменилось или кэш устарел
+                if (self._frame_cache_hwnd != active_hwnd or
+                        current_time - self._frame_cache_time > self._frame_cache_ttl):
+                    image = self._capture_window(active_hwnd)
+                    if image is not None:
+                        self._frame_cache = image
+                        self._frame_cache_hwnd = active_hwnd
+                        self._frame_cache_time = current_time
+                    else:
+                        # Если не удалось захватить, используем старый кэш
+                        image = self._frame_cache
+                else:
+                    image = self._frame_cache
+
+                if image is None:
+                    continue
+
+                # === ОПТИМИЗАЦИЯ: проверяем только шаблоны для активного приложения ===
+                active_templates = []
+                for template_data in self.templates:
+                    if not template_data.get('enabled', True):
+                        continue
+                    target_hwnd = template_data.get('target_hwnd')
+                    if not target_hwnd:
+                        continue
+
+                    template_app_name = self._get_cached_app_name(target_hwnd)
+                    if template_app_name == active_app_name:
+                        active_templates.append(template_data)
+
+                # Если нет активных шаблонов для этого приложения, пропускаем
+                if not active_templates:
+                    time.sleep(0.02)
+                    continue
+
+                # === ОПТИМИЗАЦИЯ: используем локальные переменные для скорости ===
+                img_h, img_w = image.shape[:2]
+
+                for template_data in active_templates:
+                    if not template_data.get('enabled', True):
+                        continue
+
+                    target_hwnd = template_data.get('target_hwnd')
+                    if not target_hwnd:
+                        continue
+
+                    # Проверяем, не скрыт ли оверлей пользователем
+                    overlay = template_data.get('overlay')
+                    if overlay and not overlay._is_visible_by_user:
+                        continue
+
+                    # Проверка: не находили ли шаблон слишком недавно
+                    pair_index = template_data.get('pair_index', 0)
+                    if pair_index in last_found_time:
+                        time_since_found = current_time - last_found_time[pair_index]
+                        if template_data.get('found', False) and overlay and overlay.visible and time_since_found < 2.0:
+                            continue
+
+                    # Проверяем существование окна
+                    try:
+                        if not win32gui.IsWindow(target_hwnd) or not win32gui.IsWindowVisible(target_hwnd):
+                            if template_data.get('found', False):
+                                template_data['found'] = False
+                                if overlay and overlay.visible:
+                                    self._hide_overlay_in_main_thread(overlay, pair_index)
+                            continue
+                    except:
+                        continue
+
+                    # Ищем шаблон в окне (с проверкой размера)
+                    self._find_in_window_optimized(image, template_data, img_h, img_w)
+
+                    if template_data.get('found', False):
+                        last_found_time[pair_index] = current_time
+
+                    # Небольшая задержка между шаблонами
+                    time.sleep(0.02)
+
+            except Exception as e:
+                self.logger.error(f"[MONITOR] Ошибка: {e}")
+                time.sleep(0.1)
+
+        self.logger.info("[MONITOR] Цикл мониторинга завершен")
+
+    def _find_in_window_optimized(self, image: np.ndarray, template_data: Dict, img_h: int, img_w: int):
+        """Оптимизированная версия поиска шаблона"""
+        if image is None:
+            return
+
+        idx = template_data.get('pair_index')
+        template = template_data.get('template')
+
+        if template is None:
+            self.logger.warning(f"Шаблон #{idx} пустой")
+            return
+
+        t_h, t_w = template.shape[:2]
+
+        # Быстрая проверка: шаблон должен помещаться в изображение
+        if t_h > img_h or t_w > img_w:
+            if template_data.get('found', False):
+                template_data['found'] = False
+                overlay = template_data.get('overlay')
+                if overlay and overlay.visible:
+                    self._hide_overlay_in_main_thread(overlay, idx)
+            return
+
+        try:
+            # Используем TM_CCOEFF_NORMED для лучшей точности
+            result = cv2.matchTemplate(image, template, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(result)
+
+            if max_val >= self.confidence_threshold:
+                template_x = max_loc[0]
+                template_y = max_loc[1]
+
+                if not template_data.get('found', False):
+                    template_data['found'] = True
+                    self.logger.info(f"Шаблон #{idx} найден с точностью {max_val:.3f}")
+
+                template_data['last_position'] = (template_x, template_y, t_w, t_h)
+                self._update_overlay(template_data, template_x, template_y, t_w, t_h)
+            else:
+                if template_data.get('found', False):
+                    template_data['found'] = False
+                    overlay = template_data.get('overlay')
+                    if overlay and overlay.visible:
+                        self._hide_overlay_in_main_thread(overlay, idx)
+
+        except Exception as e:
+            self.logger.warning(f"Ошибка поиска шаблона #{idx}: {e}")
+
+    def _capture_window(self, hwnd: int) -> Optional[np.ndarray]:
+        """
+        Оптимизированный захват окна - сначала пробует PrintWindow,
+        при неудаче использует BitBlt.
+        Добавлена проверка на изменение окна.
+        """
+        if not hwnd:
+            return None
+
+        try:
+            if not win32gui.IsWindow(hwnd) or not win32gui.IsWindowVisible(hwnd):
+                return None
+
+            rect = win32gui.GetWindowRect(hwnd)
+            x1, y1, x2, y2 = rect
+            width = x2 - x1
+            height = y2 - y1
+
+            if width <= 0 or height <= 0:
+                return None
+
+            # Пытаемся захватить через PrintWindow
+            hwnd_dc = win32gui.GetWindowDC(hwnd)
+            dc = win32ui.CreateDCFromHandle(hwnd_dc)
+            mem_dc = dc.CreateCompatibleDC()
+
+            bitmap = win32ui.CreateBitmap()
+            bitmap.CreateCompatibleBitmap(dc, width, height)
+            mem_dc.SelectObject(bitmap)
+
+            PW_RENDERFULLCONTENT = 0x00000002
+            user32 = ctypes.windll.user32
+
+            result = user32.PrintWindow(hwnd, mem_dc.GetSafeHdc(), PW_RENDERFULLCONTENT)
+
+            if not result:
+                result = user32.PrintWindow(hwnd, mem_dc.GetSafeHdc(), 0)
+
+            if result:
+                bmpinfo = bitmap.GetInfo()
+                bmpstr = bitmap.GetBitmapBits(True)
+
+                img = Image.frombuffer(
+                    'RGB',
+                    (bmpinfo['bmWidth'], bmpinfo['bmHeight']),
+                    bmpstr, 'raw', 'BGRX', 0, 1
+                )
+
+                dc.DeleteDC()
+                mem_dc.DeleteDC()
+                win32gui.ReleaseDC(hwnd, hwnd_dc)
+                win32gui.DeleteObject(bitmap.GetHandle())
+
+                img_array = np.array(img)
+                return cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+
+            dc.DeleteDC()
+            mem_dc.DeleteDC()
+            win32gui.ReleaseDC(hwnd, hwnd_dc)
+            win32gui.DeleteObject(bitmap.GetHandle())
+
+            # Fallback: BitBlt
+            return self._capture_window_bitblt(hwnd)
+
+        except Exception as e:
+            self.logger.warning(f"Ошибка захвата окна {hwnd}: {e}")
+            return self._capture_window_bitblt(hwnd)
+
+    def _get_cached_app_name(self, hwnd: int) -> str:
+        """Получает имя приложения с кэшированием."""
+        if hwnd in self._app_name_cache:
+            return self._app_name_cache[hwnd]
+
+        from src.window_utils import get_process_name_by_hwnd
+        app_name = get_process_name_by_hwnd(hwnd, default_name="Неизвестно")
+
+        # Ограничиваем размер кэша
+        if len(self._app_name_cache) > self._cache_max_size:
+            # Удаляем старые записи (первую половину)
+            keys = list(self._app_name_cache.keys())
+            for key in keys[:len(keys) // 2]:
+                del self._app_name_cache[key]
+
+        self._app_name_cache[hwnd] = app_name
+        return app_name
 
     def add_template(self, region_image: Path, translated_image: Path, target_hwnd: int = None):
         """Добавляет новый шаблон для мониторинга. Возвращает (pair_index, file_hash)."""
@@ -88,7 +429,6 @@ class TranslationMonitor:
                 'overlay': None,
                 'enabled': True,
                 'target_hwnd': target_hwnd,
-                # === НОВЫЕ ПОЛЯ ДЛЯ СМЕЩЕНИЯ ===
                 'offset_x': 0,
                 'offset_y': 0,
                 'offset_initialized': False,
@@ -114,10 +454,8 @@ class TranslationMonitor:
         """Удаляет все шаблоны и связанные с ними оверлеи."""
         self.logger.info("[MONITOR] Очистка всех шаблонов...")
 
-        # Сначала останавливаем монитор
         self.monitoring = False
 
-        # Закрываем все оверлеи, связанные с шаблонами
         for template_data in self.templates:
             if template_data.get('overlay'):
                 try:
@@ -129,21 +467,16 @@ class TranslationMonitor:
                 except Exception as e:
                     self.logger.warning(f"[MONITOR] Ошибка закрытия оверлея: {e}")
 
-        # Очищаем список шаблонов
         self.templates.clear()
         self._template_counter = 0
+        self._app_name_cache.clear()
 
         self.logger.info("[MONITOR] Все шаблоны удалены")
 
     def _update_overlay_gui(self, template_data: Dict, x: int, y: int, w: int, h: int, translated_path: Path,
                             template_id: str):
-        """
-        Обновляет или создает оверлей в главном потоке.
-        """
+        """Обновляет или создает оверлей в главном потоке."""
         try:
-            self.logger.info(
-                f"[DEBUG] === _update_overlay_gui НАЧАЛО для шаблона #{template_data.get('pair_index')} ===")
-
             pair_index = template_data['pair_index']
             overlay = template_data.get('overlay')
             target_hwnd = template_data.get('target_hwnd')
@@ -153,7 +486,6 @@ class TranslationMonitor:
                 template_id = template_data.get('hash')
 
             if not is_found:
-                self.logger.info(f"[DEBUG] Шаблон #{pair_index} не найден")
                 if overlay and overlay.visible:
                     self._hide_overlay_in_main_thread(overlay, pair_index)
                 return
@@ -183,32 +515,21 @@ class TranslationMonitor:
             current_template_pos = (template_x, template_y)
             last_template_pos = template_data.get('last_template_position')
 
-            # === ПРОВЕРЯЕМ СУЩЕСТВУЮЩИЙ ОВЕРЛЕЙ ===
             if overlay:
                 try:
-                    # Проверяем, что оверлей всё ещё существует и его окно живо
                     if overlay.root and overlay.root.winfo_exists():
-                        # УБИРАЕМ ПРОВЕРКУ _is_visible_by_user - оверлей должен показываться всегда,
-                        # если найден шаблон (кроме случая, когда пользователь явно скрыл через F1)
-                        # Проверяем только _hidden_by_user (F1)
                         if overlay._hidden_by_user:
-                            self.logger.info(f"[DEBUG] Оверлей #{pair_index} скрыт пользователем (F1), не показываем")
                             return
 
                         if last_template_pos is None or last_template_pos != current_template_pos:
-                            self.logger.info(
-                                f"[DEBUG] Позиция шаблона изменилась: {last_template_pos} -> {current_template_pos}")
                             overlay.root.geometry(f"{final_w}x{final_h}+{final_x}+{final_y}")
                             overlay.root.update_idletasks()
                             overlay.root.update()
                             overlay._last_window_rect = (final_x, final_y, final_x + final_w, final_y + final_h)
                             overlay._saved_position = (final_x, final_y)
                             template_data['last_template_position'] = current_template_pos
-                            self.logger.info(f"[DEBUG] Позиция оверлея обновлена: ({final_x}, {final_y})")
 
                         if not overlay.visible:
-                            self.logger.info(f"[DEBUG] Шаблон #{pair_index} найден, показываем оверлей")
-                            # Сбрасываем флаги скрытия, чтобы оверлей точно показался
                             overlay._hidden_by_user = False
                             overlay._is_visible_by_user = True
                             overlay.show()
@@ -217,16 +538,12 @@ class TranslationMonitor:
                             overlay.root.update_idletasks()
                         return
                     else:
-                        # Окно оверлея умерло - сбрасываем ссылку
-                        self.logger.warning(f"[DEBUG] Оверлей #{pair_index} имеет мёртвое окно, создаём новый")
                         template_data['overlay'] = None
                 except Exception as e:
                     self.logger.warning(f"[DEBUG] Ошибка при обновлении существующего оверлея: {e}")
                     template_data['overlay'] = None
 
-            # === СОЗДАЁМ НОВЫЙ ОВЕРЛЕЙ ===
-            self.logger.info(f"[DEBUG] Создаем новый оверлей для шаблона #{pair_index}")
-
+            # Создаём новый оверлей
             if self.overlay_manager:
                 try:
                     if not template_data.get('offset_initialized', False):
@@ -237,7 +554,6 @@ class TranslationMonitor:
                         template_data['overlay_height'] = template_h
 
                     window_rect = (final_x, final_y, final_x + final_w, final_y + final_h)
-                    self.logger.info(f"[DEBUG] window_rect для создания оверлея: {window_rect}")
 
                     new_overlay = self.overlay_manager._create_overlay_from_data(
                         image_path=translated_path,
@@ -276,160 +592,19 @@ class TranslationMonitor:
                         self.logger.warning(f"[MONITOR] Не удалось создать оверлей для шаблона #{pair_index}")
                 except Exception as e:
                     self.logger.error(f"[MONITOR] Ошибка создания оверлея для шаблона #{pair_index}: {e}")
-                    import traceback
-                    traceback.print_exc()
-            else:
-                self.logger.warning("[MONITOR] overlay_manager отсутствует")
-
-            self.logger.info(f"[DEBUG] === _update_overlay_gui ЗАВЕРШЕН для шаблона #{pair_index} ===")
 
         except Exception as e:
             self.logger.error(f"[DEBUG] Ошибка в _update_overlay_gui: {e}")
-            import traceback
-            traceback.print_exc()
-
-    def _monitor_loop(self):
-        """Основной цикл мониторинга — проверяет ТОЛЬКО шаблоны активного приложения"""
-        last_time = time.time()
-        self.logger.info("[MONITOR] Цикл мониторинга запущен")
-
-        iteration_count = 0
-        last_found_time = {}
-
-        from src.window_utils import get_process_name_by_hwnd
-
-        while self.monitoring:
-            try:
-                current_time = time.time()
-                if current_time - last_time >= self.delay_sec:
-                    last_time = current_time
-                    iteration_count += 1
-
-                    if iteration_count % 10 == 0:
-                        self.logger.info(f"[MONITOR] Итерация #{iteration_count}, шаблонов: {len(self.templates)}")
-
-                    if not self.monitoring:
-                        break
-
-                    if not self.templates:
-                        time.sleep(0.1)
-                        continue
-
-                    # Проверка: идет ли перетаскивание оверлея
-                    if self.overlay_manager and self.overlay_manager.is_dragging():
-                        time.sleep(0.05)
-                        continue
-
-                    # Получаем активное окно
-                    try:
-                        import win32gui
-                        active_hwnd = win32gui.GetForegroundWindow()
-                        if not active_hwnd:
-                            time.sleep(0.05)
-                            continue
-                    except:
-                        time.sleep(0.05)
-                        continue
-
-                    # Получаем имя активного приложения
-                    active_app_name = get_process_name_by_hwnd(active_hwnd) if active_hwnd else None
-
-                    # Проверка: является ли активное окно окном выделения
-                    is_selection_window = False
-                    try:
-                        if hasattr(self, 'parent') and self.parent:
-                            parent = self.parent
-                            if hasattr(parent, '_capture_mode') and parent._capture_mode:
-                                is_selection_window = True
-                    except:
-                        pass
-
-                    if is_selection_window:
-                        time.sleep(0.05)
-                        continue
-
-                    # Проверяем только шаблоны для активного приложения
-                    for template_data in self.templates:
-                        if not template_data.get('enabled', True):
-                            continue
-
-                        target_hwnd = template_data.get('target_hwnd')
-                        if not target_hwnd:
-                            continue
-
-                        # Получаем имя приложения для этого шаблона
-                        template_app_name = get_process_name_by_hwnd(target_hwnd) if target_hwnd else None
-
-                        overlay = template_data.get('overlay')
-                        is_overlay_visible_by_user = overlay._is_visible_by_user if overlay else False
-
-                        # Если приложение не активно — принудительно скрываем оверлей
-                        if template_app_name != active_app_name:
-                            # Проверяем режим редактирования
-                            if overlay and hasattr(overlay, '_edit_mode_enabled') and overlay._edit_mode_enabled:
-                                self.logger.debug(
-                                    f"[MONITOR] Шаблон #{template_data.get('pair_index')} в режиме редактирования, не скрываем при смене окна")
-                                continue
-                            if overlay and overlay.visible:
-                                self._hide_overlay_in_main_thread(overlay, template_data.get('pair_index', 0))
-                            continue
-
-                        # Проверяем существование окна
-                        try:
-                            if not win32gui.IsWindow(target_hwnd) or not win32gui.IsWindowVisible(target_hwnd):
-                                if template_data.get('found', False):
-                                    template_data['found'] = False
-                                    if overlay and overlay.visible:
-                                        self._hide_overlay_in_main_thread(overlay, template_data.get('pair_index', 0))
-                                continue
-                        except:
-                            continue
-
-                        # Если пользователь скрыл оверлей (F1) — не показываем его
-                        if overlay and not is_overlay_visible_by_user:
-                            continue
-
-                        # Проверка: не находили ли шаблон слишком недавно
-                        pair_index = template_data.get('pair_index', 0)
-                        if pair_index in last_found_time:
-                            time_since_found = time.time() - last_found_time[pair_index]
-                            if template_data.get('found',
-                                                 False) and overlay and overlay.visible and time_since_found < 2.0:
-                                continue
-
-                        # Захватываем скриншот активного окна
-                        image = self._capture_window(target_hwnd)
-                        if image is None:
-                            continue
-
-                        # Ищем шаблон в этом окне
-                        self._find_in_window(image, template_data)
-
-                        # Обновляем время последнего поиска для этого шаблона
-                        if template_data.get('found', False):
-                            last_found_time[pair_index] = time.time()
-
-                        time.sleep(0.05)
-
-            except Exception as e:
-                self.logger.error(f"[MONITOR] Ошибка: {e}")
-                time.sleep(0.5)
-
-        self.logger.info("[MONITOR] Цикл мониторинга завершен")
 
     def _update_overlay(self, template_data: Dict, x: int, y: int, w: int, h: int):
         """Обновляет или создает оверлей для шаблона. (Вызывается из фонового потока)"""
-        # Защита от рекурсивных вызовов
         if hasattr(self, '_updating_overlay') and self._updating_overlay:
             return
         self._updating_overlay = True
 
         try:
-            self.logger.info(f"[DEBUG] === _update_overlay НАЧАЛО для шаблона #{template_data.get('pair_index')} ===")
-
             translated_path = template_data.get('translated_path')
             if not translated_path or not translated_path.exists():
-                self.logger.info("[DEBUG] translated_path не существует, пропускаем")
                 return
 
             pair_index = template_data['pair_index']
@@ -437,28 +612,21 @@ class TranslationMonitor:
             overlay = template_data.get('overlay')
             target_hwnd = template_data.get('target_hwnd')
 
-            # === ПРОВЕРКА: СКРЫТ ЛИ ОВЕРЛЕЙ ПОЛЬЗОВАТЕЛЕМ ===
             if overlay and not overlay._is_visible_by_user:
-                self.logger.info(f"[DEBUG] Оверлей #{pair_index} скрыт пользователем, не показываем")
                 return
 
-            # === ПРОВЕРКА: АКТИВНО ЛИ ЦЕЛЕВОЕ ОКНО ===
             if target_hwnd:
                 try:
-                    import win32gui
                     if not win32gui.IsWindow(target_hwnd):
-                        self.logger.info(f"[DEBUG] Целевое окно HWND={target_hwnd} не существует, пропускаем")
                         return
                     active_hwnd = win32gui.GetForegroundWindow()
                     if active_hwnd != target_hwnd:
-                        self.logger.info(f"[DEBUG] Целевое окно HWND={target_hwnd} не активно, оверлей не создаем")
                         if overlay and overlay.visible:
                             self._hide_overlay_in_main_thread(overlay, pair_index)
                         return
                 except Exception as e:
                     self.logger.warning(f"[DEBUG] Ошибка проверки активного окна: {e}")
 
-            # === ВЫПОЛНЯЕМ GUI-ОПЕРАЦИИ В ГЛАВНОМ ПОТОКЕ ===
             if self.parent and hasattr(self.parent, 'root'):
                 root = self.parent.root
                 if root and root.winfo_exists():
@@ -468,8 +636,6 @@ class TranslationMonitor:
                     self.logger.warning("[DEBUG] root не существует, пропускаем")
             else:
                 self.logger.warning("[DEBUG] parent.root не найден, пропускаем")
-
-            self.logger.info(f"[DEBUG] === _update_overlay ЗАВЕРШЕН для шаблона #{pair_index} ===")
 
         finally:
             self._updating_overlay = False
@@ -556,77 +722,6 @@ class TranslationMonitor:
         self.monitor_thread.start()
         self.logger.info(f"Мониторинг запущен для {len(self.templates)} шаблонов")
 
-        # Оверлеи будут показаны только когда шаблоны будут найдены при сканировании
-        # Это устраняет "мигание" при восстановлении
-
-    def _capture_window(self, hwnd: int) -> Optional[np.ndarray]:
-        """Захватывает скриншот окна через PrintWindow (для браузеров)."""
-        if not hwnd:
-            return None
-
-        try:
-            if not win32gui.IsWindow(hwnd) or not win32gui.IsWindowVisible(hwnd):
-                return None
-
-            rect = win32gui.GetWindowRect(hwnd)
-            x1, y1, x2, y2 = rect
-            width = x2 - x1
-            height = y2 - y1
-
-            if width <= 0 or height <= 0:
-                return None
-
-            # Сначала пробуем PrintWindow (работает с браузерами)
-            hwnd_dc = win32gui.GetWindowDC(hwnd)
-            dc = win32ui.CreateDCFromHandle(hwnd_dc)
-            mem_dc = dc.CreateCompatibleDC()
-
-            bitmap = win32ui.CreateBitmap()
-            bitmap.CreateCompatibleBitmap(dc, width, height)
-            mem_dc.SelectObject(bitmap)
-
-            PW_RENDERFULLCONTENT = 0x00000002
-            user32 = ctypes.windll.user32
-
-            result = user32.PrintWindow(hwnd, mem_dc.GetSafeHdc(), PW_RENDERFULLCONTENT)
-
-            if not result:
-                result = user32.PrintWindow(hwnd, mem_dc.GetSafeHdc(), 0)
-
-            if result:
-                bmpinfo = bitmap.GetInfo()
-                bmpstr = bitmap.GetBitmapBits(True)
-
-                img = Image.frombuffer(
-                    'RGB',
-                    (bmpinfo['bmWidth'], bmpinfo['bmHeight']),
-                    bmpstr, 'raw', 'BGRX', 0, 1
-                )
-
-                dc.DeleteDC()
-                mem_dc.DeleteDC()
-                win32gui.ReleaseDC(hwnd, hwnd_dc)
-                win32gui.DeleteObject(bitmap.GetHandle())
-
-                img_array = np.array(img)
-                img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
-
-                self.logger.debug(f"Окно {hwnd} захвачено через PrintWindow: {width}x{height}")
-                return img_bgr
-
-            dc.DeleteDC()
-            mem_dc.DeleteDC()
-            win32gui.ReleaseDC(hwnd, hwnd_dc)
-            win32gui.DeleteObject(bitmap.GetHandle())
-
-            # Если PrintWindow не сработал - пробуем BitBlt
-            self.logger.debug(f"PrintWindow не сработал для {hwnd}, пробуем BitBlt")
-            return self._capture_window_bitblt(hwnd)
-
-        except Exception as e:
-            self.logger.warning(f"Ошибка захвата окна {hwnd}: {e}")
-            return self._capture_window_bitblt(hwnd)
-
     def _capture_window_bitblt(self, hwnd: int) -> Optional[np.ndarray]:
         """Захват окна через BitBlt (fallback)."""
         try:
@@ -680,7 +775,6 @@ class TranslationMonitor:
         self.logger.info(f"[MONITOR] Удаление шаблона #{pair_index}")
         for i, template_data in enumerate(self.templates):
             if template_data['pair_index'] == pair_index:
-                # Закрываем оверлей, если он есть
                 if template_data.get('overlay'):
                     try:
                         overlay = template_data['overlay']

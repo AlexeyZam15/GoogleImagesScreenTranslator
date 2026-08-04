@@ -4,20 +4,20 @@ import logging
 import os
 from ctypes import wintypes
 
-# Windows API импорты
+# Windows API
 import win32api
 import win32con
 import win32process
 import win32gui
 import win32file
 
-# Пытаемся импортировать psutil (опционально)
+# Psutil (опционально)
 try:
     import psutil
 except ImportError:
     psutil = None
 
-# Константы Windows API
+# Windows API константы
 WS_OVERLAPPED = 0x00000000
 WS_POPUP = 0x80000000
 WS_CHILD = 0x40000000
@@ -292,7 +292,8 @@ def get_process_name_by_hwnd(hwnd: int, default_name: str = None) -> str:
                         )
                         if module_path.value:
                             return \
-                            os.path.splitext(os.path.basename(module_path.value.decode('utf-8', errors='ignore')))[0]
+                                os.path.splitext(os.path.basename(module_path.value.decode('utf-8', errors='ignore')))[
+                                    0]
                 finally:
                     win32api.CloseHandle(process_handle)
         except Exception as e:

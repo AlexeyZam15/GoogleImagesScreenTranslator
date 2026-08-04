@@ -1,7 +1,5 @@
 """
-
 Управление горячими клавишами
-
 """
 
 import logging
@@ -10,7 +8,15 @@ import keyboard
 
 
 class HotkeyManager:
-    """Управляет глобальными горячими клавишами"""
+    """Управляет глобальными горячими клавишами (оптимизированная версия)"""
+
+    __slots__ = (
+        'app', 'logger', 'settings', '_key_last_time', '_debounce_ms',
+        '_hotkey_hook_active', '_hotkeys_blocked', '_pressed_keys',
+        '_hotkey_actions', '_single_keys', '_combinations', '_action_queue',
+        '_processing_queue', '_block_callback', '_block_hook_active',
+        '_blocked_keys', '_permanently_blocked'
+    )
 
     def __init__(self, app):
         self.app = app
@@ -18,7 +24,7 @@ class HotkeyManager:
         self.settings = app.settings
 
         self._key_last_time = {}
-        self._debounce_ms = 500
+        self._debounce_ms = 300  # Уменьшено с 500 до 300
         self._hotkey_hook_active = False
         self._hotkeys_blocked = False
         self._pressed_keys = set()
@@ -27,43 +33,107 @@ class HotkeyManager:
         self._combinations = {}
         self._action_queue = []
         self._processing_queue = False
+        self._block_callback = None
+        self._block_hook_active = False
+        self._blocked_keys = []
+        self._permanently_blocked = ['f1', 'f2', 'f3', 'f4', 'f5', 'f6']
 
-    def set_actions_blocked(self, blocked):
-        """Блокирует/разблокирует выполнение действий горячих клавиш"""
-        self._hotkeys_blocked = blocked
-        if blocked:
-            self.logger.info("[HOTKEYS] Выполнение действий горячих клавиш заблокировано")
-        else:
-            self.logger.info("[HOTKEYS] Выполнение действий горячих клавиш разблокировано")
+    def setup(self):
+        """Настраивает горячие клавиши через низкоуровневый хук (оптимизированная версия)"""
+        self.logger.info("=" * 60)
+        self.logger.info("[HOTKEYS] НАСТРОЙКА ГОРЯЧИХ КЛАВИШ (оптимизированная)")
+        self.logger.info("=" * 60)
 
-    def _process_queue(self):
-        """Обрабатывает очередь действий в главном потоке"""
-        if self._processing_queue:
-            return
+        try:
+            import keyboard
 
-        self._processing_queue = True
+            keyboard.unhook_all()
+            self.logger.info("[HOTKEYS] Старые хуки отключены")
 
-        def process():
-            try:
-                while self._action_queue:
-                    action = self._action_queue.pop(0)
-                    self.logger.info(f"[HOTKEYS] ВЫПОЛНЕНИЕ: {action}")
-                    self._execute_action(action)
-            finally:
-                self._processing_queue = False
+            self._hotkey_actions = self.settings.get_all_hotkeys()
+            self._single_keys = []
+            self._combinations = {}
 
-        # Используем root.after для выполнения в главном потоке tkinter
-        if hasattr(self.app, 'root') and self.app.root:
-            self.app.root.after(0, process)
-        else:
-            # Fallback: выполняем в отдельном потоке
-            import threading
-            threading.Thread(target=process, daemon=True).start()
+            for action, hotkey in self._hotkey_actions.items():
+                if hotkey and '+' in hotkey:
+                    self._combinations[action] = hotkey
+                elif hotkey:
+                    self._single_keys.append(hotkey)
+
+            # Создаем множество для быстрой проверки одиночных клавиш
+            single_keys_set = set(self._single_keys)
+
+            # Низкоуровневый хук с оптимизированной обработкой
+            def low_level_handler(event):
+                if event.event_type not in ('down', 'up'):
+                    return True
+
+                key = event.name.lower()
+                event_type = event.event_type
+
+                # Блокируем только если не в режиме захвата
+                if self._hotkeys_blocked:
+                    return True
+
+                # Оптимизация: быстрая проверка одиночных клавиш через set
+                if key in single_keys_set:
+                    # Находим действие для этой клавиши (кэшируем в словаре)
+                    action = None
+                    for act, hk in self._hotkey_actions.items():
+                        if hk == key:
+                            action = act
+                            break
+
+                    if action:
+                        self._queue_action(action)
+                        return False
+
+                # Проверка комбинаций (только для нажатий)
+                if event_type == 'down':
+                    self._pressed_keys.add(key)
+
+                    # Оптимизация: используем локальные переменные
+                    pressed = self._pressed_keys
+                    current_pressed = set(pressed)
+
+                    for action, hotkey in self._combinations.items():
+                        hotkey_parts = [p.lower().strip() for p in hotkey.split('+') if p.strip()]
+                        if not hotkey_parts:
+                            continue
+
+                        # Быстрая проверка
+                        all_pressed = True
+                        for part in hotkey_parts:
+                            found = False
+                            for pressed_key in current_pressed:
+                                if part in pressed_key or pressed_key in part:
+                                    found = True
+                                    break
+                            if not found:
+                                all_pressed = False
+                                break
+
+                        if all_pressed:
+                            self._queue_action(action)
+                            self._pressed_keys.clear()
+                            return False
+                else:
+                    self._pressed_keys.discard(key)
+
+                return True
+
+            keyboard.hook(low_level_handler, suppress=True)
+            self._hotkey_hook_active = True
+            self.logger.info("[HOTKEYS] Низкоуровневый хук установлен")
+
+            self.logger.info(f"[HOTKEYS] Горячие клавиши зарегистрированы: {self._hotkey_actions}")
+
+        except Exception as e:
+            self.logger.error(f"[HOTKEYS] Ошибка регистрации: {e}")
 
     def _queue_action(self, action):
-        """Ставит действие в очередь для выполнения в главном потоке"""
+        """Ставит действие в очередь для выполнения в главном потоке (оптимизированная версия)"""
         if self._hotkeys_blocked:
-            self.logger.debug(f"[HOTKEYS] Действие {action} заблокировано")
             return
 
         current_time = time.time() * 1000
@@ -77,6 +147,44 @@ class HotkeyManager:
         # Запускаем обработку очереди в главном потоке
         if not self._processing_queue:
             self._process_queue()
+
+    def _process_queue(self):
+        """Обрабатывает очередь действий в главном потоке (оптимизированная версия)"""
+        if self._processing_queue:
+            return
+
+        self._processing_queue = True
+
+        def process():
+            try:
+                # Обрабатываем все действия в очереди за один раз
+                actions_to_process = []
+                while self._action_queue:
+                    actions_to_process.append(self._action_queue.pop(0))
+
+                if not actions_to_process:
+                    return
+
+                for action in actions_to_process:
+                    self.logger.info(f"[HOTKEYS] ВЫПОЛНЕНИЕ: {action}")
+                    self._execute_action(action)
+
+            finally:
+                self._processing_queue = False
+
+        if hasattr(self.app, 'root') and self.app.root:
+            self.app.root.after(0, process)
+        else:
+            import threading
+            threading.Thread(target=process, daemon=True).start()
+
+    def set_actions_blocked(self, blocked):
+        """Блокирует/разблокирует выполнение действий горячих клавиш"""
+        self._hotkeys_blocked = blocked
+        if blocked:
+            self.logger.info("[HOTKEYS] Выполнение действий горячих клавиш заблокировано")
+        else:
+            self.logger.info("[HOTKEYS] Выполнение действий горячих клавиш разблокировано")
 
     def _setup_block_hook(self, keys_to_block):
         """Устанавливает дополнительный хук для подавления клавиш"""
@@ -167,6 +275,8 @@ class HotkeyManager:
             self.app.process()
         elif action == 'area':
             self.app.capture_area()
+        elif action == 'area_temporary':
+            self.app.capture_area_temporary()
         elif action == 'clear_all':
             self.app.clear_all_overlays()
         elif action == 'edit_mode':
@@ -175,94 +285,3 @@ class HotkeyManager:
             self.app.toggle_auto_replace_mode()
         else:
             self.logger.warning(f"[HOTKEYS] Неизвестное действие: {action}")
-
-    def setup(self):
-        """Настраивает горячие клавиши через низкоуровневый хук"""
-        self.logger.info("=" * 60)
-        self.logger.info("[HOTKEYS] НАСТРОЙКА ГОРЯЧИХ КЛАВИШ")
-        self.logger.info("=" * 60)
-
-        try:
-            import keyboard
-
-            keyboard.unhook_all()
-            self.logger.info("[HOTKEYS] Старые хуки отключены")
-
-            self._hotkey_actions = self.settings.get_all_hotkeys()
-            self.logger.info(f"[HOTKEYS] Назначенные действия: {self._hotkey_actions}")
-
-            self._single_keys = []
-            self._combinations = {}
-
-            for action, hotkey in self._hotkey_actions.items():
-                if '+' in hotkey:
-                    self._combinations[action] = hotkey
-                else:
-                    self._single_keys.append(hotkey)
-
-            self.logger.info(f"[HOTKEYS] Одиночные клавиши: {self._single_keys}")
-            self.logger.info(f"[HOTKEYS] Комбинации: {self._combinations}")
-
-            # Низкоуровневый хук для перехвата всех клавиш
-            def low_level_handler(event):
-                if event.event_type not in ('down', 'up'):
-                    return True
-
-                key = event.name.lower()
-
-                # Проверяем одиночные клавиши
-                if key in self._single_keys:
-                    # Находим действие для этой клавиши
-                    action = None
-                    for act, hk in self._hotkey_actions.items():
-                        if hk == key:
-                            action = act
-                            break
-
-                    if action:
-                        self._queue_action(action)
-                        return False  # Подавляем клавишу
-
-                # Проверяем комбинации
-                if event.event_type == 'down':
-                    self._pressed_keys.add(key)
-                elif event.event_type == 'up':
-                    self._pressed_keys.discard(key)
-                    return True
-
-                if event.event_type == 'down':
-                    current_pressed = set(self._pressed_keys)
-                    for action, hotkey in self._combinations.items():
-                        hotkey_parts = [p.lower().strip() for p in hotkey.split('+') if p.strip()]
-                        if not hotkey_parts:
-                            continue
-
-                        all_pressed = True
-                        pressed_lower = [p.lower() for p in current_pressed]
-                        for part in hotkey_parts:
-                            found = False
-                            for pressed in pressed_lower:
-                                if part in pressed or pressed in part:
-                                    found = True
-                                    break
-                            if not found:
-                                all_pressed = False
-                                break
-
-                        if all_pressed:
-                            self._queue_action(action)
-                            self._pressed_keys.clear()
-                            return False
-
-                return True
-
-            keyboard.hook(low_level_handler, suppress=True)
-            self._hotkey_hook_active = True
-            self.logger.info("[HOTKEYS] Низкоуровневый хук установлен")
-
-            self.logger.info("=" * 60)
-            self.logger.info(f"[HOTKEYS] Горячие клавиши зарегистрированы: {self._hotkey_actions}")
-            self.logger.info("=" * 60)
-
-        except Exception as e:
-            self.logger.error(f"[HOTKEYS] Ошибка регистрации: {e}")
