@@ -85,8 +85,13 @@ class MainWindow:
             activeforeground='white'
         )
 
+        # Получаем локализованную строку
+        menu_label = "🗑️ Удалить оверлеи"
+        if hasattr(self.app, 'settings'):
+            menu_label = self.app.settings.get_string('context_menu_remove_overlays')
+
         self.context_menu.add_command(
-            label="🗑️ Удалить оверлеи",
+            label=menu_label,
             command=self.app._context_remove_overlays
         )
 

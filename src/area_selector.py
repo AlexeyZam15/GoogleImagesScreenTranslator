@@ -104,14 +104,19 @@ class AreaSelector:
         # Принудительно захватываем фокус и все события
         self.canvas.focus_set()
         self.root.focus_force()
-        self.root.grab_set()  # <-- ДОБАВЛЕНО: захват всех событий
+        self.root.grab_set()
         self.root.lift()
+
+        # Получаем локализованную строку через родительские настройки
+        instruction_text = "Выделите область для перевода (ESC для отмены)"
+        if self.parent and hasattr(self.parent, 'settings'):
+            instruction_text = self.parent.settings.get_string('area_selector_instruction')
 
         # Показываем инструкцию
         self.canvas.create_text(
             self.root.winfo_screenwidth() // 2,
             50,
-            text="Выделите область для перевода (ESC для отмены)",
+            text=instruction_text,
             fill="white",
             font=("Arial", 16, "bold")
         )
@@ -154,7 +159,15 @@ class AreaSelector:
                 self._close_capture(True)
             else:
                 self.logger.warning(f"[DEBUG] Слишком маленькая область: {x2 - x1}x{y2 - y1}")
+                # Получаем локализованные строки
+                error_title = "Ошибка"
+                error_message = f"Выделите область размером больше {min_size}x{min_size} пикселей"
+                if self.parent and hasattr(self.parent, 'settings'):
+                    error_title = self.parent.settings.get_string('area_selector_error_title')
+                    error_message = self.parent.settings.get_string('area_selector_error_too_small').format(
+                        min_size=min_size)
+
                 messagebox.showwarning(
-                    "Ошибка",
-                    f"Выделите область размером больше {min_size}x{min_size} пикселей"
+                    error_title,
+                    error_message
                 )
