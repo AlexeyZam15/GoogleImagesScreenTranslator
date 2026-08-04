@@ -639,6 +639,8 @@ class OverlayWindow:
                     return
 
                 self._user_moved = True
+                # === СОХРАНЯЕМ ФИНАЛЬНУЮ ПОЗИЦИЮ В _saved_position ===
+                self._saved_position = (overlay_x, overlay_y)
 
                 if self._template_id and hasattr(self, '_overlay_manager') and self._overlay_manager:
                     parent = self._overlay_manager.parent
@@ -657,6 +659,9 @@ class OverlayWindow:
                                         template_data['overlay_width'] = overlay_w
                                         template_data['overlay_height'] = overlay_h
                                         template_data['offset_initialized'] = True
+                                        # === ОБНОВЛЯЕМ _offset_x И _offset_y В ОВЕРЛЕЕ ===
+                                        self._offset_x = new_offset_x
+                                        self._offset_y = new_offset_y
                                         self.logger.info(
                                             f"[DEBUG] Обновлено смещение для шаблона {self._template_id[:8]}: "
                                             f"({new_offset_x}, {new_offset_y})"
@@ -679,7 +684,7 @@ class OverlayWindow:
             self._overlay_manager.set_dragging(False)
             self.logger.info("[DEBUG] Глобальный флаг перетаскивания сброшен")
 
-        # Обновляем рамку, если она видна (она управляется через update_edit_mode)
+        # Обновляем рамку, если она видна
         if self._edit_frame_visible:
             self._update_edit_frame_position()
 

@@ -108,8 +108,13 @@ class OverlayManager:
                 if not overlay.root or not overlay.root.winfo_exists():
                     continue
 
-                x = overlay.root.winfo_x()
-                y = overlay.root.winfo_y()
+                # Используем _saved_position если есть, иначе берем из окна
+                if overlay._saved_position:
+                    x, y = overlay._saved_position
+                else:
+                    x = overlay.root.winfo_x()
+                    y = overlay.root.winfo_y()
+
                 w = overlay.root.winfo_width()
                 h = overlay.root.winfo_height()
 
@@ -157,7 +162,8 @@ class OverlayManager:
                                             _, buffer = cv2.imencode('.png', template_img)
                                             overlay_data['template_base64'] = base64.b64encode(buffer).decode('utf-8')
                                             self.logger.debug(
-                                                f"[STATE] Шаблон {overlay._template_id[:8]} сохранён в base64")
+                                                f"[STATE] Шаблон {overlay._template_id[:8]} сохранён в base64"
+                                            )
                                         except Exception as e:
                                             self.logger.warning(f"[STATE] Не удалось сохранить шаблон в base64: {e}")
                                     break
@@ -504,12 +510,14 @@ class OverlayManager:
                 saved_w = state.get('width', 300)
                 saved_h = state.get('height', 200)
 
+                # === ПОЛУЧАЕМ СМЕЩЕНИЕ ИЗ СОСТОЯНИЯ ===
                 offset_x = state.get('offset_x', 0)
                 offset_y = state.get('offset_y', 0)
 
                 self.logger.info(
                     f"[STATE] Восстановление оверлея: {key}, app_name={app_name}, "
-                    f"auto_replace={is_auto_replace}, template_id={template_id}"
+                    f"auto_replace={is_auto_replace}, template_id={template_id}, "
+                    f"offset=({offset_x}, {offset_y})"
                 )
 
                 # Если имя приложения "Неизвестно" - пробуем определить по HWND
@@ -530,7 +538,7 @@ class OverlayManager:
                         self.logger.info(
                             f"[STATE] Окно для {app_name} не найдено, оверлей будет скрыт до появления окна")
 
-                # Создаём оверлей
+                # Создаём оверлей с передачей offset
                 overlay = self._create_overlay_from_data(
                     image_path=image_path,
                     window_rect=window_rect,
@@ -755,9 +763,9 @@ class OverlayManager:
             is_window_screenshot: Флаг скриншота окна
             template_id: ID шаблона (hash)
             show_immediately: Показывать ли сразу
-            saved_x, saved_y, saved_w, saved_h: Сохранённая позиция
+            saved_x, saved_y, saved_w, saved_h: Сохранённая позиция (устарело, используется offset_x/offset_y)
             is_startup: Флаг запуска при старте
-            offset_x, offset_y: Смещение
+            offset_x, offset_y: Смещение относительно шаблона
             is_temporary: Временный ли оверлей
             lifetime_seconds: Время жизни временного оверлея
             region_path: Путь к файлу шаблона (для автозамены)
@@ -765,20 +773,45 @@ class OverlayManager:
         Returns:
             OverlayWindow или None
         """
+
         # === ВЫЧИСЛЯЕМ ФИНАЛЬНУЮ ПОЗИЦИЮ ===
-        if saved_x != 0 or saved_y != 0:
+        # Приоритет: если есть offset_x/offset_y и window_rect (позиция шаблона) — используем их
+        # Иначе используем saved_x/saved_y (старый формат)
+        # Иначе используем window_rect
+
+        rx1, ry1, rx2, ry2 = window_rect
+        template_x = rx1
+        template_y = ry1
+
+        # Если есть смещение и оно не нулевое — применяем его к позиции шаблона
+        if offset_x != 0 or offset_y != 0:
+            final_x = template_x + offset_x
+            final_y = template_y + offset_y
+            # Ширина/высота берутся из сохранённых или из window_rect
+            if saved_w > 0 and saved_h > 0:
+                final_w = saved_w
+                final_h = saved_h
+            else:
+                final_w = rx2 - rx1
+                final_h = ry2 - ry1
+            self.logger.info(
+                f"[STATE] Используем смещение ({offset_x}, {offset_y}) от шаблона ({template_x}, {template_y}) -> "
+                f"финальная позиция: ({final_x}, {final_y})"
+            )
+        elif saved_x != 0 or saved_y != 0:
+            # Старый формат: используем сохранённую абсолютную позицию
             final_x = saved_x
             final_y = saved_y
-            final_w = saved_w
-            final_h = saved_h
-            self.logger.info(f"[STATE] Используем сохраненную позицию: ({saved_x}, {saved_y})")
+            final_w = saved_w if saved_w > 0 else (rx2 - rx1)
+            final_h = saved_h if saved_h > 0 else (ry2 - ry1)
+            self.logger.info(f"[STATE] Используем сохраненную позицию (старый формат): ({saved_x}, {saved_y})")
         else:
-            rx1, ry1, rx2, ry2 = window_rect
-            final_x = rx1
-            final_y = ry1
+            # По умолчанию: позиция шаблона
+            final_x = template_x
+            final_y = template_y
             final_w = rx2 - rx1
             final_h = ry2 - ry1
-            self.logger.info(f"[STATE] Используем позицию из window_rect: ({rx1}, {ry1})")
+            self.logger.info(f"[STATE] Используем позицию из window_rect: ({template_x}, {template_y})")
 
         # Создаем оверлей
         overlay = self.create_overlay(
