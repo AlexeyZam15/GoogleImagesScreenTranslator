@@ -221,11 +221,11 @@ class ScreenshotTranslatorApp:
         except:
             pass
 
-        # Получаем имя приложения для нового окна
+        old_hwnd = self._current_active_hwnd
+
+        # --- ИЗМЕНЕНИЕ: получаем ИМЯ нового приложения (один раз) ---
         from src.window_utils import get_process_name_by_hwnd
         new_app_name = get_process_name_by_hwnd(new_hwnd) if new_hwnd else None
-
-        old_hwnd = self._current_active_hwnd
         old_app_name = get_process_name_by_hwnd(old_hwnd) if old_hwnd else None
 
         self._current_active_hwnd = new_hwnd
@@ -237,46 +237,28 @@ class ScreenshotTranslatorApp:
             self.logger.info("[WINDOW] Перетаскивание активно, оверлеи НЕ скрываем")
             return
 
-        # Скрываем оверлеи старого приложения (НЕ устанавливаем _hidden_by_user)
+        # --- ИЗМЕНЕНИЕ: скрываем оверлеи СТАРОГО приложения по имени ---
         if old_app_name and self.overlay_manager:
-            overlays_to_hide = []
-            for overlay in self.overlay_manager.overlays:
-                try:
-                    target_hwnd = overlay.get_target_hwnd()
-                    if target_hwnd:
-                        overlay_app_name = get_process_name_by_hwnd(target_hwnd)
-                        if overlay_app_name == old_app_name:
-                            overlays_to_hide.append(overlay)
-                except Exception as e:
-                    self.logger.warning(f"[WINDOW] Ошибка проверки оверлея: {e}")
+            # Получаем оверлеи для старого приложения
+            overlays_to_hide = self.overlay_manager.get_overlays_by_app_name(old_app_name)
 
             for overlay in overlays_to_hide:
                 try:
                     if overlay.visible:
                         # by_user=False - не устанавливаем флаг _hidden_by_user
-                        # чтобы при возврате в окно оверлей мог быть показан автоматически
                         overlay.hide(by_user=False)
                         self.logger.info(f"[WINDOW] Скрыт оверлей для {old_app_name}")
                 except Exception as e:
                     self.logger.warning(f"[WINDOW] Ошибка скрытия оверлея: {e}")
 
-        # Оверлеи для нового приложения НЕ показываем автоматически
+        # --- ИЗМЕНЕНИЕ: оверлеи для нового приложения НЕ показываем автоматически ---
         # Они будут показаны монитором при обнаружении шаблона
         if new_app_name and self.overlay_manager:
-            overlays = []
-            for overlay in self.overlay_manager.overlays:
-                try:
-                    target_hwnd = overlay.get_target_hwnd()
-                    if target_hwnd:
-                        overlay_app_name = get_process_name_by_hwnd(target_hwnd)
-                        if overlay_app_name == new_app_name:
-                            overlays.append(overlay)
-                except:
-                    pass
-
+            overlays = self.overlay_manager.get_overlays_by_app_name(new_app_name)
             if overlays:
                 self.logger.info(
-                    f"[WINDOW] Для приложения {new_app_name} есть {len(overlays)} оверлеев, они будут показаны монитором при обнаружении шаблона")
+                    f"[WINDOW] Для приложения {new_app_name} есть {len(overlays)} оверлеев, они будут показаны монитором при обнаружении шаблона"
+                )
 
     def toggle_edit_mode(self):
         """Переключает режим редактирования"""
@@ -439,9 +421,8 @@ class ScreenshotTranslatorApp:
                 self._on_translate_error(error)
                 return
 
-            # Определяем, является ли это временным переводом
             is_temporary = getattr(self, '_is_temporary_translation', False)
-            self._is_temporary_translation = False  # Сбрасываем флаг
+            self._is_temporary_translation = False
 
             if result and self.overlay_manager:
                 self.logger.info(f"Результат перевода получен: {result}")
@@ -452,11 +433,18 @@ class ScreenshotTranslatorApp:
 
                 if region_path and region_path.exists() and self.translation_monitor and auto_replace_enabled:
                     target_hwnd = self.screenshot.get_last_hwnd()
-                    add_result = self.translation_monitor.add_template(region_path, result, target_hwnd)
+
+                    # --- ИЗМЕНЕНИЕ: получаем имя приложения ---
+                    from src.window_utils import get_process_name_by_hwnd
+                    target_app_name = get_process_name_by_hwnd(target_hwnd) if target_hwnd else None
+
+                    add_result = self.translation_monitor.add_template(region_path, result,
+                                                                       target_app_name)  # <-- ПЕРЕДАЕМ ИМЯ
                     if add_result and len(add_result) == 2:
                         pair_index, file_hash = add_result
                         self.logger.info(
-                            f"[DEBUG] Шаблон #{pair_index} добавлен в монитор (автозамена включена, оверлей будет создан монитором)")
+                            f"[DEBUG] Шаблон #{pair_index} добавлен в монитор (автозамена включена, оверлей будет создан монитором)"
+                        )
                     else:
                         self.logger.warning("[DEBUG] Не удалось добавить шаблон в монитор")
                 else:
@@ -467,8 +455,11 @@ class ScreenshotTranslatorApp:
                     if target_hwnd and window_rect:
                         self.logger.info(f"[DEBUG] Создаем оверлей сразу (автозамена выключена или нет region_path)")
 
-                        # Получаем время жизни из настроек
                         lifetime_seconds = self.settings.get_temporary_lifetime() if is_temporary else 180
+
+                        # --- ИЗМЕНЕНИЕ: получаем и передаем имя приложения ---
+                        from src.window_utils import get_process_name_by_hwnd
+                        app_name = get_process_name_by_hwnd(target_hwnd) if target_hwnd else None
 
                         overlay = self.overlay_manager._create_overlay_from_data(
                             image_path=result,
@@ -479,7 +470,8 @@ class ScreenshotTranslatorApp:
                             template_id=None,
                             show_immediately=True,
                             is_temporary=is_temporary,
-                            lifetime_seconds=lifetime_seconds
+                            lifetime_seconds=lifetime_seconds,
+                            app_name=app_name  # <-- ПЕРЕДАЕМ ИМЯ
                         )
 
                         if overlay:

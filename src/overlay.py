@@ -29,7 +29,8 @@ class OverlayWindow:
     __slots__ = (
         'logger', 'visible', 'temp_dir', 'tk_image', '_target_rect',
         '_esc_hook_active', '_use_manager_esc', '_images', '_last_image_path',
-        '_last_window_rect', '_target_hwnd', '_app_title', '_monitor_timer',
+        '_last_window_rect', '_target_hwnd', '_app_name',
+        '_monitor_timer',
         '_is_visible_by_user', '_is_dragging', '_drag_stop_timer',
         '_saved_position', '_is_fullscreen_target', '_fullscreen_restore_needed',
         '_show_time', 'auto_hide_enabled', '_image_loaded', '_overlay_active',
@@ -41,17 +42,16 @@ class OverlayWindow:
         '_mouse_position_known', '_user_moved', '_created_at_startup',
         '_is_temporary', '_temp_timer', '_temp_created_at', '_temp_lifetime',
         '_edit_frame', '_edit_frame_visible',
-        # Удалены атрибуты панели и кнопки:
-        # '_title_bar_visible', '_title_bar_height', '_title_bar_hide_timer', '_title_bar_hide_delay_ms',
-        # '_close_button_rect', '_close_button_cross1', '_close_button_cross2', '_mouse_over_title_bar',
-        # '_image_offset_y',
         'root', 'canvas',
         '_drag_data', '_close_button_window', '_close_button_visible',
         '_showing_in_progress', '_hiding_in_progress', '_updating_visibility',
         '_overlay_manager', '_update_timer',
         '_offset_x', '_offset_y',
-        # Удалены атрибуты для геометрии панели:
-        # '_saved_window_height', '_saved_window_y'
+        # Добавляем недостающие атрибуты
+        '_drag_start_x', '_drag_start_y',  # для перетаскивания
+        '_title_bar_visible', '_title_bar_hide_timer',  # для рамки (заглушки)
+        '_title_bar_hide_delay_ms', '_mouse_over_title_bar',  # для рамки
+        '_image_offset_y', '_saved_window_height', '_saved_window_y'  # для рамки
     )
 
     def __init__(self, parent=None, app_title="Перевод скриншотов", auto_hide_enabled=True):
@@ -69,7 +69,7 @@ class OverlayWindow:
         self._last_image_path = None
         self._last_window_rect = None
         self._target_hwnd = None
-        self._app_title = app_title
+        self._app_name = None
         self._monitor_timer = None
         self._is_visible_by_user = False
         self._is_dragging = False
@@ -111,9 +111,20 @@ class OverlayWindow:
         self._edit_frame = None
         self._edit_frame_visible = False
 
-        # === НОВЫЕ АТРИБУТЫ ДЛЯ СМЕЩЕНИЯ ===
+        # Атрибуты для смещения
         self._offset_x = 0
         self._offset_y = 0
+
+        # --- ИНИЦИАЛИЗИРУЕМ НЕДОСТАЮЩИЕ АТРИБУТЫ ---
+        self._drag_start_x = 0
+        self._drag_start_y = 0
+        self._title_bar_visible = False
+        self._title_bar_hide_timer = None
+        self._title_bar_hide_delay_ms = 2000
+        self._mouse_over_title_bar = False
+        self._image_offset_y = 0
+        self._saved_window_height = 0
+        self._saved_window_y = 0
 
         # Создаем окно
         self.root = tk.Toplevel(parent) if parent else tk.Toplevel()
@@ -142,6 +153,17 @@ class OverlayWindow:
         self.root.bind('<Leave>', self._on_mouse_leave)
 
         self.logger.info("OverlayWindow инициализирован")
+
+    def get_app_name(self) -> Optional[str]:
+        """Возвращает имя приложения для этого оверлея."""
+        return self._app_name
+
+    def set_app_name(self, app_name: str):
+        """Устанавливает имя приложения для этого оверлея."""
+        self._app_name = app_name
+
+    def get_target_hwnd(self) -> int:
+        return self._target_hwnd
 
     def set_temporary_mode(self, enabled: bool, lifetime_seconds: int = 180):
         """
@@ -380,8 +402,8 @@ class OverlayWindow:
             height = self.root.winfo_height()
             self.canvas.coords(self._edit_frame, 0, 0, width, height)
             self.canvas.tag_raise('edit_frame')
-            # Панель должна быть над рамкой
-            if self._title_bar_visible:
+            # Проверяем существование атрибута перед использованием
+            if hasattr(self, '_title_bar_visible') and self._title_bar_visible:
                 self.canvas.tag_raise('title_bar')
         except Exception as e:
             self.logger.warning(f"[DEBUG] Ошибка обновления рамки: {e}")
@@ -568,7 +590,6 @@ class OverlayWindow:
             self.logger.info("[DEBUG] _start_drag - оверлей скрыт, перетаскивание запрещено")
             return "break"
 
-        # === ЗАЩИТА ОТ ПОВТОРНОГО ВЫЗОВА ===
         if self._is_dragging:
             self.logger.info("[DEBUG] _start_drag - уже перетаскивается, пропускаем")
             return "break"
@@ -729,7 +750,6 @@ class OverlayWindow:
             self.root.geometry(f"+{x}+{y}")
             self._saved_position = (x, y)
 
-            # Обновляем рамку
             if self._edit_frame_visible:
                 self._update_edit_frame_position()
 
@@ -1134,9 +1154,6 @@ class OverlayWindow:
         else:
             # Обычная задержка
             self._start_visibility_monitor()
-
-    def get_target_hwnd(self) -> int:
-        return self._target_hwnd
 
     def _start_visibility_monitor(self):
         """Запускает монитор видимости - унифицированная логика с защитой от дублирования."""
