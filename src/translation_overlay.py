@@ -14,16 +14,23 @@ import win32api
 class TranslationOverlay:
     """Оверлейный индикатор выполнения перевода (Toplevel, работает в главном потоке)"""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, settings=None):
         self.parent = parent
+        self.settings = settings  # <-- СОХРАНЯЕМ НАСТРОЙКИ
         self.root = None
         self.progress = None
         self.status_label = None
         self.visible = False
         self._stop_animation = False
-        self._status_text = "Перевод..."
+        self._status_text = self.get_string('translation_status_translating')  # <-- ЛОКАЛИЗОВАНО
         self._close_after = None
-        self.logger = logging.getLogger(__name__)  # <-- ДОБАВЛЯЕМ ЛОГГЕР
+        self.logger = logging.getLogger(__name__)
+
+    def get_string(self, key: str) -> str:
+        """Возвращает локализованную строку через settings"""
+        if self.settings:
+            return self.settings.get_string(key)
+        return key  # Fallback
 
     def _create_window(self):
         """Создает окно оверлея как Toplevel от главного окна"""
@@ -54,7 +61,6 @@ class TranslationOverlay:
 
             self.root.title("")
             self.root.overrideredirect(True)
-            # === ГЛАВНОЕ: УСТАНАВЛИВАЕМ TOPMOST ===
             self.root.attributes('-topmost', True)
             self.root.attributes('-alpha', 0.95)
             self.root.attributes('-disabled', True)
@@ -73,7 +79,6 @@ class TranslationOverlay:
 
             self.root.deiconify()
             self.root.lift()
-            # === ПОДНИМАЕМ ПОВЕРХ ВСЕХ ===
             self._ensure_topmost()
 
             main = tk.Frame(self.root, bg='#1e1e1e', bd=2, relief=tk.RAISED)
@@ -86,7 +91,7 @@ class TranslationOverlay:
 
             self.status_label = tk.Label(
                 main,
-                text=self._status_text,
+                text=self._status_text,  # <-- ИСПОЛЬЗУЕТ ЛОКАЛИЗОВАННУЮ СТРОКУ
                 bg='#1e1e1e',
                 fg='#4CAF50',
                 font=('Segoe UI', 14, 'bold')
@@ -147,14 +152,17 @@ class TranslationOverlay:
             traceback.print_exc()
             self.visible = False
 
-    def show(self, text="Перевод..."):
+    def show(self, text=None):
         """Показывает оверлей с индикатором"""
+        # Если текст не передан, используем локализованный по умолчанию
+        if text is None:
+            text = self.get_string('translation_status_translating')
+
         try:
             if self.visible:
                 self._status_text = text
                 if self.status_label:
                     self.status_label.config(text=text)
-                # === ПОДНИМАЕМ ПОВЕРХ ПРИ ОБНОВЛЕНИИ ===
                 self._ensure_topmost()
                 self.logger.info("[DEBUG] Индикатор уже виден, обновлен текст")
                 return
@@ -171,7 +179,6 @@ class TranslationOverlay:
                             self.status_label.config(text=text)
                         self.root.deiconify()
                         self.root.lift()
-                        # === ПОДНИМАЕМ ПОВЕРХ ===
                         self._ensure_topmost()
                         self._update_status_animation()
                         return
@@ -196,7 +203,6 @@ class TranslationOverlay:
             self.root.attributes('-topmost', True)
             self.root.update_idletasks()
 
-            # Дополнительно через WinAPI для надёжности
             try:
                 import win32gui
                 import win32con
@@ -222,9 +228,9 @@ class TranslationOverlay:
         if self.root:
             try:
                 if self.root.winfo_exists():
-                    # Устанавливаем состояние "Готово"
+                    # Устанавливаем состояние "Готово" (локализовано)
                     if self.status_label:
-                        self.status_label.config(text="✅ Готово!")
+                        self.status_label.config(text=self.get_string('translation_status_ready'))
                     if self.progress:
                         try:
                             self.progress.stop()
@@ -254,8 +260,7 @@ class TranslationOverlay:
                 try:
                     if self.root.winfo_exists():
                         self.logger.info("[DEBUG] Закрытие окна индикатора...")
-                        self.root.withdraw()  # Просто скрываем, не уничтожаем
-                        # self.root.destroy()  # <-- НЕ УНИЧТОЖАЕМ
+                        self.root.withdraw()
                         self.logger.info("[DEBUG] Окно индикатора скрыто")
                     else:
                         self.root = None
@@ -281,7 +286,9 @@ class TranslationOverlay:
             dots_count = (int(time.time() * 1.5) % 4)
             dots = '.' * dots_count
             spaces = ' ' * (3 - dots_count)
-            status_text = f"Перевод{dots}{spaces}"
+            # Используем локализованную строку как основу
+            base_text = self.get_string('translation_status_translating')
+            status_text = f"{base_text}{dots}{spaces}"
 
             if self.status_label and self.root.winfo_exists():
                 self.status_label.config(text=status_text)
@@ -296,39 +303,6 @@ class TranslationOverlay:
     def _on_escape(self, event):
         self.hide()
         return "break"
-
-    def _set_finished_ui(self):
-        """Устанавливает UI в состояние 'Готово' и закрывает окно"""
-        if not self.root:
-            return
-
-        try:
-            if not self.root.winfo_exists():
-                print("[DEBUG] Окно уже закрыто, пропускаем")
-                self.visible = False
-                return
-
-            if self.progress:
-                try:
-                    self.progress.stop()
-                except:
-                    pass
-                self.progress['mode'] = 'determinate'
-                self.progress['value'] = 100
-
-            if self.status_label:
-                self.status_label.config(text="✅ Готово!")
-
-            self.root.update_idletasks()
-            self._ensure_topmost()
-            print(f"[DEBUG] Прогресс установлен на 100%")
-
-            if self.root and self.root.winfo_exists():
-                self.root.after(1000, self._close_window)
-
-        except Exception as e:
-            print(f"[DEBUG] Ошибка установки завершения: {e}")
-            self._close_window()
 
     def is_visible(self):
         return self.visible

@@ -171,13 +171,13 @@ class ScreenshotTranslatorApp:
 
         if not self.overlay_manager:
             self.logger.warning("[CLEAR_ALL] OverlayManager не инициализирован")
-            self.show_notification("Ошибка: менеджер оверлеев не инициализирован")
+            self.show_notification(self.get_string('notification_remove_no_app'))  # <-- ЛОКАЛИЗОВАНО
             return
 
         current_app = self._get_current_app_name()
         if not current_app:
             self.logger.warning("[CLEAR_ALL] Не удалось определить текущее приложение")
-            self.show_notification(self.get_string('clear_all_no_app'))
+            self.show_notification(self.get_string('notification_remove_no_app'))  # <-- ЛОКАЛИЗОВАНО
             return
 
         overlays_for_app = self.overlay_manager.get_overlays_by_app_name(current_app)
@@ -302,7 +302,7 @@ class ScreenshotTranslatorApp:
 
         self.logger.info(f"[CLEAR_ALL] Очистка завершена для {current_app}")
         self.show_notification(
-            self.get_string('clear_all_completed').format(app_name=current_app, count=removed_count)
+            self.get_string('clear_all_completed').format(app_name=current_app, count=removed_count)  # <-- ЛОКАЛИЗОВАНО
         )
 
     def get_string(self, key: str) -> str:
@@ -571,7 +571,7 @@ class ScreenshotTranslatorApp:
 
         self.translating = True
         self.ui.update_status("● " + self.ui.get_string('translating'), '#ff9800')
-        self.show_notification("Скриншот...")
+        self.show_notification(self.get_string('notification_capturing'))  # <-- ЛОКАЛИЗОВАНО
 
         def capture_task():
             try:
@@ -607,12 +607,11 @@ class ScreenshotTranslatorApp:
 
         self.logger.info("[AREA_TEMP] Захват временной области (Ctrl+F3)")
 
-        # Устанавливаем флаг, что это временный перевод
         self._is_temporary_translation = True
 
         self.set_actions_blocked(True)
         self._capture_mode = True
-        self.show_notification("Выберите область (временный перевод)...")
+        self.show_notification(self.get_string('notification_select_area_temporary'))  # <-- ЛОКАЛИЗОВАНО
         try:
             self.ui.root.iconify()
         except:
@@ -648,20 +647,18 @@ class ScreenshotTranslatorApp:
 
             if result and self.overlay_manager:
                 self.logger.info(f"Результат перевода получен: {result}")
-                self.show_notification("Перевод готов")
+                self.show_notification(self.get_string('notification_translation_ready'))  # <-- ЛОКАЛИЗОВАНО
 
                 region_path = getattr(self, '_pending_region_path', None)
                 auto_replace_enabled = self.settings.get_auto_replace_translated()
 
                 if region_path and region_path.exists() and self.translation_monitor and auto_replace_enabled:
                     target_hwnd = self.screenshot.get_last_hwnd()
-
-                    # --- ИЗМЕНЕНИЕ: получаем имя приложения ---
                     from src.window_utils import get_process_name_by_hwnd
                     target_app_name = get_process_name_by_hwnd(target_hwnd) if target_hwnd else None
 
                     add_result = self.translation_monitor.add_template(region_path, result,
-                                                                       target_app_name)  # <-- ПЕРЕДАЕМ ИМЯ
+                                                                       target_app_name)
                     if add_result and len(add_result) == 2:
                         pair_index, file_hash = add_result
                         self.logger.info(
@@ -679,7 +676,6 @@ class ScreenshotTranslatorApp:
 
                         lifetime_seconds = self.settings.get_temporary_lifetime() if is_temporary else 180
 
-                        # --- ИЗМЕНЕНИЕ: получаем и передаем имя приложения ---
                         from src.window_utils import get_process_name_by_hwnd
                         app_name = get_process_name_by_hwnd(target_hwnd) if target_hwnd else None
 
@@ -693,7 +689,7 @@ class ScreenshotTranslatorApp:
                             show_immediately=True,
                             is_temporary=is_temporary,
                             lifetime_seconds=lifetime_seconds,
-                            app_name=app_name  # <-- ПЕРЕДАЕМ ИМЯ
+                            app_name=app_name
                         )
 
                         if overlay:
@@ -749,7 +745,7 @@ class ScreenshotTranslatorApp:
             return
         self.set_actions_blocked(True)
         self._capture_mode = True
-        self.show_notification("Выберите область...")
+        self.show_notification(self.get_string('notification_select_area'))  # <-- ЛОКАЛИЗОВАНО
         try:
             self.ui.root.iconify()
         except:
@@ -1177,13 +1173,16 @@ class ScreenshotTranslatorApp:
         try:
             from src.translation_overlay import TranslationOverlay
 
-            # Если индикатор еще не создан - создаем
+            # Если индикатор еще не создан - создаем с передачей настроек
             if not self.translation_overlay:
                 self.logger.info("[DEBUG] Создаем новый индикатор перевода")
-                self.translation_overlay = TranslationOverlay(parent=self.ui.root)
+                self.translation_overlay = TranslationOverlay(
+                    parent=self.ui.root,
+                    settings=self.settings  # <-- ПЕРЕДАЕМ НАСТРОЙКИ
+                )
 
-            # Показываем индикатор
-            self.translation_overlay.show(self.ui.get_string('translating'))
+            # Показываем индикатор (локализованная строка)
+            self.translation_overlay.show(self.get_string('translation_status_translating'))
             self.logger.info("[DEBUG] Индикатор перевода показан")
 
         except Exception as e:
