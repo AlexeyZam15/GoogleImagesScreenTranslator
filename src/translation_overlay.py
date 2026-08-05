@@ -25,14 +25,137 @@ class TranslationOverlay:
         self._close_after = None
         self.logger = logging.getLogger(__name__)  # <-- ДОБАВЛЯЕМ ЛОГГЕР
 
+    def _create_window(self):
+        """Создает окно оверлея как Toplevel от главного окна"""
+        try:
+            import tkinter as tk
+
+            if self.root is not None:
+                try:
+                    if self.root.winfo_exists():
+                        self.root.destroy()
+                except:
+                    pass
+                self.root = None
+                self.progress = None
+                self.status_label = None
+
+            if not self.parent:
+                root = tk._default_root
+                if root:
+                    self.parent = root
+                else:
+                    self.parent = tk.Tk()
+
+            if self.parent:
+                self.root = tk.Toplevel(self.parent)
+            else:
+                self.root = tk.Tk()
+
+            self.root.title("")
+            self.root.overrideredirect(True)
+            # === ГЛАВНОЕ: УСТАНАВЛИВАЕМ TOPMOST ===
+            self.root.attributes('-topmost', True)
+            self.root.attributes('-alpha', 0.95)
+            self.root.attributes('-disabled', True)
+            self.root.attributes('-toolwindow', True)
+            self.root.configure(bg='#1e1e1e')
+
+            self.root.protocol("WM_DELETE_WINDOW", self.hide)
+
+            width = 350
+            height = 120
+            screen_width = self.root.winfo_screenwidth()
+            screen_height = self.root.winfo_screenheight()
+            x = (screen_width - width) // 2
+            y = (screen_height - height) // 2
+            self.root.geometry(f"{width}x{height}+{x}+{y}")
+
+            self.root.deiconify()
+            self.root.lift()
+            # === ПОДНИМАЕМ ПОВЕРХ ВСЕХ ===
+            self._ensure_topmost()
+
+            main = tk.Frame(self.root, bg='#1e1e1e', bd=2, relief=tk.RAISED)
+            main.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
+            main.config(takefocus=False)
+
+            if main.winfo_exists():
+                main.bind('<Button-1>', lambda e: "break")
+                main.bind('<ButtonRelease-1>', lambda e: "break")
+
+            self.status_label = tk.Label(
+                main,
+                text=self._status_text,
+                bg='#1e1e1e',
+                fg='#4CAF50',
+                font=('Segoe UI', 14, 'bold')
+            )
+            self.status_label.pack(pady=(15, 10))
+            self.status_label.config(takefocus=False)
+
+            if self.status_label.winfo_exists():
+                self.status_label.bind('<Button-1>', lambda e: "break")
+                self.status_label.bind('<ButtonRelease-1>', lambda e: "break")
+
+            progress_frame = tk.Frame(main, bg='#1e1e1e')
+            progress_frame.pack(fill=tk.X, padx=20, pady=(5, 15))
+            progress_frame.config(takefocus=False)
+
+            if progress_frame.winfo_exists():
+                progress_frame.bind('<Button-1>', lambda e: "break")
+                progress_frame.bind('<ButtonRelease-1>', lambda e: "break")
+
+            self.progress = ttk.Progressbar(
+                progress_frame,
+                mode='indeterminate',
+                length=280,
+                style='green.Horizontal.TProgressbar'
+            )
+            self.progress.pack()
+            self.progress.config(takefocus=False)
+
+            if self.progress.winfo_exists():
+                self.progress.bind('<Button-1>', lambda e: "break")
+                self.progress.bind('<ButtonRelease-1>', lambda e: "break")
+
+            style = ttk.Style()
+            style.theme_use('clam')
+            style.configure(
+                'green.Horizontal.TProgressbar',
+                background='#4CAF50',
+                troughcolor='#3c3c3c',
+                bordercolor='#1e1e1e',
+                lightcolor='#4CAF50',
+                darkcolor='#4CAF50'
+            )
+
+            self.progress.start(10)
+            self._update_status_animation()
+
+            self.root.bind('<Escape>', self._on_escape)
+            if self.root.winfo_exists():
+                self.root.bind('<Button-1>', lambda e: "break")
+                self.root.bind('<ButtonRelease-1>', lambda e: "break")
+
+            self.root.update_idletasks()
+            self.root.update()
+
+        except Exception as e:
+            print(f"[DEBUG] Ошибка при создании окна: {e}")
+            import traceback
+            traceback.print_exc()
+            self.visible = False
+
     def show(self, text="Перевод..."):
         """Показывает оверлей с индикатором"""
         try:
             if self.visible:
-                # Если уже виден - просто обновляем текст
                 self._status_text = text
                 if self.status_label:
                     self.status_label.config(text=text)
+                # === ПОДНИМАЕМ ПОВЕРХ ПРИ ОБНОВЛЕНИИ ===
+                self._ensure_topmost()
                 self.logger.info("[DEBUG] Индикатор уже виден, обновлен текст")
                 return
 
@@ -40,7 +163,6 @@ class TranslationOverlay:
             self._status_text = text
             self.visible = True
 
-            # Если окно уже существует - просто показываем его
             if self.root:
                 try:
                     if self.root.winfo_exists():
@@ -49,14 +171,13 @@ class TranslationOverlay:
                             self.status_label.config(text=text)
                         self.root.deiconify()
                         self.root.lift()
+                        # === ПОДНИМАЕМ ПОВЕРХ ===
                         self._ensure_topmost()
                         self._update_status_animation()
                         return
                 except:
-                    # Окно не существует - создаем новое
                     self.root = None
 
-            # Создаем новое окно
             self._create_window()
             self.logger.info("[DEBUG] Индикатор перевода показан (новое окно)")
 
@@ -64,6 +185,33 @@ class TranslationOverlay:
             self.logger.error(f"Ошибка при создании индикатора: {e}")
             import traceback
             traceback.print_exc()
+
+    def _ensure_topmost(self):
+        """Гарантирует, что оверлей находится поверх всех окон"""
+        try:
+            if not self.root or not self.root.winfo_exists():
+                return
+
+            self.root.lift()
+            self.root.attributes('-topmost', True)
+            self.root.update_idletasks()
+
+            # Дополнительно через WinAPI для надёжности
+            try:
+                import win32gui
+                import win32con
+                hwnd = int(self.root.winfo_id())
+                win32gui.SetWindowPos(
+                    hwnd,
+                    win32con.HWND_TOPMOST,
+                    0, 0, 0, 0,
+                    win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE | win32con.SWP_SHOWWINDOW
+                )
+            except:
+                pass
+
+        except Exception as e:
+            print(f"[DEBUG] _ensure_topmost ошибка: {e}")
 
     def finish(self):
         """Завершает перевод - останавливает анимацию и закрывает окно"""
@@ -123,168 +271,6 @@ class TranslationOverlay:
         self._stop_animation = True
         self.visible = False
         self._close_window()
-
-    def _create_window(self):
-        """Создает окно оверлея как Toplevel от главного окна"""
-        try:
-            import tkinter as tk
-            print(f"[DEBUG] _create_window() - начат")
-
-            # === ЗАЩИТА: ЕСЛИ ОКНО УЖЕ СУЩЕСТВУЕТ, ЗАКРЫВАЕМ ЕГО ===
-            if self.root is not None:
-                try:
-                    if self.root.winfo_exists():
-                        print("[DEBUG] _create_window: существующее окно найдено, закрываем")
-                        self.root.destroy()
-                except:
-                    pass
-                self.root = None
-                self.progress = None
-                self.status_label = None
-
-            # === ПРОВЕРЯЕМ РОДИТЕЛЯ ===
-            if not self.parent:
-                root = tk._default_root
-                if root:
-                    self.parent = root
-                    print(f"[DEBUG] Найден корневой Tk: {root}")
-                else:
-                    print(f"[DEBUG] Нет корневого Tk, создаем новый Tk")
-                    self.parent = tk.Tk()
-
-            if self.parent:
-                print(f"[DEBUG] Родитель существует: {self.parent}")
-                self.root = tk.Toplevel(self.parent)
-                print(f"[DEBUG] Toplevel создан от родителя")
-            else:
-                print(f"[DEBUG] Нет родителя, создаем Tk")
-                self.root = tk.Tk()
-                print(f"[DEBUG] Tk создан")
-
-            self.root.title("")
-            self.root.overrideredirect(True)
-            self.root.attributes('-topmost', True)
-            self.root.attributes('-alpha', 0.95)
-            self.root.attributes('-disabled', True)
-            self.root.attributes('-toolwindow', True)
-            self.root.configure(bg='#1e1e1e')
-
-            self.root.protocol("WM_DELETE_WINDOW", self.hide)
-
-            width = 350
-            height = 120
-            screen_width = self.root.winfo_screenwidth()
-            screen_height = self.root.winfo_screenheight()
-            x = (screen_width - width) // 2
-            y = (screen_height - height) // 2
-            self.root.geometry(f"{width}x{height}+{x}+{y}")
-
-            self.root.deiconify()
-            self.root.lift()
-            self._ensure_topmost()
-
-            print(f"[DEBUG] Окно настроено: {width}x{height}+{x}+{y}")
-
-            main = tk.Frame(self.root, bg='#1e1e1e', bd=2, relief=tk.RAISED)
-            main.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
-            main.config(takefocus=False)
-
-            # === ПРОВЕРКА: СУЩЕСТВУЕТ ЛИ ВИДЖЕТ ПЕРЕД ПРИВЯЗКОЙ ===
-            if main.winfo_exists():
-                main.bind('<Button-1>', lambda e: "break")
-                main.bind('<ButtonRelease-1>', lambda e: "break")
-            else:
-                print("[DEBUG] main виджет не существует, пропускаем привязку")
-
-            self.status_label = tk.Label(
-                main,
-                text=self._status_text,
-                bg='#1e1e1e',
-                fg='#4CAF50',
-                font=('Segoe UI', 14, 'bold')
-            )
-            self.status_label.pack(pady=(15, 10))
-            self.status_label.config(takefocus=False)
-
-            if self.status_label.winfo_exists():
-                self.status_label.bind('<Button-1>', lambda e: "break")
-                self.status_label.bind('<ButtonRelease-1>', lambda e: "break")
-
-            progress_frame = tk.Frame(main, bg='#1e1e1e')
-            progress_frame.pack(fill=tk.X, padx=20, pady=(5, 15))
-            progress_frame.config(takefocus=False)
-
-            if progress_frame.winfo_exists():
-                progress_frame.bind('<Button-1>', lambda e: "break")
-                progress_frame.bind('<ButtonRelease-1>', lambda e: "break")
-
-            self.progress = ttk.Progressbar(
-                progress_frame,
-                mode='indeterminate',
-                length=280,
-                style='green.Horizontal.TProgressbar'
-            )
-            self.progress.pack()
-            self.progress.config(takefocus=False)
-
-            if self.progress.winfo_exists():
-                self.progress.bind('<Button-1>', lambda e: "break")
-                self.progress.bind('<ButtonRelease-1>', lambda e: "break")
-
-            style = ttk.Style()
-            style.theme_use('clam')
-            style.configure(
-                'green.Horizontal.TProgressbar',
-                background='#4CAF50',
-                troughcolor='#3c3c3c',
-                bordercolor='#1e1e1e',
-                lightcolor='#4CAF50',
-                darkcolor='#4CAF50'
-            )
-
-            self.progress.start(10)
-            self._update_status_animation()
-
-            self.root.bind('<Escape>', self._on_escape)
-            if self.root.winfo_exists():
-                self.root.bind('<Button-1>', lambda e: "break")
-                self.root.bind('<ButtonRelease-1>', lambda e: "break")
-
-            self.root.update_idletasks()
-            self.root.update()
-
-            print(f"[DEBUG] Окно прогресса создано и показано (Toplevel)")
-            print(f"[DEBUG] root.winfo_exists() = {self.root.winfo_exists() if self.root else False}")
-            print(f"[DEBUG] root.winfo_ismapped() = {self.root.winfo_ismapped() if self.root else False}")
-
-        except Exception as e:
-            print(f"[DEBUG] Ошибка при создании окна: {e}")
-            import traceback
-            traceback.print_exc()
-            self.visible = False
-
-    def _ensure_topmost(self):
-        """Гарантирует, что оверлей находится поверх всех окон"""
-        try:
-            if not self.root or not self.root.winfo_exists():
-                return
-
-            self.root.lift()
-            self.root.attributes('-topmost', True)
-
-            try:
-                hwnd = int(self.root.winfo_id())
-                win32gui.SetWindowPos(
-                    hwnd,
-                    win32con.HWND_TOPMOST,
-                    0, 0, 0, 0,
-                    win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE | win32con.SWP_SHOWWINDOW
-                )
-            except:
-                pass
-
-        except Exception as e:
-            print(f"[DEBUG] _ensure_topmost ошибка: {e}")
 
     def _update_status_animation(self):
         """Обновляет текст статуса с точками для имитации активности"""

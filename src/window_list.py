@@ -19,10 +19,13 @@ class WindowListManager:
         # Новый словарь для хранения соответствия индекс -> имя приложения
         self._window_app_map = {}
 
-    def refresh(self):
+    def refresh(self, skip_restore: bool = False):
         """Обновляет список окон с оверлеями - группирует по имени приложения"""
         try:
             self.logger.info("[WINDOW_LIST] Обновление списка окон с оверлеями (группировка по имени приложения)")
+
+            if skip_restore:
+                self.logger.info("[WINDOW_LIST] Пропускаем восстановление оверлеев (skip_restore=True)")
 
             self.window_listbox.delete(0, 'end')
             self._window_hwnd_map.clear()
@@ -32,7 +35,6 @@ class WindowListManager:
                 self.logger.info("[WINDOW_LIST] OverlayManager не инициализирован")
                 return
 
-            # Используем overlays_by_app_name напрямую
             overlays_by_app = self.app.overlay_manager.overlays_by_app_name
 
             if not overlays_by_app:
@@ -42,7 +44,6 @@ class WindowListManager:
             total_overlays = sum(len(overlays) for overlays in overlays_by_app.values())
             self.logger.info(f"[WINDOW_LIST] Всего оверлеев по приложениям: {total_overlays}")
 
-            # Сортируем по имени приложения
             sorted_apps = sorted(overlays_by_app.items(), key=lambda x: x[0].lower())
 
             idx = 0
@@ -50,7 +51,6 @@ class WindowListManager:
                 total_count = len(overlays)
                 visible_count = sum(1 for ov in overlays if ov.visible)
 
-                # Проверяем, запущено ли приложение
                 is_alive = False
                 if app_name != "Неизвестно":
                     try:
@@ -68,7 +68,6 @@ class WindowListManager:
 
                 self.window_listbox.insert('end', display)
                 self._window_app_map[idx] = app_name
-                # Для обратной совместимости сохраняем HWND (берем первый попавшийся)
                 if overlays and overlays[0]._target_hwnd:
                     self._window_hwnd_map[idx] = overlays[0]._target_hwnd
                 else:
@@ -155,23 +154,15 @@ class WindowListManager:
 
         self.logger.info(f"[WINDOW_LIST] Удаление {len(overlays_to_remove)} оверлеев для {app_name}")
 
-        # Останавливаем монитор
-        if hasattr(self.app, 'translation_monitor') and self.app.translation_monitor:
-            monitor = self.app.translation_monitor
-            was_running = monitor.is_running()
-            if was_running:
-                monitor.stop()
-                self.logger.info("[WINDOW_LIST] Монитор остановлен на время удаления")
-
         # Отключаем сохранение состояния
         if hasattr(self.app.overlay_manager, '_suppress_save'):
             self.app.overlay_manager._suppress_save = True
 
-        # Удаляем все оверлеи
+        # Удаляем все оверлеи с force=True
         removed_count = 0
-        for overlay in overlays_to_remove[:]:  # Используем копию списка
+        for overlay in overlays_to_remove[:]:
             try:
-                self.app.overlay_manager.remove_overlay(overlay)
+                self.app.overlay_manager.remove_overlay(overlay, force=True)
                 removed_count += 1
             except Exception as e:
                 self.logger.error(f"[WINDOW_LIST] Ошибка удаления оверлея: {e}")
@@ -180,17 +171,35 @@ class WindowListManager:
         if hasattr(self.app.overlay_manager, '_suppress_save'):
             self.app.overlay_manager._suppress_save = False
 
+        # === УДАЛЯЕМ ВСЕ ЗАПИСИ ДЛЯ ЭТОГО ПРИЛОЖЕНИЯ ИЗ ФАЙЛА СОСТОЯНИЯ ===
+        try:
+            import json
+            from pathlib import Path
+            state_file = Path.home() / "Documents" / "GoogleScreenTranslate" / "config" / "overlay_state.json"
+            if state_file.exists():
+                with open(state_file, 'r', encoding='utf-8') as f:
+                    states = json.load(f)
+
+                keys_to_remove = [key for key in states.keys() if key.startswith(f"{app_name}_")]
+                for key in keys_to_remove:
+                    del states[key]
+                    self.logger.info(f"[WINDOW_LIST] Удалена запись состояния: {key}")
+
+                with open(state_file, 'w', encoding='utf-8') as f:
+                    json.dump(states, f, indent=4, ensure_ascii=False)
+                self.logger.info(f"[WINDOW_LIST] Состояние для {app_name} удалено из файла")
+        except Exception as e:
+            self.logger.warning(f"[WINDOW_LIST] Не удалось обновить файл состояния: {e}")
+
         # Сохраняем состояние
         if hasattr(self.app.overlay_manager, 'save_overlay_state'):
             self.app.overlay_manager.save_overlay_state(immediate=True)
             self.logger.info("[WINDOW_LIST] Состояние сохранено после удаления всех оверлеев")
 
-        # Перезапускаем монитор
-        if hasattr(self.app, 'translation_monitor') and self.app.translation_monitor:
-            monitor = self.app.translation_monitor
-            if was_running and monitor.templates:
-                monitor.start()
-                self.logger.info(f"[WINDOW_LIST] Монитор перезапущен, осталось {len(monitor.templates)} шаблонов")
+        # === ВАЖНО: НЕ ПЕРЕЗАПУСКАЕМ МОНИТОР ===
+        # Управление монитором полностью в руках app.py
+        # Монитор будет запущен только при добавлении нового шаблона через add_template()
+        self.logger.info("[WINDOW_LIST] Монитор не перезапускается (управление через app.py)")
 
         self.logger.info(f"[WINDOW_LIST] Удалено {removed_count} оверлеев для {app_name}")
         self.refresh()

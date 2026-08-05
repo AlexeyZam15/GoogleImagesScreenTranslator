@@ -29,6 +29,8 @@ from src.window_list import WindowListManager
 from src.utils import ensure_app_temp_dir
 from src.notification_overlay import NotificationOverlay
 from typing import Optional
+import win32con
+
 
 def cleanup_old_logs(log_dir, keep_count=5):
     """Очищает старые логи"""
@@ -154,6 +156,15 @@ class ScreenshotTranslatorApp:
         # Запуск инициализации
         self.ui.root.after(100, self._init_translator_step)
 
+    def _get_app_name_by_hwnd(self, hwnd: int) -> str:
+        """Возвращает имя приложения по HWND."""
+        try:
+            from src.window_utils import get_process_name_by_hwnd
+            return get_process_name_by_hwnd(hwnd, default_name="Неизвестно")
+        except Exception as e:
+            self.logger.warning(f"[WINDOW] Ошибка получения имени по HWND: {e}")
+            return "Неизвестно"
+
     def clear_all_overlays(self):
         """Удаляет все оверлеи для текущего активного приложения (F4)"""
         self.logger.info("[CLEAR_ALL] Начинаем удаление оверлеев для текущего приложения")
@@ -163,14 +174,12 @@ class ScreenshotTranslatorApp:
             self.show_notification("Ошибка: менеджер оверлеев не инициализирован")
             return
 
-        # Получаем имя текущего активного приложения
         current_app = self._get_current_app_name()
         if not current_app:
             self.logger.warning("[CLEAR_ALL] Не удалось определить текущее приложение")
             self.show_notification(self.get_string('clear_all_no_app'))
             return
 
-        # Получаем оверлеи для текущего приложения
         overlays_for_app = self.overlay_manager.get_overlays_by_app_name(current_app)
 
         if not overlays_for_app:
@@ -181,15 +190,20 @@ class ScreenshotTranslatorApp:
         overlays_count = len(overlays_for_app)
         self.logger.info(f"[CLEAR_ALL] Найдено {overlays_count} оверлеев для приложения {current_app}")
 
-        # === ОСТАНАВЛИВАЕМ МОНИТОР, ЧТОБЫ ОН НЕ ПЕРЕСОЗДАВАЛ ОВЕРЛЕИ ===
-        if self.translation_monitor and self.translation_monitor.is_running():
-            self.translation_monitor.stop()
-            self.logger.info("[CLEAR_ALL] Монитор остановлен")
-
-        # === УДАЛЯЕМ ШАБЛОНЫ ДЛЯ ЭТОГО ПРИЛОЖЕНИЯ ИЗ МОНИТОРА ===
+        # === ШАГ 1: ОСТАНАВЛИВАЕМ МОНИТОР ===
+        monitor_was_running = False
         if self.translation_monitor:
+            if self.translation_monitor.is_running():
+                monitor_was_running = True
+                self.translation_monitor.stop()
+                self.logger.info("[CLEAR_ALL] Монитор остановлен")
+
+            import time
+            time.sleep(0.1)
+            self.logger.info("[CLEAR_ALL] Ожидание завершения запланированных задач (100мс)")
+
             templates_to_remove = []
-            for template_data in self.translation_monitor.templates:
+            for template_data in self.translation_monitor.templates[:]:
                 if template_data.get('target_app_name') == current_app:
                     templates_to_remove.append(template_data.get('pair_index'))
 
@@ -197,62 +211,94 @@ class ScreenshotTranslatorApp:
                 self.translation_monitor.remove_template(pair_index)
                 self.logger.info(f"[CLEAR_ALL] Удален шаблон #{pair_index} для {current_app}")
 
-            self.logger.info(f"[CLEAR_ALL] Удалено {len(templates_to_remove)} шаблонов для {current_app}")
+            self.translation_monitor.templates = [
+                t for t in self.translation_monitor.templates
+                if t.get('target_app_name') != current_app
+            ]
+            self.logger.info(
+                f"[CLEAR_ALL] Очищены все шаблоны для {current_app}, осталось {len(self.translation_monitor.templates)} шаблонов")
 
-        # === УДАЛЯЕМ ОВЕРЛЕИ ДЛЯ ЭТОГО ПРИЛОЖЕНИЯ ===
+            self.translation_monitor._frame_cache = None
+            self.translation_monitor._frame_cache_hwnd = None
+            self.translation_monitor._last_active_hwnd = None
+            self.translation_monitor._last_active_app_name = None
+            self.logger.info("[CLEAR_ALL] Кэш монитора очищен")
+
+        # === ШАГ 2: УДАЛЯЕМ ОВЕРЛЕИ ===
         removed_count = 0
-        for overlay in overlays_for_app[:]:  # Используем копию списка
+        for overlay in overlays_for_app[:]:
             try:
-                self.overlay_manager.remove_overlay(overlay)
+                self.overlay_manager.remove_overlay(overlay, force=True)
                 removed_count += 1
             except Exception as e:
                 self.logger.error(f"[CLEAR_ALL] Ошибка удаления оверлея: {e}")
 
         self.logger.info(f"[CLEAR_ALL] Удалено {removed_count} оверлеев для {current_app}")
 
-        # === ОЧИЩАЕМ СОСТОЯНИЕ ДЛЯ ЭТОГО ПРИЛОЖЕНИЯ ===
-        if current_app in self._window_states:
-            del self._window_states[current_app]
-            self.logger.info(f"[CLEAR_ALL] Состояние для {current_app} очищено")
+        # === ШАГ 3: ОЧИЩАЕМ СПИСКИ ===
+        self.overlay_manager.overlays = [
+            ov for ov in self.overlay_manager.overlays
+            if ov not in overlays_for_app
+        ]
 
-        # === УДАЛЯЕМ ФАЙЛ СОСТОЯНИЯ ДЛЯ ЭТОГО ПРИЛОЖЕНИЯ ===
+        if current_app in self.overlay_manager.overlays_by_app_name:
+            del self.overlay_manager.overlays_by_app_name[current_app]
+            self.logger.info(f"[CLEAR_ALL] Очищен список оверлеев для {current_app} в менеджере")
+
+        # === ШАГ 4: УДАЛЯЕМ ИЗ ФАЙЛА СОСТОЯНИЯ ===
         try:
+            import json
             state_file = Path.home() / "Documents" / "GoogleScreenTranslate" / "config" / "overlay_state.json"
             if state_file.exists():
-                # Загружаем текущее состояние, удаляем записи для этого приложения и сохраняем
-                import json
                 with open(state_file, 'r', encoding='utf-8') as f:
                     states = json.load(f)
 
-                # Удаляем все записи для этого приложения
                 keys_to_remove = [key for key in states.keys() if key.startswith(f"{current_app}_")]
                 for key in keys_to_remove:
                     del states[key]
                     self.logger.info(f"[CLEAR_ALL] Удалена запись состояния: {key}")
 
-                # Сохраняем обновленное состояние
                 with open(state_file, 'w', encoding='utf-8') as f:
                     json.dump(states, f, indent=4, ensure_ascii=False)
                 self.logger.info(f"[CLEAR_ALL] Состояние для {current_app} удалено из файла")
         except Exception as e:
             self.logger.warning(f"[CLEAR_ALL] Не удалось обновить файл состояния: {e}")
 
-        # === СОХРАНЯЕМ ОБНОВЛЕННОЕ СОСТОЯНИЕ ===
+        # === ШАГ 5: ОЧИЩАЕМ _window_states ===
+        keys_to_remove = []
+        for key in self._window_states.keys():
+            if key == current_app or (isinstance(key, int) and self._get_app_name_by_hwnd(key) == current_app):
+                keys_to_remove.append(key)
+
+        for key in keys_to_remove:
+            del self._window_states[key]
+            self.logger.info(f"[CLEAR_ALL] Удалено состояние окна: {key}")
+
+        self.logger.info(f"[CLEAR_ALL] Состояние для {current_app} очищено")
+
+        # === ШАГ 6: СОХРАНЯЕМ СОСТОЯНИЕ ===
         try:
+            self.overlay_manager._suppress_save = False
             self.overlay_manager.save_overlay_state(immediate=True)
             self.logger.info("[CLEAR_ALL] Состояние сохранено")
         except Exception as e:
             self.logger.warning(f"[CLEAR_ALL] Ошибка сохранения состояния: {e}")
 
-        # === ЗАПУСКАЕМ МОНИТОР, ЕСЛИ ОСТАЛИСЬ ШАБЛОНЫ ===
-        if self.translation_monitor and self.translation_monitor.templates:
-            if self.settings.get_auto_replace_translated():
+        # === ШАГ 7: ПЕРЕЗАПУСКАЕМ МОНИТОР, ЕСЛИ ЕСТЬ ШАБЛОНЫ ДЛЯ ДРУГИХ ПРИЛОЖЕНИЙ ===
+        if self.translation_monitor:
+            remaining_templates = len(self.translation_monitor.templates)
+            if remaining_templates > 0 and self.settings.get_auto_replace_translated():
+                self.logger.info(f"[CLEAR_ALL] Перезапуск монитора для {remaining_templates} оставшихся шаблонов")
                 self.translation_monitor.start()
+                self.logger.info("[CLEAR_ALL] Монитор перезапущен")
+            elif remaining_templates > 0:
                 self.logger.info(
-                    f"[CLEAR_ALL] Монитор перезапущен, осталось {len(self.translation_monitor.templates)} шаблонов")
+                    f"[CLEAR_ALL] Монитор не перезапущен (автозамена выключена), осталось {remaining_templates} шаблонов")
+            else:
+                self.logger.info("[CLEAR_ALL] Нет оставшихся шаблонов, монитор не перезапускается")
 
-        # Обновляем список окон
-        self.ui.root.after(100, self.window_list.refresh)
+        # === ШАГ 8: ОБНОВЛЯЕМ СПИСОК ОКОН ===
+        self.ui.root.after(100, lambda: self.window_list.refresh(skip_restore=True))
 
         self.logger.info(f"[CLEAR_ALL] Очистка завершена для {current_app}")
         self.show_notification(
@@ -739,6 +785,8 @@ class ScreenshotTranslatorApp:
         """Захват окна для области"""
         try:
             from PIL import ImageGrab
+            from src.window_utils import make_windowed_fullscreen
+            import time
 
             current_hwnd = win32gui.GetForegroundWindow()
             if not current_hwnd:
@@ -752,6 +800,24 @@ class ScreenshotTranslatorApp:
             self._area_target_hwnd = current_hwnd
             self.screenshot._is_fullscreen = self.screenshot.is_window_fullscreen(current_hwnd)
             self._area_is_fullscreen = self.screenshot._is_fullscreen
+
+            # === ПЕРЕКЛЮЧАЕМ ОКНО В ОКОННЫЙ ПОЛНОЭКРАННЫЙ РЕЖИМ ===
+            if self._area_is_fullscreen:
+                self.logger.info("[F3] Переключение окна в оконный полноэкранный режим")
+
+                # Сначала отправляем Alt+Enter, чтобы игра переключилась в оконный режим
+                try:
+                    import keyboard
+                    keyboard.press_and_release('alt+enter')
+                    self.logger.info("[F3] Alt+Enter отправлен")
+                    time.sleep(0.5)  # Даём игре время переключиться
+                except Exception as e:
+                    self.logger.warning(f"[F3] Не удалось отправить Alt+Enter: {e}")
+
+                # Теперь применяем стили для удаления рамки
+                make_windowed_fullscreen(current_hwnd)
+                time.sleep(0.3)
+                self.logger.info("[F3] Окно переключено в оконный полноэкранный режим")
 
             img = ImageGrab.grab()
             if not img:
@@ -956,17 +1022,18 @@ class ScreenshotTranslatorApp:
             self._capture_mode = False
             self.hotkeys.set_actions_blocked(False)
 
-            # === ПОСЛЕ ВЫХОДА ИЗ F3 ПОКАЗЫВАЕМ ИНДИКАТОР, ЕСЛИ ЕСТЬ ЗАДАЧИ В ОЧЕРЕДИ ===
             if self.translation_queue and not self._indicator_shown:
                 self._show_translation_overlay()
                 self._indicator_shown = True
                 self.logger.info("[DEBUG] Индикатор перевода показан после выхода из F3")
 
+            # === ПРОСТО ВОЗВРАЩАЕМ ФОКУС, НИЧЕГО НЕ ВОССТАНАВЛИВАЕМ ===
             if target_hwnd_for_exit:
                 try:
-                    win32gui.ShowWindow(target_hwnd_for_exit, 9)
                     win32gui.SetForegroundWindow(target_hwnd_for_exit)
-                except:
+                    self.logger.info("[F3] Фокус возвращён на целевое окно")
+                except Exception as e:
+                    self.logger.error(f"[F3] Ошибка возврата фокуса: {e}")
                     self.ui.root.deiconify()
                     self.ui.root.lift()
                     self.ui.root.focus_force()

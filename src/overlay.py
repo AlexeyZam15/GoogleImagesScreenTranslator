@@ -47,11 +47,12 @@ class OverlayWindow:
         '_showing_in_progress', '_hiding_in_progress', '_updating_visibility',
         '_overlay_manager', '_update_timer',
         '_offset_x', '_offset_y',
-        # Добавляем недостающие атрибуты
-        '_drag_start_x', '_drag_start_y',  # для перетаскивания
-        '_title_bar_visible', '_title_bar_hide_timer',  # для рамки (заглушки)
-        '_title_bar_hide_delay_ms', '_mouse_over_title_bar',  # для рамки
-        '_image_offset_y', '_saved_window_height', '_saved_window_y'  # для рамки
+        '_drag_start_x', '_drag_start_y',
+        '_title_bar_visible', '_title_bar_hide_timer',
+        '_title_bar_hide_delay_ms', '_mouse_over_title_bar',
+        '_image_offset_y', '_saved_window_height', '_saved_window_y',
+        # === НОВЫЙ АТРИБУТ ===
+        '_closing'
     )
 
     def __init__(self, parent=None, app_title="Перевод скриншотов", auto_hide_enabled=True):
@@ -114,6 +115,9 @@ class OverlayWindow:
         # Атрибуты для смещения
         self._offset_x = 0
         self._offset_y = 0
+
+        # === НОВЫЙ АТРИБУТ: флаг закрытия ===
+        self._closing = False
 
         # --- ИНИЦИАЛИЗИРУЕМ НЕДОСТАЮЩИЕ АТРИБУТЫ ---
         self._drag_start_x = 0
@@ -1569,6 +1573,10 @@ class OverlayWindow:
         """Закрывает оверлей."""
         self.logger.info("close() вызван")
 
+        # === УСТАНАВЛИВАЕМ ФЛАГ ЗАКРЫТИЯ ===
+        self._closing = True
+        self.logger.info("[DEBUG] _closing установлен в True")
+
         # Останавливаем временный таймер
         self._stop_temp_timer()
         self._hide_temporary_indicator()
@@ -1582,7 +1590,8 @@ class OverlayWindow:
                     if template.get('overlay') is self:
                         template['overlay'] = None
                         self.logger.info(
-                            f"[MONITOR] Ссылка на оверлей сброшена для шаблона #{template.get('pair_index')}")
+                            f"[MONITOR] Ссылка на оверлей сброшена для шаблона #{template.get('pair_index')}"
+                        )
                         break
 
         try:

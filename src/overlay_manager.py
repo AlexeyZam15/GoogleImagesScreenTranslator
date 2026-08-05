@@ -476,6 +476,7 @@ class OverlayManager:
 
     def remove_overlay(self, overlay: OverlayWindow, force: bool = False):
         """Удаляет оверлей из всех списков и очищает состояние окна."""
+
         self.logger.info(f"[OVERLAY_MANAGER] === remove_overlay НАЧАЛО ===")
         self.logger.info(f"[OVERLAY_MANAGER] overlay={overlay}")
         self.logger.info(f"[OVERLAY_MANAGER] force={force}")
@@ -489,7 +490,7 @@ class OverlayManager:
 
         self.logger.info(f"[OVERLAY_MANAGER] target_hwnd={target_hwnd}, app_name={app_name}")
 
-        # 1. Удаляем шаблон из монитора
+        # 1. Удаляем шаблон из монитора (если есть template_id)
         if hasattr(overlay, '_template_id') and overlay._template_id:
             template_id = overlay._template_id
             self.logger.info(f"[OVERLAY_MANAGER] Найден template_id: {template_id}")
@@ -539,14 +540,14 @@ class OverlayManager:
                         except Exception as e:
                             self.logger.warning(f"[OVERLAY_MANAGER] Ошибка уведомления: {e}")
 
-        # Удаляем из общего списка
+        # 3. Удаляем из общего списка
         if overlay in self.overlays:
             self.overlays.remove(overlay)
             self.logger.info("[OVERLAY_MANAGER] Оверлей удален из общего списка")
         else:
             self.logger.warning("[OVERLAY_MANAGER] Оверлей не найден в общем списке")
 
-        # 3. Закрываем оверлей
+        # 4. Закрываем оверлей
         try:
             self.logger.info("[OVERLAY_MANAGER] Вызов overlay.close()")
             overlay.close()
@@ -556,7 +557,7 @@ class OverlayManager:
             import traceback
             traceback.print_exc()
 
-        # 4. Сохраняем состояние
+        # 5. Сохраняем состояние (только если не force или не в режиме подавления)
         if not self._suppress_save:
             self.logger.info("[OVERLAY_MANAGER] Сохранение состояния...")
             self.save_overlay_state()
@@ -893,7 +894,11 @@ class OverlayManager:
 
         for overlay in self.overlays:
             try:
+                # Проверяем, что оверлей всё ещё существует
+                if overlay is None:
+                    continue
                 if not overlay.root or not overlay.root.winfo_exists():
+                    self.logger.debug(f"[STATE] Оверлей {overlay} уже закрыт, пропускаем")
                     continue
 
                 # Используем _saved_position если есть, иначе берем из окна
@@ -929,19 +934,17 @@ class OverlayManager:
                 if overlay._last_window_rect:
                     overlay_data['window_rect'] = overlay._last_window_rect
 
-                # --- СОХРАНЯЕМ ШАБЛОН ДЛЯ АВТОЗАМЕНЫ ---
+                # Сохраняем шаблон для автозамены
                 if overlay._is_auto_replace and overlay._template_id:
                     if self.parent and hasattr(self.parent, 'translation_monitor'):
                         monitor = self.parent.translation_monitor
                         if monitor:
                             for template in monitor.templates:
                                 if template.get('hash') == overlay._template_id:
-                                    # Сохраняем путь к файлу шаблона
                                     template_path = template.get('template_path')
                                     if template_path and Path(template_path).exists():
                                         overlay_data['region_path'] = str(template_path)
 
-                                    # Сохраняем сам шаблон в base64 (если есть)
                                     template_img = template.get('template')
                                     if template_img is not None:
                                         try:
