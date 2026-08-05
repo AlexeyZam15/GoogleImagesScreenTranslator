@@ -611,7 +611,7 @@ class ScreenshotTranslatorApp:
 
         self.set_actions_blocked(True)
         self._capture_mode = True
-        self.show_notification(self.get_string('notification_select_area_temporary'))  # <-- ЛОКАЛИЗОВАНО
+        # Удалено: self.show_notification(self.get_string('notification_select_area_temporary'))
         try:
             self.ui.root.iconify()
         except:
@@ -745,7 +745,7 @@ class ScreenshotTranslatorApp:
             return
         self.set_actions_blocked(True)
         self._capture_mode = True
-        self.show_notification(self.get_string('notification_select_area'))  # <-- ЛОКАЛИЗОВАНО
+        # Удалено: self.show_notification(self.get_string('notification_select_area'))
         try:
             self.ui.root.iconify()
         except:
@@ -919,6 +919,9 @@ class ScreenshotTranslatorApp:
     def _show_continuous_area_selection_window(self, screenshot_path):
         """Показывает окно выделения области"""
         from PIL import Image, ImageTk
+        import win32gui
+        import win32con
+        import time
 
         img = Image.open(screenshot_path)
         img_width, img_height = img.size
@@ -954,12 +957,23 @@ class ScreenshotTranslatorApp:
             'area_count': 0
         }
 
-        canvas.create_text(screen_width // 2, 50,
-                           text="Выделите область (ПКМ/ESC/Enter - выход)",
-                           fill="white", font=("Arial", 16, "bold"))
-        counter_id = canvas.create_text(screen_width // 2, 90,
-                                        text="Выделено: 0",
-                                        fill="#4CAF50", font=("Arial", 14))
+        # === ЛОКАЛИЗОВАННАЯ ИНСТРУКЦИЯ ===
+        instruction_text = self.get_string('area_selector_instruction')
+        canvas.create_text(
+            screen_width // 2, 50,
+            text=instruction_text,
+            fill="white",
+            font=("Arial", 16, "bold")
+        )
+
+        # === ЛОКАЛИЗОВАННЫЙ СЧЁТЧИК ===
+        counter_text = self.get_string('area_selector_counter').format(0)
+        counter_id = canvas.create_text(
+            screen_width // 2, 90,
+            text=counter_text,
+            fill="#4CAF50",
+            font=("Arial", 14)
+        )
         selection_data['counter_id'] = counter_id
 
         target_hwnd_for_exit = self._area_target_hwnd
@@ -995,7 +1009,10 @@ class ScreenshotTranslatorApp:
                     orig_y2 = max(0, min(orig_y2, img_height))
 
                     selection_data['area_count'] += 1
-                    canvas.itemconfig(counter_id, text=f"Выделено: {selection_data['area_count']}")
+                    # === ОБНОВЛЯЕМ СЧЁТЧИК С ЛОКАЛИЗАЦИЕЙ ===
+                    counter_text = self.get_string('area_selector_counter').format(selection_data['area_count'])
+                    canvas.itemconfig(counter_id, text=counter_text)
+
                     if selection_data['rect']:
                         canvas.delete(selection_data['rect'])
                         selection_data['rect'] = None
@@ -1023,7 +1040,7 @@ class ScreenshotTranslatorApp:
                 self._indicator_shown = True
                 self.logger.info("[DEBUG] Индикатор перевода показан после выхода из F3")
 
-            # === ПРОСТО ВОЗВРАЩАЕМ ФОКУС, НИЧЕГО НЕ ВОССТАНАВЛИВАЕМ ===
+            # Возвращаем фокус на целевое окно
             if target_hwnd_for_exit:
                 try:
                     win32gui.SetForegroundWindow(target_hwnd_for_exit)
@@ -1052,7 +1069,19 @@ class ScreenshotTranslatorApp:
         canvas.bind("<Escape>", lambda e: exit_area_mode())
         selection_window.bind("<Return>", lambda e: exit_area_mode())
 
-        # Принудительно захватываем фокус
+        # === ПРИНУДИТЕЛЬНЫЙ ФОКУС НА ОКНО ВЫБОРА ОБЛАСТИ ===
+        selection_window.update_idletasks()
+        time.sleep(0.05)
+
+        try:
+            hwnd = int(selection_window.winfo_id())
+            win32gui.SetForegroundWindow(hwnd)
+            win32gui.SetFocus(hwnd)
+            win32gui.BringWindowToTop(hwnd)
+            self.logger.info(f"[F3] Фокус установлен на окно выбора области (HWND: {hwnd})")
+        except Exception as e:
+            self.logger.warning(f"[F3] Не удалось установить фокус через Win32 API: {e}")
+
         canvas.focus_set()
         selection_window.focus_force()
         selection_window.grab_set()

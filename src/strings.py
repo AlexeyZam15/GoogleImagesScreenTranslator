@@ -17,7 +17,8 @@ def get_russian_all_strings():
     strings.update(get_russian_hotkeys_strings())
 
     # НОВЫЕ КЛЮЧИ (добавлены):
-    strings['area_selector_instruction'] = "Выделите область для перевода (ESC для отмены)"
+    strings['area_selector_instruction'] = "Выделите область (ПКМ/ESC/Enter - выход)"
+    strings['area_selector_counter'] = "Выделено: {}"
     strings['area_selector_error_title'] = "Ошибка"
     strings['area_selector_error_too_small'] = "Выделите область размером больше {min_size}x{min_size} пикселей"
     strings['context_menu_remove_overlays'] = "🗑️ Удалить оверлеи"
@@ -33,8 +34,6 @@ def get_russian_all_strings():
     strings['clear_all_no_app'] = "Не удалось определить текущее приложение"
     strings['clear_all_no_overlays'] = "Нет оверлеев для {app_name}"
     strings['clear_all_completed'] = "✅ Оверлеи для {app_name} удалены ({count} шт.)"
-
-    # НОВЫЕ КЛЮЧИ ДЛЯ ИНДИКАТОРА И УВЕДОМЛЕНИЙ (добавлены):
     strings['translation_status_translating'] = "Перевод..."
     strings['translation_status_ready'] = "✅ Готово!"
     strings['notification_capturing'] = "Скриншот..."
@@ -60,7 +59,8 @@ def get_english_all_strings():
     strings.update(get_english_hotkeys_strings())
 
     # НОВЫЕ КЛЮЧИ (добавлены):
-    strings['area_selector_instruction'] = "Select area to translate (ESC to cancel)"
+    strings['area_selector_instruction'] = "Select area (RMB/ESC/Enter - exit)"
+    strings['area_selector_counter'] = "Selected: {}"
     strings['area_selector_error_title'] = "Error"
     strings['area_selector_error_too_small'] = "Select an area larger than {min_size}x{min_size} pixels"
     strings['context_menu_remove_overlays'] = "🗑️ Remove overlays"
@@ -77,8 +77,6 @@ def get_english_all_strings():
     strings['clear_all_no_app'] = "Failed to determine current application"
     strings['clear_all_no_overlays'] = "No overlays for {app_name}"
     strings['clear_all_completed'] = "✅ Overlays for {app_name} removed ({count} pcs.)"
-
-    # НОВЫЕ КЛЮЧИ ДЛЯ ИНДИКАТОРА И УВЕДОМЛЕНИЙ (добавлены):
     strings['translation_status_translating'] = "Translating..."
     strings['translation_status_ready'] = "✅ Ready!"
     strings['notification_capturing'] = "Screenshotting..."
