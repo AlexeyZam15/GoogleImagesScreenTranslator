@@ -275,8 +275,6 @@ class HotkeyManager:
             self.app.process()
         elif action == 'area':
             self.app.capture_area()
-        elif action == 'area_temporary':
-            self.app.capture_area_temporary()
         elif action == 'clear_all':
             self.app.clear_all_overlays()
         elif action == 'edit_mode':

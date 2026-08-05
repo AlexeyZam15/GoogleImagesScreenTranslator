@@ -37,7 +37,6 @@ class Settings:
         "clear_all": "f4",
         "edit_mode": "f5",
         "auto_replace": "f6",
-        "area_temporary": "ctrl+f3"
     }
 
     def __init__(self):

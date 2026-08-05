@@ -135,11 +135,13 @@ class HotkeysWindow:
 
         canvas.bind('<Configure>', on_configure)
 
+        # Обновленное описание для area (F3) - добавлена информация о временном переводе через ПКМ
         hotkey_data = [
             ('toggle_overlay', '🔄', 'hotkey_toggle_overlay', self.get_string('hotkey_toggle_overlay_desc')),
             ('screenshot', '📸', 'hotkey_screenshot', self.get_string('hotkey_screenshot_desc')),
-            ('area', '✂️', 'hotkey_area', self.get_string('hotkey_area_desc')),
-            ('area_temporary', '⏱️', 'hotkey_area_temporary', self.get_string('hotkey_area_temporary_desc')),
+            ('area', '✂️', 'hotkey_area',
+             self.get_string('hotkey_area_desc') +
+             "\n💡 " + self.get_string('hotkey_area_temporary_hint')),  # <-- ДОБАВЛЕНА ПОДСКАЗКА
             ('clear_all', '🗑️', 'hotkey_clear_all', self.get_string('hotkey_clear_all_desc')),
             ('edit_mode', '✏️', 'hotkey_edit_mode', self.get_string('hotkey_edit_mode_desc')),
             ('auto_replace', '🔄', 'hotkey_auto_replace', self.get_string('hotkey_auto_replace_desc')),
@@ -224,6 +226,7 @@ class HotkeysWindow:
             )
             desc_label.pack(fill=tk.X, padx=15, pady=(0, 12))
 
+        # Блок ESC
         esc_card = tk.Frame(
             cards_frame,
             bg='#2d2d2d',
@@ -289,21 +292,7 @@ class HotkeysWindow:
         )
         esc_desc.pack(fill=tk.X, padx=15, pady=(0, 12))
 
-        # === НОВАЯ СТРОКА С ПОДСКАЗКОЙ О НАСТРОЙКЕ ВРЕМЕНИ ===
-        hint_frame = tk.Frame(main_frame, bg='#1e1e1e')
-        hint_frame.pack(fill=tk.X, pady=(10, 5))
-
-        time_hint = tk.Label(
-            hint_frame,
-            text=self.get_string('hotkey_area_temporary_time_hint'),
-            bg='#1e1e1e',
-            fg='#FF6B00',
-            font=("Segoe UI", 10),
-            anchor='w',
-            wraplength=600,
-            justify='left'
-        )
-        time_hint.pack(fill=tk.X)
+        # УДАЛЕН блок hint_frame с подсказкой о времени жизни
 
         btn_frame = tk.Frame(main_frame, bg='#1e1e1e')
         btn_frame.pack(fill=tk.X, pady=(20, 0))
@@ -345,7 +334,6 @@ class HotkeysWindow:
             "clear_all": "f4",
             "edit_mode": "f5",
             "auto_replace": "f6",
-            "area_temporary": "ctrl+f3"
         }
 
         for action, default_key in default_hotkeys.items():

@@ -353,7 +353,6 @@ class SettingsWindow:
             "clear_all": "f4",
             "edit_mode": "f5",
             "auto_replace": "f6",
-            "area_temporary": "ctrl+f3"
         }
         for action, default_key in default_hotkeys.items():
             self.settings.set_hotkey(action, default_key)
@@ -626,7 +625,7 @@ class SettingsWindow:
             anchor='w'
         )
         temp_lifetime_label.pack(anchor=tk.W, pady=(12, 3))
-        self._add_tooltip(temp_lifetime_label, self.get_string('temporary_lifetime_tooltip'))
+        self._add_tooltip(temp_lifetime_label, self.get_string('temporary_lifetime_tooltip_new'))  # <-- ИЗМЕНЕНО
 
         self.temp_lifetime_var = tk.IntVar(value=self.settings.get_temporary_lifetime())
 
@@ -755,10 +754,10 @@ class SettingsWindow:
             anchor='w'
         ).pack(anchor=tk.W, pady=(0, 10))
 
+        # УДАЛЕНА СТРОКА С area_temporary
         hotkey_actions = [
             ("screenshot", "settings_hotkeys_action_screenshot"),
             ("area", "settings_hotkeys_action_area"),
-            ("area_temporary", "settings_hotkeys_action_area_temporary"),
             ("toggle_overlay", "settings_hotkeys_action_toggle_overlay"),
             ("clear_all", "settings_hotkeys_action_clear_all"),
             ("edit_mode", "settings_hotkeys_action_edit_mode"),

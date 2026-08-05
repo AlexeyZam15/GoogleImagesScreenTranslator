@@ -22,8 +22,10 @@ def get_russian_all_strings():
     strings['area_selector_error_title'] = "Ошибка"
     strings['area_selector_error_too_small'] = "Выделите область размером больше {min_size}x{min_size} пикселей"
     strings['context_menu_remove_overlays'] = "🗑️ Удалить оверлеи"
-    strings['temporary_lifetime'] = "⏱ Время жизни временного оверлея (Ctrl+F3):"
+    strings['temporary_lifetime'] = "⏱ Время жизни временного оверлея:"
     strings['temporary_lifetime_tooltip'] = "Время в секундах, через которое временный оверлей автоматически удалится"
+    strings[
+        'temporary_lifetime_tooltip_new'] = "Время в секундах, через которое временный оверлей, созданный через ПКМ в режиме F3, автоматически удалится"
     strings['overlay_toggle_no_overlays'] = "Нет оверлеев для переключения"
     strings['overlay_toggle_unknown_app'] = "Не удалось определить текущее приложение"
     strings['overlay_toggle_no_overlays_for_app'] = "Нет оверлеев для {app_name}"
@@ -41,6 +43,8 @@ def get_russian_all_strings():
     strings['notification_select_area_temporary'] = "Выберите область (временный перевод)..."
     strings['notification_translation_ready'] = "Перевод готов"
     strings['notification_remove_no_app'] = "Не удалось определить текущее приложение"
+    strings[
+        'hotkey_area_temporary_hint'] = "💡 Временный перевод: ПКМ в режиме F3 — оверлей автоматически удалится через заданное время (настраивается в Настройках → Интерфейс)"
 
     return strings
 
@@ -64,9 +68,11 @@ def get_english_all_strings():
     strings['area_selector_error_title'] = "Error"
     strings['area_selector_error_too_small'] = "Select an area larger than {min_size}x{min_size} pixels"
     strings['context_menu_remove_overlays'] = "🗑️ Remove overlays"
-    strings['temporary_lifetime'] = "⏱ Temporary overlay lifetime (Ctrl+F3):"
+    strings['temporary_lifetime'] = "⏱ Temporary overlay lifetime:"
     strings[
         'temporary_lifetime_tooltip'] = "Time in seconds after which the temporary overlay will be automatically removed"
+    strings[
+        'temporary_lifetime_tooltip_new'] = "Time in seconds after which the temporary overlay created via RMB in F3 mode will be automatically removed"
     strings['overlay_toggle_no_overlays'] = "No overlays to toggle"
     strings['overlay_toggle_unknown_app'] = "Failed to determine current application"
     strings['overlay_toggle_no_overlays_for_app'] = "No overlays for {app_name}"
@@ -84,8 +90,11 @@ def get_english_all_strings():
     strings['notification_select_area_temporary'] = "Select area (temporary translation)..."
     strings['notification_translation_ready'] = "Translation ready"
     strings['notification_remove_no_app'] = "Failed to determine current application"
+    strings[
+        'hotkey_area_temporary_hint'] = "💡 Temporary translation: RMB in F3 mode — overlay will be automatically removed after specified time (adjustable in Settings → Interface)"
 
     return strings
+
 
 def get_russian_hotkeys_strings():
     """Возвращает русские строки для окна горячих клавиш"""

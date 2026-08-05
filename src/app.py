@@ -600,24 +600,6 @@ class ScreenshotTranslatorApp:
 
         threading.Thread(target=capture_task, daemon=True).start()
 
-    def capture_area_temporary(self):
-        """Захват области для временного перевода (Ctrl+F3) - оверлей удалится через заданное время"""
-        if not self.ready or self.initializing or self._capture_mode:
-            return
-
-        self.logger.info("[AREA_TEMP] Захват временной области (Ctrl+F3)")
-
-        self._is_temporary_translation = True
-
-        self.set_actions_blocked(True)
-        self._capture_mode = True
-        # Удалено: self.show_notification(self.get_string('notification_select_area_temporary'))
-        try:
-            self.ui.root.iconify()
-        except:
-            pass
-        self.ui.root.after(300, self._capture_window_for_area)
-
     def _on_translate_finished(self, result, error):
         """Завершение перевода"""
         self.logger.info(f"[DEBUG] === _on_translate_finished НАЧАЛО ===")
