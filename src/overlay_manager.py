@@ -51,6 +51,65 @@ class OverlayManager:
         self._create_context_menu()
         self.logger.info("OverlayManager инициализирован")
 
+    def toggle_overlays_for_app(self, app_name: str) -> bool:
+        """
+        Переключает видимость всех оверлеев для указанного приложения.
+        Возвращает новое состояние (True - показаны, False - скрыты).
+        """
+        if not app_name:
+            self.logger.warning("toggle_overlays_for_app: имя приложения не указано")
+            return False
+
+        overlays = self.get_overlays_by_app_name(app_name)
+
+        if not overlays:
+            self.logger.info(f"toggle_overlays_for_app: нет оверлеев для {app_name}")
+            # Если нужно показывать уведомление через parent
+            if hasattr(self.parent, 'show_notification'):
+                self.parent.show_notification(
+                    self.parent.get_string('overlay_toggle_no_overlays_for_app').format(app_name=app_name)
+                )
+            return False
+
+        # Определяем, все ли оверлеи сейчас видны
+        all_visible = True
+        for overlay in overlays:
+            if overlay is not None and not overlay.visible:
+                all_visible = False
+                break
+
+        new_state = not all_visible
+
+        self.logger.info(
+            f"Переключение {len(overlays)} оверлеев для {app_name} в состояние: {'показаны' if new_state else 'скрыты'}"
+        )
+
+        for overlay in overlays:
+            try:
+                if new_state:
+                    overlay._hidden_by_user = False
+                    overlay._is_visible_by_user = True
+                    overlay.show()
+                else:
+                    overlay._hidden_by_user = True
+                    overlay._is_visible_by_user = False
+                    overlay.hide(by_user=True)
+            except Exception as e:
+                self.logger.error(f"Ошибка при переключении оверлея для {app_name}: {e}")
+
+        self.save_overlay_state()
+
+        # Уведомление через parent
+        if hasattr(self.parent, 'show_notification'):
+            status_text = self.parent.get_string(
+                'overlay_toggle_status_shown') if new_state else self.parent.get_string('overlay_toggle_status_hidden')
+            self.parent.show_notification(
+                self.parent.get_string('overlay_toggle_notification').format(app_name=app_name, status=status_text)
+            )
+
+        self.logger.info(f"Оверлеи для {app_name} {'показаны' if new_state else 'скрыты'}")
+        return new_state
+
     def get_overlays_by_app_name(self, app_name: str) -> List[OverlayWindow]:
         """Возвращает список оверлеев для указанного имени приложения."""
         return self.overlays_by_app_name.get(app_name, [])

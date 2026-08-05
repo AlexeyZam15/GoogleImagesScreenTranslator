@@ -3,6 +3,72 @@
 """
 
 
+def get_russian_all_strings():
+    """Объединяет все русские строки в один словарь"""
+    strings = {}
+    strings.update(get_russian_main_strings())
+    strings.update(get_russian_button_strings())
+    strings.update(get_russian_settings_strings())
+    strings.update(get_russian_menu_strings())
+    strings.update(get_russian_settings_window_strings())
+    strings.update(get_russian_about_strings())
+    strings.update(get_russian_shortcuts_strings())
+    strings.update(get_russian_help_strings())
+    strings.update(get_russian_hotkeys_strings())
+    # НОВЫЕ КЛЮЧИ:
+    strings['area_selector_instruction'] = "Выделите область для перевода (ESC для отмены)"
+    strings['area_selector_error_title'] = "Ошибка"
+    strings['area_selector_error_too_small'] = "Выделите область размером больше {min_size}x{min_size} пикселей"
+    strings['context_menu_remove_overlays'] = "🗑️ Удалить оверлеи"
+    strings['temporary_lifetime'] = "⏱ Время жизни временного оверлея (Ctrl+F3):"
+    strings['temporary_lifetime_tooltip'] = "Время в секундах, через которое временный оверлей автоматически удалится"
+    strings['overlay_toggle_no_overlays'] = "Нет оверлеев для переключения"
+    strings['overlay_toggle_unknown_app'] = "Не удалось определить текущее приложение"
+    strings['overlay_toggle_no_overlays_for_app'] = "Нет оверлеев для {app_name}"
+    strings['overlay_toggle_status_shown'] = "показаны"
+    strings['overlay_toggle_status_hidden'] = "скрыты"
+    strings['overlay_toggle_notification'] = "Оверлеи для {app_name} {status}"
+    strings['overlay_toggle_no_templates_found'] = "Не найдено шаблонов на экране"
+    # НОВЫЕ КЛЮЧИ ДЛЯ F4:
+    strings['clear_all_no_app'] = "Не удалось определить текущее приложение"
+    strings['clear_all_no_overlays'] = "Нет оверлеев для {app_name}"
+    strings['clear_all_completed'] = "✅ Оверлеи для {app_name} удалены ({count} шт.)"
+    return strings
+
+
+def get_english_all_strings():
+    """Объединяет все английские строки в один словарь"""
+    strings = {}
+    strings.update(get_english_main_strings())
+    strings.update(get_english_button_strings())
+    strings.update(get_english_settings_strings())
+    strings.update(get_english_menu_strings())
+    strings.update(get_english_settings_window_strings())
+    strings.update(get_english_about_strings())
+    strings.update(get_english_shortcuts_strings())
+    strings.update(get_english_help_strings())
+    strings.update(get_english_hotkeys_strings())
+    # НОВЫЕ КЛЮЧИ:
+    strings['area_selector_instruction'] = "Select area to translate (ESC to cancel)"
+    strings['area_selector_error_title'] = "Error"
+    strings['area_selector_error_too_small'] = "Select an area larger than {min_size}x{min_size} pixels"
+    strings['context_menu_remove_overlays'] = "🗑️ Remove overlays"
+    strings['temporary_lifetime'] = "⏱ Temporary overlay lifetime (Ctrl+F3):"
+    strings[
+        'temporary_lifetime_tooltip'] = "Time in seconds after which the temporary overlay will be automatically removed"
+    strings['overlay_toggle_no_overlays'] = "No overlays to toggle"
+    strings['overlay_toggle_unknown_app'] = "Failed to determine current application"
+    strings['overlay_toggle_no_overlays_for_app'] = "No overlays for {app_name}"
+    strings['overlay_toggle_status_shown'] = "shown"
+    strings['overlay_toggle_status_hidden'] = "hidden"
+    strings['overlay_toggle_notification'] = "Overlays for {app_name} {status}"
+    strings['overlay_toggle_no_templates_found'] = "No templates found on screen"
+    # НОВЫЕ КЛЮЧИ ДЛЯ F4:
+    strings['clear_all_no_app'] = "Failed to determine current application"
+    strings['clear_all_no_overlays'] = "No overlays for {app_name}"
+    strings['clear_all_completed'] = "✅ Overlays for {app_name} removed ({count} pcs.)"
+    return strings
+
 def get_russian_hotkeys_strings():
     """Возвращает русские строки для окна горячих клавиш"""
     return {
@@ -57,51 +123,6 @@ def get_english_hotkeys_strings():
         'hotkey_esc': "ESC — remove overlay",
         'hotkey_esc_desc': "In edit mode, removes the overlay under the mouse cursor",
     }
-
-
-def get_russian_all_strings():
-    """Объединяет все русские строки в один словарь"""
-    strings = {}
-    strings.update(get_russian_main_strings())
-    strings.update(get_russian_button_strings())
-    strings.update(get_russian_settings_strings())
-    strings.update(get_russian_menu_strings())
-    strings.update(get_russian_settings_window_strings())
-    strings.update(get_russian_about_strings())
-    strings.update(get_russian_shortcuts_strings())
-    strings.update(get_russian_help_strings())
-    strings.update(get_russian_hotkeys_strings())
-    # НОВЫЕ КЛЮЧИ:
-    strings['area_selector_instruction'] = "Выделите область для перевода (ESC для отмены)"
-    strings['area_selector_error_title'] = "Ошибка"
-    strings['area_selector_error_too_small'] = "Выделите область размером больше {min_size}x{min_size} пикселей"
-    strings['context_menu_remove_overlays'] = "🗑️ Удалить оверлеи"
-    strings['temporary_lifetime'] = "⏱ Время жизни временного оверлея (Ctrl+F3):"
-    strings['temporary_lifetime_tooltip'] = "Время в секундах, через которое временный оверлей автоматически удалится"
-    return strings
-
-
-def get_english_all_strings():
-    """Объединяет все английские строки в один словарь"""
-    strings = {}
-    strings.update(get_english_main_strings())
-    strings.update(get_english_button_strings())
-    strings.update(get_english_settings_strings())
-    strings.update(get_english_menu_strings())
-    strings.update(get_english_settings_window_strings())
-    strings.update(get_english_about_strings())
-    strings.update(get_english_shortcuts_strings())
-    strings.update(get_english_help_strings())
-    strings.update(get_english_hotkeys_strings())
-    # НОВЫЕ КЛЮЧИ:
-    strings['area_selector_instruction'] = "Select area to translate (ESC to cancel)"
-    strings['area_selector_error_title'] = "Error"
-    strings['area_selector_error_too_small'] = "Select an area larger than {min_size}x{min_size} pixels"
-    strings['context_menu_remove_overlays'] = "🗑️ Remove overlays"
-    strings['temporary_lifetime'] = "⏱ Temporary overlay lifetime (Ctrl+F3):"
-    strings[
-        'temporary_lifetime_tooltip'] = "Time in seconds after which the temporary overlay will be automatically removed"
-    return strings
 
 
 def get_russian_settings_window_strings():

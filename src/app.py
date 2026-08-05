@@ -28,7 +28,7 @@ from src.hotkeys import HotkeyManager
 from src.window_list import WindowListManager
 from src.utils import ensure_app_temp_dir
 from src.notification_overlay import NotificationOverlay
-
+from typing import Optional
 
 def cleanup_old_logs(log_dir, keep_count=5):
     """Очищает старые логи"""
@@ -153,6 +153,221 @@ class ScreenshotTranslatorApp:
 
         # Запуск инициализации
         self.ui.root.after(100, self._init_translator_step)
+
+    def clear_all_overlays(self):
+        """Удаляет все оверлеи для текущего активного приложения (F4)"""
+        self.logger.info("[CLEAR_ALL] Начинаем удаление оверлеев для текущего приложения")
+
+        if not self.overlay_manager:
+            self.logger.warning("[CLEAR_ALL] OverlayManager не инициализирован")
+            self.show_notification("Ошибка: менеджер оверлеев не инициализирован")
+            return
+
+        # Получаем имя текущего активного приложения
+        current_app = self._get_current_app_name()
+        if not current_app:
+            self.logger.warning("[CLEAR_ALL] Не удалось определить текущее приложение")
+            self.show_notification(self.get_string('clear_all_no_app'))
+            return
+
+        # Получаем оверлеи для текущего приложения
+        overlays_for_app = self.overlay_manager.get_overlays_by_app_name(current_app)
+
+        if not overlays_for_app:
+            self.logger.info(f"[CLEAR_ALL] Нет оверлеев для приложения {current_app}")
+            self.show_notification(self.get_string('clear_all_no_overlays').format(app_name=current_app))
+            return
+
+        overlays_count = len(overlays_for_app)
+        self.logger.info(f"[CLEAR_ALL] Найдено {overlays_count} оверлеев для приложения {current_app}")
+
+        # === ОСТАНАВЛИВАЕМ МОНИТОР, ЧТОБЫ ОН НЕ ПЕРЕСОЗДАВАЛ ОВЕРЛЕИ ===
+        if self.translation_monitor and self.translation_monitor.is_running():
+            self.translation_monitor.stop()
+            self.logger.info("[CLEAR_ALL] Монитор остановлен")
+
+        # === УДАЛЯЕМ ШАБЛОНЫ ДЛЯ ЭТОГО ПРИЛОЖЕНИЯ ИЗ МОНИТОРА ===
+        if self.translation_monitor:
+            templates_to_remove = []
+            for template_data in self.translation_monitor.templates:
+                if template_data.get('target_app_name') == current_app:
+                    templates_to_remove.append(template_data.get('pair_index'))
+
+            for pair_index in templates_to_remove:
+                self.translation_monitor.remove_template(pair_index)
+                self.logger.info(f"[CLEAR_ALL] Удален шаблон #{pair_index} для {current_app}")
+
+            self.logger.info(f"[CLEAR_ALL] Удалено {len(templates_to_remove)} шаблонов для {current_app}")
+
+        # === УДАЛЯЕМ ОВЕРЛЕИ ДЛЯ ЭТОГО ПРИЛОЖЕНИЯ ===
+        removed_count = 0
+        for overlay in overlays_for_app[:]:  # Используем копию списка
+            try:
+                self.overlay_manager.remove_overlay(overlay)
+                removed_count += 1
+            except Exception as e:
+                self.logger.error(f"[CLEAR_ALL] Ошибка удаления оверлея: {e}")
+
+        self.logger.info(f"[CLEAR_ALL] Удалено {removed_count} оверлеев для {current_app}")
+
+        # === ОЧИЩАЕМ СОСТОЯНИЕ ДЛЯ ЭТОГО ПРИЛОЖЕНИЯ ===
+        if current_app in self._window_states:
+            del self._window_states[current_app]
+            self.logger.info(f"[CLEAR_ALL] Состояние для {current_app} очищено")
+
+        # === УДАЛЯЕМ ФАЙЛ СОСТОЯНИЯ ДЛЯ ЭТОГО ПРИЛОЖЕНИЯ ===
+        try:
+            state_file = Path.home() / "Documents" / "GoogleScreenTranslate" / "config" / "overlay_state.json"
+            if state_file.exists():
+                # Загружаем текущее состояние, удаляем записи для этого приложения и сохраняем
+                import json
+                with open(state_file, 'r', encoding='utf-8') as f:
+                    states = json.load(f)
+
+                # Удаляем все записи для этого приложения
+                keys_to_remove = [key for key in states.keys() if key.startswith(f"{current_app}_")]
+                for key in keys_to_remove:
+                    del states[key]
+                    self.logger.info(f"[CLEAR_ALL] Удалена запись состояния: {key}")
+
+                # Сохраняем обновленное состояние
+                with open(state_file, 'w', encoding='utf-8') as f:
+                    json.dump(states, f, indent=4, ensure_ascii=False)
+                self.logger.info(f"[CLEAR_ALL] Состояние для {current_app} удалено из файла")
+        except Exception as e:
+            self.logger.warning(f"[CLEAR_ALL] Не удалось обновить файл состояния: {e}")
+
+        # === СОХРАНЯЕМ ОБНОВЛЕННОЕ СОСТОЯНИЕ ===
+        try:
+            self.overlay_manager.save_overlay_state(immediate=True)
+            self.logger.info("[CLEAR_ALL] Состояние сохранено")
+        except Exception as e:
+            self.logger.warning(f"[CLEAR_ALL] Ошибка сохранения состояния: {e}")
+
+        # === ЗАПУСКАЕМ МОНИТОР, ЕСЛИ ОСТАЛИСЬ ШАБЛОНЫ ===
+        if self.translation_monitor and self.translation_monitor.templates:
+            if self.settings.get_auto_replace_translated():
+                self.translation_monitor.start()
+                self.logger.info(
+                    f"[CLEAR_ALL] Монитор перезапущен, осталось {len(self.translation_monitor.templates)} шаблонов")
+
+        # Обновляем список окон
+        self.ui.root.after(100, self.window_list.refresh)
+
+        self.logger.info(f"[CLEAR_ALL] Очистка завершена для {current_app}")
+        self.show_notification(
+            self.get_string('clear_all_completed').format(app_name=current_app, count=removed_count)
+        )
+
+    def get_string(self, key: str) -> str:
+        """Возвращает локализованную строку"""
+        if hasattr(self, 'settings'):
+            return self.settings.get_string(key)
+        return key
+
+    def _get_current_app_name(self) -> Optional[str]:
+        """Возвращает имя текущего активного приложения."""
+        try:
+            import win32gui
+            from src.window_utils import get_process_name_by_hwnd
+            hwnd = win32gui.GetForegroundWindow()
+            if hwnd:
+                return get_process_name_by_hwnd(hwnd)
+        except Exception as e:
+            self.logger.warning(f"[WINDOW] Ошибка получения имени текущего окна: {e}")
+        return None
+
+    def toggle_overlay(self):
+        """Переключает видимость оверлеев ТОЛЬКО для текущего активного приложения (F1)"""
+        self.logger.info("[DEBUG] toggle_overlay вызван")
+
+        if not self.overlay_manager:
+            self.logger.warning("toggle_overlay: менеджер оверлеев не инициализирован")
+            return
+
+        if not self.overlay_manager.overlays:
+            self.logger.info("toggle_overlay: нет активных оверлеев")
+            self.show_notification(self.get_string('overlay_toggle_no_overlays'))
+            return
+
+        # Получаем имя текущего активного приложения
+        current_app = self._get_current_app_name()
+        if not current_app:
+            self.logger.warning("toggle_overlay: не удалось определить текущее приложение")
+            self.show_notification(self.get_string('overlay_toggle_unknown_app'))
+            return
+
+        # Получаем оверлеи для текущего приложения
+        overlays_for_app = self.overlay_manager.get_overlays_by_app_name(current_app)
+
+        if not overlays_for_app:
+            self.logger.info(f"toggle_overlay: нет оверлеев для приложения {current_app}")
+            self.show_notification(self.get_string('overlay_toggle_no_overlays_for_app').format(app_name=current_app))
+            return
+
+        # Проверяем, включена ли автозамена
+        auto_replace_enabled = self.settings.get_auto_replace_translated()
+
+        # Если автозамена включена, фильтруем оверлеи по наличию найденных шаблонов
+        if auto_replace_enabled and self.translation_monitor:
+            # Собираем хеши найденных шаблонов
+            found_template_hashes = set()
+            for template_data in self.translation_monitor.templates:
+                if template_data.get('found', False):
+                    template_hash = template_data.get('hash')
+                    if template_hash:
+                        found_template_hashes.add(template_hash)
+
+            self.logger.info(f"[F1] Найдено шаблонов на экране: {len(found_template_hashes)}")
+
+            # Фильтруем оверлеи: показываем только те, чьи шаблоны найдены
+            overlays_to_toggle = []
+            for overlay in overlays_for_app:
+                template_id = overlay._template_id
+                if template_id and template_id in found_template_hashes:
+                    overlays_to_toggle.append(overlay)
+
+            # Если нет ни одного найденного шаблона — показываем уведомление и выходим
+            if not overlays_to_toggle:
+                self.logger.info(f"[F1] Нет найденных шаблонов для приложения {current_app}")
+                self.show_notification(self.get_string('overlay_toggle_no_templates_found'))
+                return
+
+            # Используем отфильтрованный список
+            overlays_for_app = overlays_to_toggle
+            self.logger.info(f"[F1] Отфильтровано оверлеев с найденными шаблонами: {len(overlays_for_app)}")
+
+        # Проверяем, все ли оверлеи для этого приложения скрыты или видны
+        all_visible = all(ov.visible for ov in overlays_for_app)
+        new_state = not all_visible
+
+        self.logger.info(
+            f"toggle_overlay: переключение {len(overlays_for_app)} оверлеев для {current_app} в состояние: {'показаны' if new_state else 'скрыты'}")
+
+        for overlay in overlays_for_app:
+            try:
+                if new_state:
+                    # Показываем оверлей
+                    overlay._hidden_by_user = False
+                    overlay._is_visible_by_user = True
+                    overlay.show()
+                else:
+                    # Скрываем оверлей
+                    overlay._hidden_by_user = True
+                    overlay._is_visible_by_user = False
+                    overlay.hide(by_user=True)
+            except Exception as e:
+                self.logger.error(f"Ошибка при переключении оверлея: {e}")
+
+        # Сохраняем состояние
+        self.overlay_manager.save_overlay_state()
+
+        # Уведомление с локализацией
+        status_text = self.get_string('overlay_toggle_status_shown') if new_state else self.get_string(
+            'overlay_toggle_status_hidden')
+        self.show_notification(
+            self.get_string('overlay_toggle_notification').format(app_name=current_app, status=status_text))
+        self.logger.info(f"F1: оверлеи для {current_app} {status_text}")
 
     def _clear_window_state(self, app_name: str):
         """Очищает состояние для указанного приложения."""
@@ -296,45 +511,6 @@ class ScreenshotTranslatorApp:
                         overlay._start_visibility_monitor()
                 except Exception as e:
                     self.logger.warning(f"[EDIT_MODE] Ошибка настройки оверлея: {e}")
-
-    def clear_all_overlays(self):
-        """Удаляет все оверлеи (F4)"""
-        if not self.overlay_manager:
-            return
-
-        self.logger.info("[CLEAR_ALL] Начинаем удаление всех оверлеев")
-        self.show_notification("Очистка всех оверлеев")
-
-        # === ОСТАНАВЛИВАЕМ МОНИТОР, ЧТОБЫ ОН НЕ ПЕРЕСОЗДАВАЛ ОВЕРЛЕИ ===
-        if self.translation_monitor and self.translation_monitor.is_running():
-            self.translation_monitor.stop()
-            self.logger.info("[CLEAR_ALL] Монитор остановлен")
-
-        # === УДАЛЯЕМ ВСЕ ШАБЛОНЫ ИЗ МОНИТОРА ===
-        if self.translation_monitor:
-            self.translation_monitor.clear_all_templates()
-            self.logger.info("[CLEAR_ALL] Все шаблоны удалены из монитора")
-
-        # === ЗАКРЫВАЕМ ВСЕ ОВЕРЛЕИ ===
-        self.overlay_manager.close_all()
-        self.logger.info("[CLEAR_ALL] Все оверлеи закрыты")
-
-        # === ОЧИЩАЕМ СОСТОЯНИЕ ===
-        self._window_states.clear()
-
-        # === УДАЛЯЕМ ФАЙЛ СОСТОЯНИЯ ===
-        try:
-            state_file = Path.home() / "Documents" / "GoogleScreenTranslate" / "config" / "overlay_state.json"
-            if state_file.exists():
-                state_file.unlink()
-                self.logger.info("[CLEAR_ALL] Файл состояния удален")
-        except Exception as e:
-            self.logger.warning(f"[CLEAR_ALL] Не удалось удалить файл состояния: {e}")
-
-        # Обновляем список окон
-        self.ui.root.after(100, self.window_list.refresh)
-
-        self.logger.info("[CLEAR_ALL] Очистка завершена")
 
     def process(self):
         """Скриншот окна (F2)"""
@@ -508,24 +684,6 @@ class ScreenshotTranslatorApp:
                     self._hide_translation_overlay()
                     self._indicator_shown = False
                     self.logger.info("[DEBUG] Индикатор перевода скрыт (очередь пуста)")
-
-    def toggle_overlay(self):
-        """Переключает видимость всех оверлеев (F1)"""
-        self.logger.info("[DEBUG] toggle_overlay вызван")
-
-        if not self.overlay_manager:
-            self.logger.warning("toggle_overlay: менеджер оверлеев не инициализирован")
-            return
-
-        if not self.overlay_manager.overlays:
-            self.logger.info("toggle_overlay: нет активных оверлеев")
-            return
-
-        # === УБРАНА БЛОКИРОВКА - F1 РАБОТАЕТ В ЛЮБОМ РЕЖИМЕ ===
-        new_state = self.overlay_manager.toggle_all_overlays()
-        status_text = "показаны" if new_state else "скрыты"
-        self.show_notification(f"Оверлеи {status_text}")
-        self.logger.info(f"F1: все оверлеи {status_text}")
 
     def toggle_auto_replace_mode(self):
         if not self.translation_monitor:
