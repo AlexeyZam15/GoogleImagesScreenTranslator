@@ -221,7 +221,8 @@ class TranslationMonitor:
         self._app_name_cache[hwnd] = app_name
         return app_name
 
-    def add_template(self, region_image: Path, translated_image: Path, target_app_name: str = None):
+    def add_template(self, region_image: Path, translated_image: Path, target_app_name: str = None,
+                     is_temporary: bool = False, lifetime_seconds: int = 180):
         """Добавляет новый шаблон для мониторинга. Возвращает (pair_index, file_hash)."""
 
         if not region_image.exists():
@@ -242,7 +243,7 @@ class TranslationMonitor:
             with open(region_image, 'rb') as f:
                 file_hash = hashlib.md5(f.read()).hexdigest()
 
-            # === ПРОВЕРКА: ЕСЛИ ШАБЛОН С ТАКИМ ХЕШЕМ УЖЕ СУЩЕСТВУЕТ ===
+            # Проверяем, существует ли уже такой шаблон
             for template_data in self.templates:
                 if template_data.get('hash') == file_hash:
                     self.logger.info(f"Шаблон с хешем {file_hash[:8]} уже существует, обновляем перевод")
@@ -251,9 +252,10 @@ class TranslationMonitor:
                     template_data['found'] = False
                     template_data['last_position'] = None
                     template_data['last_template_position'] = None
+                    template_data['is_temporary'] = is_temporary
+                    template_data['lifetime_seconds'] = lifetime_seconds  # <-- ДОБАВЛЕНО
                     if target_app_name:
                         template_data['target_app_name'] = target_app_name
-                    # Сбрасываем оверлей, чтобы он пересоздался при следующем обнаружении
                     if template_data.get('overlay'):
                         try:
                             template_data['overlay'].close()
@@ -281,13 +283,15 @@ class TranslationMonitor:
                 'offset_y': 0,
                 'offset_initialized': False,
                 'overlay_width': 0,
-                'overlay_height': 0
+                'overlay_height': 0,
+                'is_temporary': is_temporary,
+                'lifetime_seconds': lifetime_seconds  # <-- ДОБАВЛЕНО
             }
 
             self.templates.append(template_data)
-            self.logger.info(f"Добавлен шаблон #{pair_index} (хеш: {file_hash[:8]}) для приложения {target_app_name}")
+            self.logger.info(
+                f"Добавлен шаблон #{pair_index} (хеш: {file_hash[:8]}) для приложения {target_app_name}, временный: {is_temporary}, время жизни: {lifetime_seconds}с")
 
-            # Сбрасываем кэш
             self._frame_cache = None
             self._frame_cache_hwnd = None
             self._frame_cache_time = 0
@@ -603,8 +607,8 @@ class TranslationMonitor:
     def _update_overlay_gui(self, template_data: Dict, x: int, y: int, w: int, h: int, translated_path: Path,
                             template_id: str):
         """Обновляет или создает оверлей в главном потоке."""
+
         try:
-            # === НОВАЯ ПРОВЕРКА: если монитор остановлен, не создаем оверлей ===
             if not self.monitoring:
                 self.logger.info(
                     f"[MONITOR] Монитор остановлен, отменяем создание оверлея для шаблона #{template_data.get('pair_index')}")
@@ -614,6 +618,8 @@ class TranslationMonitor:
             overlay = template_data.get('overlay')
             target_app_name = template_data.get('target_app_name')
             is_found = template_data.get('found', False)
+            is_temporary = template_data.get('is_temporary', False)  # <-- ИЗВЛЕКАЕМ ФЛАГ
+            lifetime_seconds = template_data.get('lifetime_seconds', 180)
 
             if not template_id:
                 template_id = template_data.get('hash')
@@ -654,7 +660,6 @@ class TranslationMonitor:
                         if overlay._hidden_by_user:
                             return
 
-                        # === НОВАЯ ПРОВЕРКА: если оверлей помечен на закрытие, не обновляем ===
                         if hasattr(overlay, '_closing') and overlay._closing:
                             self.logger.info(
                                 f"[MONITOR] Оверлей #{pair_index} помечен на закрытие, пропускаем обновление")
@@ -682,7 +687,6 @@ class TranslationMonitor:
                     self.logger.warning(f"[DEBUG] Ошибка при обновлении существующего оверлея: {e}")
                     template_data['overlay'] = None
 
-            # === НОВАЯ ПРОВЕРКА: проверяем монитор еще раз перед созданием нового оверлея ===
             if not self.monitoring:
                 self.logger.info(f"[MONITOR] Монитор остановлен, не создаем новый оверлей для шаблона #{pair_index}")
                 return
@@ -715,7 +719,9 @@ class TranslationMonitor:
                         saved_y=final_y,
                         saved_w=final_w,
                         saved_h=final_h,
-                        app_name=target_app_name
+                        app_name=target_app_name,
+                        is_temporary=is_temporary,  # <-- ПЕРЕДАЁМ ФЛАГ
+                        lifetime_seconds=lifetime_seconds  # <-- ПЕРЕДАЁМ ВРЕМЯ
                     )
 
                     if new_overlay:
@@ -736,7 +742,7 @@ class TranslationMonitor:
                         new_overlay.root.update()
 
                         self.logger.info(
-                            f"[MONITOR] Создан новый оверлей для шаблона #{pair_index} в позиции ({final_x}, {final_y})"
+                            f"[MONITOR] Создан {'временный' if is_temporary else 'постоянный'} оверлей для шаблона #{pair_index} в позиции ({final_x}, {final_y})"
                         )
                     else:
                         self.logger.warning(f"[MONITOR] Не удалось создать оверлей для шаблона #{pair_index}")

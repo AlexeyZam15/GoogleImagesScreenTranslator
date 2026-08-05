@@ -180,15 +180,9 @@ class OverlayWindow:
             self._temp_created_at = time.time()
             self._temp_lifetime = lifetime_seconds
             self._start_temp_timer(lifetime_seconds)
-            # Добавляем визуальное отличие - оранжевую рамку и индикатор
-            if self.root and self.root.winfo_exists():
-                self.root.after(100, self._show_temporary_indicator)
-            else:
-                self._show_temporary_indicator()
             self.logger.info(f"[TEMP] Временный режим включен, время жизни: {lifetime_seconds}с")
         else:
             self._stop_temp_timer()
-            self._hide_temporary_indicator()
             self.logger.info("[TEMP] Временный режим выключен")
 
     def _start_temp_timer(self, lifetime_seconds: int):
@@ -218,116 +212,6 @@ class OverlayWindow:
         # Удаляем через менеджер
         if hasattr(self, '_overlay_manager') and self._overlay_manager:
             self._overlay_manager.remove_overlay(self)
-
-    def _show_temporary_indicator(self):
-        """Показывает индикатор временного оверлея (оранжевая рамка и надпись)"""
-        if not self.root or not self.root.winfo_exists():
-            return
-        try:
-            # Удаляем старый индикатор
-            self._hide_temporary_indicator()
-
-            # Ждём, пока окно полностью отрисуется
-            self.root.update_idletasks()
-
-            width = self.root.winfo_width()
-            height = self.root.winfo_height()
-
-            # Если размеры ещё не определены, используем запасные
-            if width < 10 or height < 10:
-                width = 300
-                height = 200
-
-            # Оранжевая рамка
-            self.canvas.create_rectangle(
-                2, 2, width - 2, height - 2,
-                outline='#FF6B00',
-                width=2,
-                tags=('temp_indicator',)
-            )
-
-            # Получаем время жизни для отображения
-            lifetime = getattr(self, '_temp_lifetime', 180)
-            minutes = lifetime // 60
-            seconds = lifetime % 60
-
-            # Текст "⏱ Временный" в левом верхнем углу
-            self.canvas.create_text(
-                8, 8,
-                text=f"⏱ Временный ({minutes}:{seconds:02d})",
-                fill='#FF6B00',
-                font=("Segoe UI", 10, "bold"),
-                anchor='nw',
-                tags=('temp_indicator',)
-            )
-            # Текст с таймером в правом нижнем углу
-            self.canvas.create_text(
-                width - 8, height - 8,
-                text=f"⏳ {minutes}:{seconds:02d}",
-                fill='#FF6B00',
-                font=("Segoe UI", 9),
-                anchor='se',
-                tags=('temp_indicator', 'temp_timer')
-            )
-            # Запускаем обновление таймера
-            self._start_temp_timer_update()
-        except Exception as e:
-            self.logger.warning(f"[TEMP] Ошибка показа индикатора: {e}")
-
-    def _start_temp_timer_update(self):
-        """Запускает обновление отображения оставшегося времени"""
-        if not self._is_temporary:
-            return
-        try:
-            # Обновляем каждую секунду
-            if self.root and self.root.winfo_exists():
-                self.root.after(1000, self._update_temp_timer_display)
-        except Exception as e:
-            self.logger.warning(f"[TEMP] Ошибка запуска обновления таймера: {e}")
-
-    def _update_temp_timer_display(self):
-        """Обновляет отображение оставшегося времени"""
-        if not self._is_temporary or not self.root or not self.root.winfo_exists():
-            return
-
-        try:
-            lifetime = getattr(self, '_temp_lifetime', 180)
-            elapsed = time.time() - self._temp_created_at
-            remaining = max(0, lifetime - int(elapsed))
-            minutes = remaining // 60
-            seconds = remaining % 60
-
-            # Обновляем текст таймера
-            self.canvas.delete('temp_timer')
-            width = self.root.winfo_width()
-            height = self.root.winfo_height()
-
-            if remaining > 0:
-                timer_text = f"⏳ {minutes}:{seconds:02d}"
-                self.canvas.create_text(
-                    width - 8, height - 8,
-                    text=timer_text,
-                    fill='#FF6B00',
-                    font=("Segoe UI", 9),
-                    anchor='se',
-                    tags=('temp_indicator', 'temp_timer')
-                )
-                # Продолжаем обновление
-                if self.root and self.root.winfo_exists():
-                    self.root.after(1000, self._update_temp_timer_display)
-            else:
-                # Время вышло - удаляем оверлей
-                self._on_temp_timeout()
-        except Exception as e:
-            self.logger.warning(f"[TEMP] Ошибка обновления таймера: {e}")
-
-    def _hide_temporary_indicator(self):
-        """Скрывает индикатор временного оверлея"""
-        try:
-            self.canvas.delete('temp_indicator')
-            self.canvas.delete('temp_timer')
-        except Exception as e:
-            self.logger.warning(f"[TEMP] Ошибка скрытия индикатора: {e}")
 
     def _update_image_position(self):
         """Обновляет позицию изображения без смещения."""
@@ -1579,7 +1463,7 @@ class OverlayWindow:
 
         # Останавливаем временный таймер
         self._stop_temp_timer()
-        self._hide_temporary_indicator()
+        # _hide_temporary_indicator() - удалён
 
         self._hide_edit_frame()
 

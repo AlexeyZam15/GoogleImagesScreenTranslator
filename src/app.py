@@ -647,34 +647,38 @@ class ScreenshotTranslatorApp:
 
             if result and self.overlay_manager:
                 self.logger.info(f"Результат перевода получен: {result}")
-                self.show_notification(self.get_string('notification_translation_ready'))  # <-- ЛОКАЛИЗОВАНО
+                self.show_notification(self.get_string('notification_translation_ready'))
 
                 region_path = getattr(self, '_pending_region_path', None)
                 auto_replace_enabled = self.settings.get_auto_replace_translated()
+
+                # Получаем время жизни из настроек для временного оверлея
+                lifetime_seconds = self.settings.get_temporary_lifetime() if is_temporary else 180
 
                 if region_path and region_path.exists() and self.translation_monitor and auto_replace_enabled:
                     target_hwnd = self.screenshot.get_last_hwnd()
                     from src.window_utils import get_process_name_by_hwnd
                     target_app_name = get_process_name_by_hwnd(target_hwnd) if target_hwnd else None
 
-                    add_result = self.translation_monitor.add_template(region_path, result,
-                                                                       target_app_name)
+                    add_result = self.translation_monitor.add_template(
+                        region_path, result,
+                        target_app_name,
+                        is_temporary=is_temporary,
+                        lifetime_seconds=lifetime_seconds  # <-- ПЕРЕДАЁМ ВРЕМЯ ЖИЗНИ
+                    )
                     if add_result and len(add_result) == 2:
                         pair_index, file_hash = add_result
                         self.logger.info(
-                            f"[DEBUG] Шаблон #{pair_index} добавлен в монитор (автозамена включена, оверлей будет создан монитором)"
+                            f"[DEBUG] {'Временный' if is_temporary else 'Постоянный'} шаблон #{pair_index} добавлен в монитор, время жизни: {lifetime_seconds}с"
                         )
                     else:
                         self.logger.warning("[DEBUG] Не удалось добавить шаблон в монитор")
                 else:
                     target_hwnd = self.screenshot.get_last_hwnd()
                     window_rect = getattr(self, '_pending_area_rect', None) or self.screenshot.get_last_window_rect()
-                    is_fullscreen = self.screenshot.is_last_window_fullscreen()
 
                     if target_hwnd and window_rect:
                         self.logger.info(f"[DEBUG] Создаем оверлей сразу (автозамена выключена или нет region_path)")
-
-                        lifetime_seconds = self.settings.get_temporary_lifetime() if is_temporary else 180
 
                         from src.window_utils import get_process_name_by_hwnd
                         app_name = get_process_name_by_hwnd(target_hwnd) if target_hwnd else None
@@ -914,7 +918,13 @@ class ScreenshotTranslatorApp:
         else:
             self._pending_area_rect = task.get('area_rect')
             self._pending_region_path = task.get('region_path')
-            self._do_translate(task['image_path'], task.get('area_rect'), task.get('region_path'))
+            is_temporary = task.get('is_temporary', False)  # <-- ИЗВЛЕКАЕМ
+            self._do_translate(
+                task['image_path'],
+                task.get('area_rect'),
+                task.get('region_path'),
+                is_temporary=is_temporary  # <-- ПЕРЕДАЁМ
+            )
 
     def _show_continuous_area_selection_window(self, screenshot_path):
         """Показывает окно выделения области"""
@@ -952,12 +962,14 @@ class ScreenshotTranslatorApp:
             'img': img, 'screenshot_path': screenshot_path,
             'scale_x': img_width / display_w, 'scale_y': img_height / display_h,
             'img_x': img_x, 'img_y': img_y,
-            'start_x': None, 'start_y': None, 'rect': None,
+            'start_x': None, 'start_y': None,
+            'rect': None,
             'selection_window': selection_window, 'canvas': canvas,
-            'area_count': 0
+            'area_count': 0,
+            'is_temporary': False,
+            'temp_rect': None
         }
 
-        # === ЛОКАЛИЗОВАННАЯ ИНСТРУКЦИЯ ===
         instruction_text = self.get_string('area_selector_instruction')
         canvas.create_text(
             screen_width // 2, 50,
@@ -966,7 +978,6 @@ class ScreenshotTranslatorApp:
             font=("Arial", 16, "bold")
         )
 
-        # === ЛОКАЛИЗОВАННЫЙ СЧЁТЧИК ===
         counter_text = self.get_string('area_selector_counter').format(0)
         counter_id = canvas.create_text(
             screen_width // 2, 90,
@@ -978,11 +989,17 @@ class ScreenshotTranslatorApp:
 
         target_hwnd_for_exit = self._area_target_hwnd
 
+        # ========== ЛКМ (постоянный оверлей, красная рамка) ==========
         def on_mouse_down(event):
             selection_data['start_x'] = event.x
             selection_data['start_y'] = event.y
+            selection_data['is_temporary'] = False
             if selection_data['rect']:
                 canvas.delete(selection_data['rect'])
+                selection_data['rect'] = None
+            if selection_data['temp_rect']:
+                canvas.delete(selection_data['temp_rect'])
+                selection_data['temp_rect'] = None
 
         def on_mouse_drag(event):
             if selection_data['start_x'] is not None:
@@ -990,7 +1007,8 @@ class ScreenshotTranslatorApp:
                     canvas.delete(selection_data['rect'])
                 selection_data['rect'] = canvas.create_rectangle(
                     selection_data['start_x'], selection_data['start_y'],
-                    event.x, event.y, outline='red', width=2,
+                    event.x, event.y,
+                    outline='red', width=2,
                     fill='blue', stipple='gray50'
                 )
 
@@ -1009,7 +1027,6 @@ class ScreenshotTranslatorApp:
                     orig_y2 = max(0, min(orig_y2, img_height))
 
                     selection_data['area_count'] += 1
-                    # === ОБНОВЛЯЕМ СЧЁТЧИК С ЛОКАЛИЗАЦИЕЙ ===
                     counter_text = self.get_string('area_selector_counter').format(selection_data['area_count'])
                     canvas.itemconfig(counter_id, text=counter_text)
 
@@ -1021,7 +1038,8 @@ class ScreenshotTranslatorApp:
 
                     self._process_area_selection_continuous(
                         orig_x1, orig_y1, orig_x2, orig_y2,
-                        screenshot_path, selection_window
+                        screenshot_path, selection_window,
+                        is_temporary=False
                     )
                 else:
                     if selection_data['rect']:
@@ -1030,6 +1048,66 @@ class ScreenshotTranslatorApp:
                     selection_data['start_x'] = None
                     selection_data['start_y'] = None
 
+        # ========== ПКМ (временный оверлей, синяя рамка) ==========
+        def on_mouse_down_pkm(event):
+            selection_data['start_x'] = event.x
+            selection_data['start_y'] = event.y
+            selection_data['is_temporary'] = True
+            if selection_data['temp_rect']:
+                canvas.delete(selection_data['temp_rect'])
+                selection_data['temp_rect'] = None
+            if selection_data['rect']:
+                canvas.delete(selection_data['rect'])
+                selection_data['rect'] = None
+
+        def on_mouse_drag_pkm(event):
+            if selection_data['start_x'] is not None:
+                if selection_data['temp_rect']:
+                    canvas.delete(selection_data['temp_rect'])
+                selection_data['temp_rect'] = canvas.create_rectangle(
+                    selection_data['start_x'], selection_data['start_y'],
+                    event.x, event.y,
+                    outline='#2196F3', width=2,
+                    fill='blue', stipple='gray50'
+                )
+
+        def on_mouse_up_pkm(event):
+            if selection_data['start_x'] is not None:
+                x1, y1 = min(selection_data['start_x'], event.x), min(selection_data['start_y'], event.y)
+                x2, y2 = max(selection_data['start_x'], event.x), max(selection_data['start_y'], event.y)
+                if x2 - x1 > 10 and y2 - y1 > 10:
+                    orig_x1 = int((x1 - img_x) * selection_data['scale_x'])
+                    orig_y1 = int((y1 - img_y) * selection_data['scale_y'])
+                    orig_x2 = int((x2 - img_x) * selection_data['scale_x'])
+                    orig_y2 = int((y2 - img_y) * selection_data['scale_y'])
+                    orig_x1 = max(0, min(orig_x1, img_width))
+                    orig_y1 = max(0, min(orig_y1, img_height))
+                    orig_x2 = max(0, min(orig_x2, img_width))
+                    orig_y2 = max(0, min(orig_y2, img_height))
+
+                    selection_data['area_count'] += 1
+                    counter_text = self.get_string('area_selector_counter').format(selection_data['area_count'])
+                    canvas.itemconfig(counter_id, text=counter_text)
+
+                    if selection_data['temp_rect']:
+                        canvas.delete(selection_data['temp_rect'])
+                        selection_data['temp_rect'] = None
+                    selection_data['start_x'] = None
+                    selection_data['start_y'] = None
+
+                    self._process_area_selection_continuous(
+                        orig_x1, orig_y1, orig_x2, orig_y2,
+                        screenshot_path, selection_window,
+                        is_temporary=True
+                    )
+                else:
+                    if selection_data['temp_rect']:
+                        canvas.delete(selection_data['temp_rect'])
+                        selection_data['temp_rect'] = None
+                    selection_data['start_x'] = None
+                    selection_data['start_y'] = None
+
+        # ========== ВЫХОД ==========
         def exit_area_mode():
             self.logger.info("[DEBUG] exit_area_mode() - выход из режима захвата")
             self._capture_mode = False
@@ -1040,7 +1118,6 @@ class ScreenshotTranslatorApp:
                 self._indicator_shown = True
                 self.logger.info("[DEBUG] Индикатор перевода показан после выхода из F3")
 
-            # Возвращаем фокус на целевое окно
             if target_hwnd_for_exit:
                 try:
                     win32gui.SetForegroundWindow(target_hwnd_for_exit)
@@ -1061,13 +1138,21 @@ class ScreenshotTranslatorApp:
             except:
                 pass
 
+        # ========== ПРИВЯЗКА СОБЫТИЙ ==========
+        # ЛКМ
         canvas.bind("<ButtonPress-1>", on_mouse_down)
         canvas.bind("<B1-Motion>", on_mouse_drag)
         canvas.bind("<ButtonRelease-1>", on_mouse_up)
-        canvas.bind("<Button-3>", lambda e: exit_area_mode())
-        selection_window.bind("<Escape>", lambda e: exit_area_mode())
+
+        # ПКМ - полностью переопределяем
+        canvas.bind("<ButtonPress-3>", on_mouse_down_pkm)
+        canvas.bind("<B3-Motion>", on_mouse_drag_pkm)
+        canvas.bind("<ButtonRelease-3>", on_mouse_up_pkm)
+
+        # Выход по ESC и Enter
         canvas.bind("<Escape>", lambda e: exit_area_mode())
-        selection_window.bind("<Return>", lambda e: exit_area_mode())
+        selection_window.bind("<Escape>", lambda e: exit_area_mode())
+        canvas.bind("<Return>", lambda e: exit_area_mode())
 
         # === ПРИНУДИТЕЛЬНЫЙ ФОКУС НА ОКНО ВЫБОРА ОБЛАСТИ ===
         selection_window.update_idletasks()
@@ -1150,7 +1235,7 @@ class ScreenshotTranslatorApp:
 
     # === ОСНОВНЫЕ ДЕЙСТВИЯ ===
 
-    def _process_area_selection_continuous(self, x1, y1, x2, y2, screenshot_path, selection_window):
+    def _process_area_selection_continuous(self, x1, y1, x2, y2, screenshot_path, selection_window, is_temporary=False):
         """Обработка выделенной области"""
         from PIL import Image
 
@@ -1169,17 +1254,19 @@ class ScreenshotTranslatorApp:
         is_fullscreen = self._area_is_fullscreen if self._area_is_fullscreen else self.screenshot.is_last_window_fullscreen()
 
         task = {
-            'type': 'area', 'image_path': path,
+            'type': 'area',
+            'image_path': path,
             'area_rect': (x1, y1, x2, y2),
             'target_hwnd': target_hwnd,
             'is_fullscreen': is_fullscreen,
-            'region_path': region_path
+            'region_path': region_path,
+            'is_temporary': is_temporary  # <-- НОВЫЙ ФЛАГ
         }
         self.translation_queue.append(task)
         if not self.is_processing_queue:
             self._process_next_in_queue()
 
-    def _do_translate(self, image_path, area_rect=None, region_path=None):
+    def _do_translate(self, image_path, area_rect=None, region_path=None, is_temporary=False):
         """Выполняет перевод"""
         if self._translation_in_progress:
             return
@@ -1189,6 +1276,7 @@ class ScreenshotTranslatorApp:
 
         self._pending_area_rect = area_rect
         self._pending_region_path = region_path
+        self._is_temporary_translation = is_temporary  # <-- СОХРАНЯЕМ ФЛАГ
 
         out = self.temp_dir / "translated"
         cmd_id = self.browser_worker.translate_image(image_path, out, self._on_translate_finished)
