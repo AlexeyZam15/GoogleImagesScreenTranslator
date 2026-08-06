@@ -163,6 +163,53 @@ class ScreenshotTranslatorApp:
         # Запуск инициализации
         self.ui.root.after(100, self._init_translator_step)
 
+    def _auto_switch_fullscreen_window(self, hwnd: int, app_name: str):
+        """
+        Автоматически переключает полноэкранное окно в оконный режим,
+        если для этого приложения есть оверлеи и включена соответствующая настройка.
+        """
+        # Проверяем, включена ли настройка
+        if not self.settings.get_auto_windowed_fullscreen():
+            return
+
+        # Проверяем, есть ли оверлеи для этого приложения
+        if not self.overlay_manager:
+            return
+
+        overlays_for_app = self.overlay_manager.get_overlays_by_app_name(app_name)
+        if not overlays_for_app:
+            return
+
+        # Проверяем, находится ли окно в полноэкранном режиме
+        if not self.screenshot.is_window_fullscreen(hwnd):
+            return
+
+        self.logger.info(f"[AUTO_SWITCH] Обнаружен полноэкранный режим для {app_name} с оверлеями, переключаем...")
+
+        try:
+            import keyboard
+            from src.window_utils import make_windowed_fullscreen
+
+            # Отправляем Alt+Enter
+            keyboard.press_and_release('alt+enter')
+            self.logger.info("[AUTO_SWITCH] Alt+Enter отправлен")
+            time.sleep(0.5)
+
+            # Применяем оконный полноэкранный режим
+            make_windowed_fullscreen(hwnd)
+            time.sleep(0.3)
+            self.logger.info("[AUTO_SWITCH] Окно переключено в оконный полноэкранный режим")
+
+            # Возвращаем фокус на окно
+            try:
+                import win32gui
+                win32gui.SetForegroundWindow(hwnd)
+            except Exception as e:
+                self.logger.warning(f"[AUTO_SWITCH] Не удалось вернуть фокус: {e}")
+
+        except Exception as e:
+            self.logger.warning(f"[AUTO_SWITCH] Ошибка переключения: {e}")
+
     def _init_ocr_background(self):
         """Фоновая инициализация EasyOCR при старте приложения"""
         try:
@@ -741,7 +788,7 @@ class ScreenshotTranslatorApp:
         self.window_list.refresh()
 
     def _on_window_switch(self, new_hwnd):
-        """Обработчик переключения окон - скрывает все оверлеи при переключении"""
+        """Обработчик переключения окон - скрывает все оверлеи при переключении и выполняет авто-переключение фулскрина"""
 
         if new_hwnd == self._current_active_hwnd:
             return
@@ -759,7 +806,16 @@ class ScreenshotTranslatorApp:
         old_hwnd = self._current_active_hwnd
         self._current_active_hwnd = new_hwnd
 
-        # При переключении окон - скрываем все оверлеи
+        # === НОВАЯ ЛОГИКА: автоматическое переключение полноэкранного режима ===
+        if new_hwnd:
+            try:
+                from src.window_utils import get_process_name_by_hwnd
+                app_name = get_process_name_by_hwnd(new_hwnd, default_name="Неизвестно")
+                self._auto_switch_fullscreen_window(new_hwnd, app_name)
+            except Exception as e:
+                self.logger.warning(f"[WINDOW] Ошибка авто-переключения: {e}")
+
+        # Существующая логика скрытия оверлеев
         if self.overlay_manager and not self.overlay_manager.is_dragging():
             for overlay in self.overlay_manager.overlays[:]:
                 try:
