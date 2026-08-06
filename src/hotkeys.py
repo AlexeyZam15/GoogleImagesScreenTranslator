@@ -1,5 +1,5 @@
 """
-Управление горячими клавишами
+Управление горячими клавишами - с поддержкой длительного зажатия F3
 """
 
 import logging
@@ -8,14 +8,16 @@ import keyboard
 
 
 class HotkeyManager:
-    """Управляет глобальными горячими клавишами (оптимизированная версия)"""
+    """Управляет глобальными горячими клавишами"""
+
+    # Время зажатия для определения длительного нажатия (мс)
+    HOLD_THRESHOLD_MS = 500
 
     __slots__ = (
         'app', 'logger', 'settings', '_key_last_time', '_debounce_ms',
-        '_hotkey_hook_active', '_hotkeys_blocked', '_pressed_keys',
-        '_hotkey_actions', '_single_keys', '_combinations', '_action_queue',
-        '_processing_queue', '_block_callback', '_block_hook_active',
-        '_blocked_keys', '_permanently_blocked'
+        '_hotkey_hook_active', '_hotkeys_blocked', '_hotkey_actions',
+        '_action_queue', '_processing_queue',
+        '_f3_down_time', '_f3_timer', '_f3_hold_triggered'
     )
 
     def __init__(self, app):
@@ -24,115 +26,120 @@ class HotkeyManager:
         self.settings = app.settings
 
         self._key_last_time = {}
-        self._debounce_ms = 300  # Уменьшено с 500 до 300
+        self._debounce_ms = 300
         self._hotkey_hook_active = False
         self._hotkeys_blocked = False
-        self._pressed_keys = set()
         self._hotkey_actions = {}
-        self._single_keys = []
-        self._combinations = {}
         self._action_queue = []
         self._processing_queue = False
-        self._block_callback = None
-        self._block_hook_active = False
-        self._blocked_keys = []
-        self._permanently_blocked = ['f1', 'f2', 'f3', 'f4', 'f5', 'f6']
+
+        # Для отслеживания длительного зажатия F3
+        self._f3_down_time = 0
+        self._f3_timer = None
+        self._f3_hold_triggered = False
 
     def setup(self):
-        """Настраивает горячие клавиши через низкоуровневый хук (оптимизированная версия)"""
+        """Настраивает горячие клавиши"""
         self.logger.info("=" * 60)
-        self.logger.info("[HOTKEYS] НАСТРОЙКА ГОРЯЧИХ КЛАВИШ (оптимизированная)")
+        self.logger.info("[HOTKEYS] НАСТРОЙКА ГОРЯЧИХ КЛАВИШ")
         self.logger.info("=" * 60)
 
         try:
-            import keyboard
-
             keyboard.unhook_all()
             self.logger.info("[HOTKEYS] Старые хуки отключены")
 
             self._hotkey_actions = self.settings.get_all_hotkeys()
-            self._single_keys = []
-            self._combinations = {}
 
+            # Регистрируем все клавиши через add_hotkey
             for action, hotkey in self._hotkey_actions.items():
-                if hotkey and '+' in hotkey:
-                    self._combinations[action] = hotkey
-                elif hotkey:
-                    self._single_keys.append(hotkey)
+                if action == 'area':
+                    # F3 обрабатываем отдельно
+                    continue
+                if hotkey:
+                    try:
+                        keyboard.add_hotkey(hotkey, lambda a=action: self._queue_action(a))
+                        self.logger.info(f"[HOTKEYS] Зарегистрировано: {hotkey} -> {action}")
+                    except Exception as e:
+                        self.logger.warning(f"[HOTKEYS] Не удалось зарегистрировать {hotkey}: {e}")
 
-            # Создаем множество для быстрой проверки одиночных клавиш
-            single_keys_set = set(self._single_keys)
+            # Регистрируем F3 отдельно для обработки длительного зажатия
+            try:
+                keyboard.on_press_key('f3', self._on_f3_down, suppress=True)
+                keyboard.on_release_key('f3', self._on_f3_up, suppress=True)
+                self.logger.info("[HOTKEYS] Зарегистрировано: F3 (с поддержкой длительного зажатия)")
+            except Exception as e:
+                self.logger.warning(f"[HOTKEYS] Не удалось зарегистрировать F3: {e}")
 
-            # Низкоуровневый хук с оптимизированной обработкой
-            def low_level_handler(event):
-                if event.event_type not in ('down', 'up'):
-                    return True
-
-                key = event.name.lower()
-                event_type = event.event_type
-
-                # Блокируем только если не в режиме захвата
-                if self._hotkeys_blocked:
-                    return True
-
-                # Оптимизация: быстрая проверка одиночных клавиш через set
-                if key in single_keys_set:
-                    # Находим действие для этой клавиши (кэшируем в словаре)
-                    action = None
-                    for act, hk in self._hotkey_actions.items():
-                        if hk == key:
-                            action = act
-                            break
-
-                    if action:
-                        self._queue_action(action)
-                        return False
-
-                # Проверка комбинаций (только для нажатий)
-                if event_type == 'down':
-                    self._pressed_keys.add(key)
-
-                    # Оптимизация: используем локальные переменные
-                    pressed = self._pressed_keys
-                    current_pressed = set(pressed)
-
-                    for action, hotkey in self._combinations.items():
-                        hotkey_parts = [p.lower().strip() for p in hotkey.split('+') if p.strip()]
-                        if not hotkey_parts:
-                            continue
-
-                        # Быстрая проверка
-                        all_pressed = True
-                        for part in hotkey_parts:
-                            found = False
-                            for pressed_key in current_pressed:
-                                if part in pressed_key or pressed_key in part:
-                                    found = True
-                                    break
-                            if not found:
-                                all_pressed = False
-                                break
-
-                        if all_pressed:
-                            self._queue_action(action)
-                            self._pressed_keys.clear()
-                            return False
-                else:
-                    self._pressed_keys.discard(key)
-
-                return True
-
-            keyboard.hook(low_level_handler, suppress=True)
             self._hotkey_hook_active = True
-            self.logger.info("[HOTKEYS] Низкоуровневый хук установлен")
-
-            self.logger.info(f"[HOTKEYS] Горячие клавиши зарегистрированы: {self._hotkey_actions}")
+            self.logger.info("[HOTKEYS] Горячие клавиши зарегистрированы")
 
         except Exception as e:
             self.logger.error(f"[HOTKEYS] Ошибка регистрации: {e}")
 
+    def _on_f3_down(self, event):
+        """Обработчик нажатия F3"""
+        if self._hotkeys_blocked:
+            return
+
+        self.logger.info("[HOTKEYS] F3 нажата (down)")
+        self._f3_down_time = time.time()
+        self._f3_hold_triggered = False
+
+        # Отменяем старый таймер
+        if self._f3_timer:
+            try:
+                if hasattr(self.app, 'root') and self.app.root:
+                    self.app.root.after_cancel(self._f3_timer)
+            except:
+                pass
+            self._f3_timer = None
+
+        # Запускаем таймер на HOLD_THRESHOLD_MS
+        if hasattr(self.app, 'root') and self.app.root:
+            self._f3_timer = self.app.root.after(
+                self.HOLD_THRESHOLD_MS,
+                self._on_f3_hold
+            )
+            self.logger.info(f"[HOTKEYS] Таймер F3 запущен на {self.HOLD_THRESHOLD_MS}мс")
+
+    def _on_f3_up(self, event):
+        """Обработчик отпускания F3"""
+        if self._hotkeys_blocked:
+            return
+
+        self.logger.info("[HOTKEYS] F3 отпущена (up)")
+
+        # Отменяем таймер
+        if self._f3_timer:
+            try:
+                if hasattr(self.app, 'root') and self.app.root:
+                    self.app.root.after_cancel(self._f3_timer)
+                    self.logger.info("[HOTKEYS] Таймер F3 отменён (клавиша отпущена)")
+            except:
+                pass
+            self._f3_timer = None
+
+        # Если длительное зажатие НЕ сработало - выполняем обычное F3
+        if not self._f3_hold_triggered:
+            if self._f3_down_time > 0:
+                elapsed_ms = (time.time() - self._f3_down_time) * 1000
+                if elapsed_ms > 50:  # Игнорируем случайные срабатывания
+                    self.logger.info(f"[HOTKEYS] Короткое нажатие F3 ({elapsed_ms:.0f}мс) -> area")
+                    self._queue_action('area')
+                self._f3_down_time = 0
+        else:
+            self.logger.info("[HOTKEYS] Длительное зажатие уже сработало, пропускаем")
+            self._f3_down_time = 0
+
+    def _on_f3_hold(self):
+        """Обработчик длительного зажатия F3"""
+        self.logger.info("[HOTKEYS] ⏰ Длительное зажатие F3 (500мс) -> fullscreen_ocr")
+        self._f3_hold_triggered = True
+        self._f3_timer = None
+        self._queue_action('fullscreen_ocr')
+
     def _queue_action(self, action):
-        """Ставит действие в очередь для выполнения в главном потоке (оптимизированная версия)"""
+        """Ставит действие в очередь для выполнения в главном потоке"""
         if self._hotkeys_blocked:
             return
 
@@ -141,15 +148,13 @@ class HotkeyManager:
             return
         self._key_last_time[action] = current_time
 
-        # Добавляем в очередь
         self._action_queue.append(action)
 
-        # Запускаем обработку очереди в главном потоке
         if not self._processing_queue:
             self._process_queue()
 
     def _process_queue(self):
-        """Обрабатывает очередь действий в главном потоке (оптимизированная версия)"""
+        """Обрабатывает очередь действий в главном потоке"""
         if self._processing_queue:
             return
 
@@ -157,7 +162,6 @@ class HotkeyManager:
 
         def process():
             try:
-                # Обрабатываем все действия в очереди за один раз
                 actions_to_process = []
                 while self._action_queue:
                     actions_to_process.append(self._action_queue.pop(0))
@@ -178,94 +182,6 @@ class HotkeyManager:
             import threading
             threading.Thread(target=process, daemon=True).start()
 
-    def set_actions_blocked(self, blocked):
-        """Блокирует/разблокирует выполнение действий горячих клавиш"""
-        self._hotkeys_blocked = blocked
-        if blocked:
-            self.logger.info("[HOTKEYS] Выполнение действий горячих клавиш заблокировано")
-        else:
-            self.logger.info("[HOTKEYS] Выполнение действий горячих клавиш разблокировано")
-
-    def _setup_block_hook(self, keys_to_block):
-        """Устанавливает дополнительный хук для подавления клавиш"""
-        try:
-            import keyboard
-
-            if self._block_hook_active:
-                keyboard.unhook(self._block_callback)
-                self._block_hook_active = False
-
-            def block_callback(event):
-                if event.event_type in ('down', 'up'):
-                    key = event.name.lower()
-                    if key in keys_to_block:
-                        self.logger.debug(f"[HOTKEYS] Подавление клавиши: {key}")
-                        return False
-                return True
-
-            keyboard.hook(block_callback, suppress=True)
-            self._block_callback = block_callback
-            self._block_hook_active = True
-            self.logger.info(f"[HOTKEYS] Дополнительный хук подавления установлен для {len(keys_to_block)} клавиш")
-
-        except Exception as e:
-            self.logger.warning(f"[HOTKEYS] Не удалось установить дополнительный хук: {e}")
-
-    def _unblock_keys(self):
-        """Разблокирует дополнительные клавиши (постоянно заблокированные остаются)"""
-        try:
-            import keyboard
-            for key in self._blocked_keys:
-                try:
-                    keyboard.unblock_key(key)
-                    self.logger.info(f"[HOTKEYS] Разблокировка клавиши: {key}")
-                except Exception as e:
-                    self.logger.warning(f"[HOTKEYS] Не удалось разблокировать {key}: {e}")
-            self._blocked_keys = []
-
-            self.logger.info(f"[HOTKEYS] Постоянно заблокированы: {self._permanently_blocked}")
-        except Exception as e:
-            self.logger.error(f"[HOTKEYS] Ошибка разблокировки клавиш: {e}")
-
-    def _block_keys(self):
-        """Блокирует дополнительные клавиши (кроме постоянно заблокированных)"""
-        try:
-            import keyboard
-            self._blocked_keys = []
-            all_keys = set()
-
-            for action, hotkey in self._hotkey_actions.items():
-                if hotkey:
-                    parts = hotkey.split('+')
-                    for part in parts:
-                        key = part.strip().lower()
-                        if key in self._permanently_blocked:
-                            continue
-                        if key and key not in all_keys:
-                            all_keys.add(key)
-                            try:
-                                keyboard.block_key(key)
-                                self._blocked_keys.append(key)
-                                self.logger.info(f"[HOTKEYS] Блокировка клавиши: {key}")
-                            except Exception as e:
-                                self.logger.warning(f"[HOTKEYS] Не удалось заблокировать {key}: {e}")
-
-            self.logger.info(f"[HOTKEYS] Заблокировано дополнительно {len(self._blocked_keys)} клавиш")
-        except Exception as e:
-            self.logger.error(f"[HOTKEYS] Ошибка блокировки клавиш: {e}")
-
-    def cleanup(self):
-        """Очищает все хуки"""
-        try:
-            import keyboard
-            keyboard.unhook_all()
-            self._hotkey_hook_active = False
-            self._action_queue.clear()
-            self._processing_queue = False
-            self.logger.info("[HOTKEYS] Все хуки очищены")
-        except Exception as e:
-            self.logger.error(f"[HOTKEYS] Ошибка очистки: {e}")
-
     def _execute_action(self, action):
         """Выполняет действие по горячей клавише"""
         self.logger.info(f"[HOTKEYS] ВЫПОЛНЕНИЕ: {action}")
@@ -275,6 +191,8 @@ class HotkeyManager:
             self.app.process()
         elif action == 'area':
             self.app.capture_area()
+        elif action == 'fullscreen_ocr':
+            self.app.process_fullscreen_with_ocr()
         elif action == 'clear_all':
             self.app.clear_all_overlays()
         elif action == 'edit_mode':
@@ -283,3 +201,22 @@ class HotkeyManager:
             self.app.toggle_auto_replace_mode()
         else:
             self.logger.warning(f"[HOTKEYS] Неизвестное действие: {action}")
+
+    def set_actions_blocked(self, blocked):
+        """Блокирует/разблокирует выполнение действий горячих клавиш"""
+        self._hotkeys_blocked = blocked
+        if blocked:
+            self.logger.info("[HOTKEYS] Горячие клавиши заблокированы")
+        else:
+            self.logger.info("[HOTKEYS] Горячие клавиши разблокированы")
+
+    def cleanup(self):
+        """Очищает все хуки"""
+        try:
+            keyboard.unhook_all()
+            self._hotkey_hook_active = False
+            self._action_queue.clear()
+            self._processing_queue = False
+            self.logger.info("[HOTKEYS] Все хуки очищены")
+        except Exception as e:
+            self.logger.error(f"[HOTKEYS] Ошибка очистки: {e}")

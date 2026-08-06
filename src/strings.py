@@ -16,7 +16,7 @@ def get_russian_all_strings():
     strings.update(get_russian_help_strings())
     strings.update(get_russian_hotkeys_strings())
 
-    # НОВЫЕ КЛЮЧИ (добавлены):
+    # НОВЫЕ КЛЮЧИ:
     strings['area_selector_instruction'] = "Выделите область (ПКМ/ESC/Enter - выход)"
     strings['area_selector_counter'] = "Выделено: {}"
     strings['area_selector_error_title'] = "Ошибка"
@@ -45,6 +45,14 @@ def get_russian_all_strings():
     strings['notification_remove_no_app'] = "Не удалось определить текущее приложение"
     strings[
         'hotkey_area_temporary_hint'] = "💡 Временный перевод: ПКМ в режиме F3 — оверлей автоматически удалится через заданное время (настраивается в Настройках → Интерфейс)"
+    # F3 HOLD
+    strings['f3_hold_notification'] = "📸 Захват окна для OCR..."
+    strings['f3_hold_ocr_processing'] = "🔄 Выполняется OCR анализ..."
+    strings['f3_hold_no_text'] = "ℹ️ Текст не обнаружен на переведённом изображении"
+    strings['f3_hold_overlays_created'] = "✅ Создано {count} оверлеев"
+    strings['f3_hold_error_ocr'] = "❌ Ошибка OCR: {error}"
+    strings['f3_hold_missing_easyocr'] = "❌ EasyOCR не установлен. Установите: pip install easyocr"
+    strings['f3_hold_creating_overlays'] = "📝 Создание {count} оверлеев..."
 
     return strings
 
@@ -62,7 +70,7 @@ def get_english_all_strings():
     strings.update(get_english_help_strings())
     strings.update(get_english_hotkeys_strings())
 
-    # НОВЫЕ КЛЮЧИ (добавлены):
+    # НОВЫЕ КЛЮЧИ:
     strings['area_selector_instruction'] = "Select area (RMB/ESC/Enter - exit)"
     strings['area_selector_counter'] = "Selected: {}"
     strings['area_selector_error_title'] = "Error"
@@ -92,6 +100,14 @@ def get_english_all_strings():
     strings['notification_remove_no_app'] = "Failed to determine current application"
     strings[
         'hotkey_area_temporary_hint'] = "💡 Temporary translation: RMB in F3 mode — overlay will be automatically removed after specified time (adjustable in Settings → Interface)"
+    # F3 HOLD
+    strings['f3_hold_notification'] = "📸 Capturing window for OCR..."
+    strings['f3_hold_ocr_processing'] = "🔄 Running OCR analysis..."
+    strings['f3_hold_no_text'] = "ℹ️ No text detected on translated image"
+    strings['f3_hold_overlays_created'] = "✅ Created {count} overlays"
+    strings['f3_hold_error_ocr'] = "❌ OCR error: {error}"
+    strings['f3_hold_missing_easyocr'] = "❌ EasyOCR not installed. Install: pip install easyocr"
+    strings['f3_hold_creating_overlays'] = "📝 Creating {count} overlays..."
 
     return strings
 
@@ -121,6 +137,9 @@ def get_russian_hotkeys_strings():
         'hotkey_auto_replace_desc': "Включает/выключает автоматический поиск и замену уже переведённых областей",
         'hotkey_esc': "ESC — удалить оверлей",
         'hotkey_esc_desc': "В режиме редактирования удаляет оверлей под курсором",
+        # НОВЫЙ КЛЮЧ ДЛЯ F3 HOLD
+        'hotkey_fullscreen_ocr': "Авто-OCR всего окна",
+        'hotkey_fullscreen_ocr_desc': "Длительное зажатие F3 (500мс) — скриншот всего окна, перевод и автоматическое создание оверлеев для всех текстовых зон",
     }
 
 
@@ -149,6 +168,9 @@ def get_english_hotkeys_strings():
         'hotkey_auto_replace_desc': "Toggles automatic detection and replacement of already translated areas",
         'hotkey_esc': "ESC — remove overlay",
         'hotkey_esc_desc': "In edit mode, removes the overlay under the mouse cursor",
+        # NEW KEY FOR F3 HOLD
+        'hotkey_fullscreen_ocr': "Auto-OCR full window",
+        'hotkey_fullscreen_ocr_desc': "Long press F3 (500ms) — screenshot of entire window, translation and automatic overlay creation for all text zones",
     }
 
 
@@ -366,6 +388,22 @@ def get_russian_settings_strings():
     }
 
 
+def get_english_settings_strings():
+    """Возвращает английские строки для настроек"""
+    return {
+        'settings_saved': "Settings saved",
+        'settings_reset_confirm': "Reset all settings to defaults?",
+        'settings_reset_done': "Settings reset to defaults",
+        'settings_title': "Program Settings",
+        'show_translation_indicator': "Show translation indicator",
+        'target_language': "Target translation language:",
+        'browser_not_found': "Browser not found",
+        'browser_not_found_msg': "Could not find Yandex Browser or Google Chrome.\n\nOne of these browsers is required for the program to work.",
+        'auto_hide_overlay': "Auto-hide overlay when switching windows",
+        'settings_reset': "Reset",
+    }
+
+
 def get_russian_menu_strings():
     """Возвращает русские строки для меню"""
     return {
@@ -406,11 +444,27 @@ def get_russian_about_strings():
     }
 
 
+def get_english_about_strings():
+    """Возвращает английские строки для окна 'О программе'"""
+    return {
+        'about_title': "About",
+        'about_text': "📸 Google Screen Translate\n\nProgram for translating screenshots using Google Translate.\n\nVersion: 1.0",
+    }
+
+
 def get_russian_shortcuts_strings():
     """Возвращает русские строки для горячих клавиш"""
     return {
         'shortcuts_title': "Горячие клавиши",
         'shortcuts_text': "📋 Горячие клавиши:\n\nF2 - Сделать скриншот окна\nF3 - Выделить область для перевода\nF1 - Показать/скрыть оверлей\nESC - Закрыть оверлей",
+    }
+
+
+def get_english_shortcuts_strings():
+    """Возвращает английские строки для горячих клавиш"""
+    return {
+        'shortcuts_title': "Keyboard Shortcuts",
+        'shortcuts_text': "📋 Keyboard shortcuts:\n\nF2 - Take window screenshot\nF3 - Select area to translate\nF1 - Show/Hide overlay\nESC - Close overlay",
     }
 
 
@@ -431,38 +485,6 @@ def get_english_help_strings():
         'help_subtitle': "Screenshot translation via Google Translate",
         'help_info': "Full instructions and latest version available on GitHub:",
         'help_close': "Close",
-    }
-
-
-def get_english_settings_strings():
-    """Возвращает английские строки для настроек"""
-    return {
-        'settings_saved': "Settings saved",
-        'settings_reset_confirm': "Reset all settings to defaults?",
-        'settings_reset_done': "Settings reset to defaults",
-        'settings_title': "Program Settings",
-        'show_translation_indicator': "Show translation indicator",
-        'target_language': "Target translation language:",
-        'browser_not_found': "Browser not found",
-        'browser_not_found_msg': "Could not find Yandex Browser or Google Chrome.\n\nOne of these browsers is required for the program to work.",
-        'auto_hide_overlay': "Auto-hide overlay when switching windows",
-        'settings_reset': "Reset",
-    }
-
-
-def get_english_about_strings():
-    """Возвращает английские строки для окна 'О программе'"""
-    return {
-        'about_title': "About",
-        'about_text': "📸 Google Screen Translate\n\nProgram for translating screenshots using Google Translate.\n\nVersion: 1.0",
-    }
-
-
-def get_english_shortcuts_strings():
-    """Возвращает английские строки для горячих клавиш"""
-    return {
-        'shortcuts_title': "Keyboard Shortcuts",
-        'shortcuts_text': "📋 Keyboard shortcuts:\n\nF2 - Take window screenshot\nF3 - Select area to translate\nF1 - Show/Hide overlay\nESC - Close overlay",
     }
 
 

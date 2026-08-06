@@ -37,6 +37,7 @@ class Settings:
         "clear_all": "f4",
         "edit_mode": "f5",
         "auto_replace": "f6",
+        "fullscreen_ocr": "f3",  # Это же F3, но с длительным зажатием
     }
 
     def __init__(self):
@@ -126,7 +127,6 @@ class Settings:
         self.save()
 
     def get_all_hotkeys(self) -> dict:
-        """Возвращает словарь всех горячих клавиш."""
         return {
             "screenshot": self.get_hotkey("screenshot"),
             "area": self.get_hotkey("area"),
@@ -134,7 +134,7 @@ class Settings:
             "clear_all": self.get_hotkey("clear_all"),
             "edit_mode": self.get_hotkey("edit_mode"),
             "auto_replace": self.get_hotkey("auto_replace"),
-            "area_temporary": self.get_hotkey("area_temporary")
+            "fullscreen_ocr": self.get_hotkey("fullscreen_ocr"),
         }
 
     def reset_hotkeys_to_default(self):
