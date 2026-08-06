@@ -618,21 +618,64 @@ class TranslationMonitor:
             overlay = template_data.get('overlay')
             target_app_name = template_data.get('target_app_name')
             is_found = template_data.get('found', False)
-            is_temporary = template_data.get('is_temporary', False)  # <-- ИЗВЛЕКАЕМ ФЛАГ
+            is_temporary = template_data.get('is_temporary', False)
             lifetime_seconds = template_data.get('lifetime_seconds', 180)
+
+            self.logger.info(f"[MONITOR_DEBUG] === _update_overlay_gui НАЧАЛО ===")
+            self.logger.info(f"[MONITOR_DEBUG] pair_index={pair_index}")
+            self.logger.info(f"[MONITOR_DEBUG] target_app_name='{target_app_name}'")
+            self.logger.info(f"[MONITOR_DEBUG] is_found={is_found}")
+            self.logger.info(f"[MONITOR_DEBUG] overlay exists={overlay is not None}")
+            if overlay:
+                self.logger.info(f"[MONITOR_DEBUG] overlay.visible={overlay.visible}")
+                self.logger.info(f"[MONITOR_DEBUG] overlay._is_visible_by_user={overlay._is_visible_by_user}")
 
             if not template_id:
                 template_id = template_data.get('hash')
 
             if not is_found:
+                self.logger.info(f"[MONITOR_DEBUG] is_found=False, скрываем оверлей если виден")
                 if overlay and overlay.visible:
                     self._hide_overlay_in_main_thread(overlay, pair_index)
                 return
+
+            # === ПРОВЕРКА: активно ли окно для этого шаблона ===
+            try:
+                import win32gui
+                from src.window_utils import get_process_name_by_hwnd
+
+                active_hwnd = win32gui.GetForegroundWindow()
+                self.logger.info(f"[MONITOR_DEBUG] active_hwnd={active_hwnd}")
+
+                if active_hwnd:
+                    active_app_name = get_process_name_by_hwnd(active_hwnd)
+                    self.logger.info(f"[MONITOR_DEBUG] active_app_name='{active_app_name}'")
+                    self.logger.info(f"[MONITOR_DEBUG] target_app_name='{target_app_name}'")
+
+                    if target_app_name and target_app_name != "Неизвестно" and target_app_name != active_app_name:
+                        self.logger.info(
+                            f"[MONITOR_DEBUG] ❌ Активное окно '{active_app_name}' НЕ совпадает с '{target_app_name}'")
+                        if overlay and overlay.visible:
+                            self.logger.info(f"[MONITOR_DEBUG] Скрываем оверлей #{pair_index} (окно не активно)")
+                            self._hide_overlay_in_main_thread(overlay, pair_index)
+                        else:
+                            self.logger.info(f"[MONITOR_DEBUG] Оверлей уже скрыт или None")
+                        return
+                    else:
+                        self.logger.info(
+                            f"[MONITOR_DEBUG] ✅ Активное окно '{active_app_name}' совпадает с target_app_name='{target_app_name}'")
+                else:
+                    self.logger.info(f"[MONITOR_DEBUG] active_hwnd=0, пропускаем проверку")
+            except Exception as e:
+                self.logger.warning(f"[MONITOR] Ошибка проверки активного окна: {e}")
 
             template_x = x
             template_y = y
             template_w = w
             template_h = h
+
+            self.logger.info(
+                f"[MONITOR_DEBUG] template_pos=({template_x},{template_y}) size=({template_w}x{template_h})")
 
             offset_x = template_data.get('offset_x', 0)
             offset_y = template_data.get('offset_y', 0)
@@ -651,37 +694,51 @@ class TranslationMonitor:
             final_w = overlay_w
             final_h = overlay_h
 
+            self.logger.info(f"[MONITOR_DEBUG] final_pos=({final_x},{final_y}) size=({final_w}x{final_h})")
+
             current_template_pos = (template_x, template_y)
             last_template_pos = template_data.get('last_template_position')
 
             if overlay:
+                self.logger.info(f"[MONITOR_DEBUG] Существующий оверлей найден, обновляем")
                 try:
                     if overlay.root and overlay.root.winfo_exists():
+                        self.logger.info(f"[MONITOR_DEBUG] overlay.root существует")
+                        self.logger.info(f"[MONITOR_DEBUG] overlay._hidden_by_user={overlay._hidden_by_user}")
+
                         if overlay._hidden_by_user:
+                            self.logger.info(f"[MONITOR_DEBUG] Оверлей скрыт пользователем, не показываем")
                             return
 
                         if hasattr(overlay, '_closing') and overlay._closing:
-                            self.logger.info(
-                                f"[MONITOR] Оверлей #{pair_index} помечен на закрытие, пропускаем обновление")
+                            self.logger.info(f"[MONITOR_DEBUG] Оверлей помечен на закрытие, пропускаем")
                             return
 
                         if last_template_pos is None or last_template_pos != current_template_pos:
+                            self.logger.info(f"[MONITOR_DEBUG] Позиция изменилась, обновляем geometry")
                             overlay.root.geometry(f"{final_w}x{final_h}+{final_x}+{final_y}")
                             overlay.root.update_idletasks()
                             overlay.root.update()
                             overlay._last_window_rect = (final_x, final_y, final_x + final_w, final_y + final_h)
                             overlay._saved_position = (final_x, final_y)
                             template_data['last_template_position'] = current_template_pos
+                        else:
+                            self.logger.info(f"[MONITOR_DEBUG] Позиция не изменилась")
 
+                        self.logger.info(f"[MONITOR_DEBUG] overlay.visible={overlay.visible}")
                         if not overlay.visible:
+                            self.logger.info(f"[MONITOR_DEBUG] Оверлей скрыт, показываем")
                             overlay._hidden_by_user = False
                             overlay._is_visible_by_user = True
                             overlay.show()
+                            self.logger.info(f"[MONITOR_DEBUG] Оверлей показан")
                         else:
+                            self.logger.info(f"[MONITOR_DEBUG] Оверлей уже виден, поднимаем")
                             overlay.root.lift()
                             overlay.root.update_idletasks()
                         return
                     else:
+                        self.logger.info(f"[MONITOR_DEBUG] overlay.root не существует, сбрасываем overlay")
                         template_data['overlay'] = None
                 except Exception as e:
                     self.logger.warning(f"[DEBUG] Ошибка при обновлении существующего оверлея: {e}")
@@ -692,9 +749,12 @@ class TranslationMonitor:
                 return
 
             # Создаём новый оверлей
+            self.logger.info(f"[MONITOR_DEBUG] Создаём новый оверлей для шаблона #{pair_index}")
+
             if self.overlay_manager:
                 try:
                     if not template_data.get('offset_initialized', False):
+                        self.logger.info(f"[MONITOR_DEBUG] offset не инициализирован, устанавливаем 0")
                         template_data['offset_x'] = 0
                         template_data['offset_y'] = 0
                         template_data['offset_initialized'] = True
@@ -705,8 +765,11 @@ class TranslationMonitor:
 
                     target_hwnd = None
                     if target_app_name and target_app_name != "Неизвестно":
+                        self.logger.info(f"[MONITOR_DEBUG] Ищем HWND для {target_app_name}")
                         target_hwnd = self._find_window_by_app_name(target_app_name)
+                        self.logger.info(f"[MONITOR_DEBUG] Найден HWND: {target_hwnd}")
 
+                    self.logger.info(f"[MONITOR_DEBUG] Создаём оверлей через _create_overlay_from_data")
                     new_overlay = self.overlay_manager._create_overlay_from_data(
                         image_path=translated_path,
                         window_rect=window_rect,
@@ -720,11 +783,12 @@ class TranslationMonitor:
                         saved_w=final_w,
                         saved_h=final_h,
                         app_name=target_app_name,
-                        is_temporary=is_temporary,  # <-- ПЕРЕДАЁМ ФЛАГ
-                        lifetime_seconds=lifetime_seconds  # <-- ПЕРЕДАЁМ ВРЕМЯ
+                        is_temporary=is_temporary,
+                        lifetime_seconds=lifetime_seconds
                     )
 
                     if new_overlay:
+                        self.logger.info(f"[MONITOR_DEBUG] ✅ Оверлей создан успешно")
                         template_data['overlay'] = new_overlay
                         template_data['last_template_position'] = current_template_pos
                         new_overlay._is_visible_by_user = True
@@ -742,15 +806,18 @@ class TranslationMonitor:
                         new_overlay.root.update()
 
                         self.logger.info(
-                            f"[MONITOR] Создан {'временный' if is_temporary else 'постоянный'} оверлей для шаблона #{pair_index} в позиции ({final_x}, {final_y})"
-                        )
+                            f"[MONITOR] Создан оверлей для шаблона #{pair_index} в позиции ({final_x}, {final_y})")
                     else:
-                        self.logger.warning(f"[MONITOR] Не удалось создать оверлей для шаблона #{pair_index}")
+                        self.logger.warning(f"[MONITOR_DEBUG] ❌ Не удалось создать оверлей для шаблона #{pair_index}")
                 except Exception as e:
                     self.logger.error(f"[MONITOR] Ошибка создания оверлея для шаблона #{pair_index}: {e}")
+                    import traceback
+                    traceback.print_exc()
 
         except Exception as e:
             self.logger.error(f"[DEBUG] Ошибка в _update_overlay_gui: {e}")
+            import traceback
+            traceback.print_exc()
 
     def _find_window_by_app_name(self, app_name: str) -> Optional[int]:
         """Находит HWND окна по имени приложения."""

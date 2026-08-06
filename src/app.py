@@ -176,14 +176,16 @@ class ScreenshotTranslatorApp:
                     self.ocr_processor.initialize()
                     self._ocr_initialized = True
                     self.logger.info("✅ EasyOCR готов к использованию")
-                    if hasattr(self, 'show_notification'):
-                        self.ui.root.after(0, lambda: self.show_notification("✅ OCR готов", 1500))
+                    # Удаляем уведомление
+                    # if hasattr(self, 'show_notification'):
+                    #     self.ui.root.after(0, lambda: self.show_notification("✅ OCR готов", 1500))
                 except ImportError as e:
                     self.logger.warning(f"EasyOCR не установлен: {e}")
                     self._ocr_initialized = False
                     self.ocr_processor = None
-                    if hasattr(self, 'show_notification'):
-                        self.ui.root.after(0, lambda: self.show_notification("❌ EasyOCR не установлен", 2000))
+                    # Удаляем уведомление
+                    # if hasattr(self, 'show_notification'):
+                    #     self.ui.root.after(0, lambda: self.show_notification("❌ EasyOCR не установлен", 2000))
                 except Exception as e:
                     self.logger.error(f"❌ Ошибка инициализации EasyOCR: {e}")
                     self._ocr_initialized = False
@@ -778,7 +780,8 @@ class ScreenshotTranslatorApp:
         self.window_list.refresh()
 
     def _on_window_switch(self, new_hwnd):
-        """Обработчик переключения окон - теперь по имени приложения"""
+        """Обработчик переключения окон - скрывает все оверлеи при переключении"""
+
         if new_hwnd == self._current_active_hwnd:
             return
 
@@ -788,49 +791,22 @@ class ScreenshotTranslatorApp:
             class_name = win32gui.GetClassName(new_hwnd)
             window_text = win32gui.GetWindowText(new_hwnd)
             if class_name == "TkTopLevel" and window_text == "Перевод":
-                self.logger.debug("[WINDOW] Активное окно - оверлей, игнорируем")
                 return
         except:
             pass
 
         old_hwnd = self._current_active_hwnd
-
-        # --- ИЗМЕНЕНИЕ: получаем ИМЯ нового приложения (один раз) ---
-        from src.window_utils import get_process_name_by_hwnd
-        new_app_name = get_process_name_by_hwnd(new_hwnd) if new_hwnd else None
-        old_app_name = get_process_name_by_hwnd(old_hwnd) if old_hwnd else None
-
         self._current_active_hwnd = new_hwnd
 
-        self.logger.info(f"[WINDOW] Переключение окон: old_app={old_app_name}, new_app={new_app_name}")
-
-        # Не скрывать оверлей во время перетаскивания
-        if self.overlay_manager and self.overlay_manager.is_dragging():
-            self.logger.info("[WINDOW] Перетаскивание активно, оверлеи НЕ скрываем")
-            return
-
-        # --- ИЗМЕНЕНИЕ: скрываем оверлеи СТАРОГО приложения по имени ---
-        if old_app_name and self.overlay_manager:
-            # Получаем оверлеи для старого приложения
-            overlays_to_hide = self.overlay_manager.get_overlays_by_app_name(old_app_name)
-
-            for overlay in overlays_to_hide:
+        # При переключении окон - скрываем все оверлеи
+        if self.overlay_manager and not self.overlay_manager.is_dragging():
+            for overlay in self.overlay_manager.overlays[:]:
                 try:
                     if overlay.visible:
-                        # by_user=False - не устанавливаем флаг _hidden_by_user
                         overlay.hide(by_user=False)
-                        self.logger.info(f"[WINDOW] Скрыт оверлей для {old_app_name}")
+                        self.logger.info(f"[WINDOW] Скрыт оверлей при переключении окон")
                 except Exception as e:
                     self.logger.warning(f"[WINDOW] Ошибка скрытия оверлея: {e}")
-
-        # --- ИЗМЕНЕНИЕ: оверлеи для нового приложения НЕ показываем автоматически ---
-        # Они будут показаны монитором при обнаружении шаблона
-        if new_app_name and self.overlay_manager:
-            overlays = self.overlay_manager.get_overlays_by_app_name(new_app_name)
-            if overlays:
-                self.logger.info(
-                    f"[WINDOW] Для приложения {new_app_name} есть {len(overlays)} оверлеев, они будут показаны монитором при обнаружении шаблона"
-                )
 
     def toggle_edit_mode(self):
         """Переключает режим редактирования"""
