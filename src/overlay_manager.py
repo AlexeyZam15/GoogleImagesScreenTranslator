@@ -217,16 +217,9 @@ class OverlayManager:
         template_w = rx2 - rx1
         template_h = ry2 - ry1
 
-        # --- ИСПРАВЛЕНИЕ: правильный приоритет вычисления позиции ---
-        # 1. Если есть смещение (offset_x или offset_y не равны 0) - используем его
-        # 2. Иначе если есть сохраненная позиция (saved_x, saved_y) - используем её
-        # 3. Иначе используем позицию из window_rect (позиция шаблона)
-
         if offset_x != 0 or offset_y != 0:
-            # Используем смещение от шаблона
             final_x = template_x + offset_x
             final_y = template_y + offset_y
-            # Ширина/высота: сначала из сохраненных, потом из шаблона
             if saved_w > 0 and saved_h > 0:
                 final_w = saved_w
                 final_h = saved_h
@@ -238,14 +231,12 @@ class OverlayManager:
                 f"финальная позиция: ({final_x}, {final_y})"
             )
         elif saved_x != 0 or saved_y != 0:
-            # Используем сохраненную абсолютную позицию
             final_x = saved_x
             final_y = saved_y
             final_w = saved_w if saved_w > 0 else template_w
             final_h = saved_h if saved_h > 0 else template_h
             self.logger.info(f"[STATE] Используем сохраненную позицию: ({saved_x}, {saved_y})")
         else:
-            # Используем позицию шаблона
             final_x = template_x
             final_y = template_y
             final_w = template_w

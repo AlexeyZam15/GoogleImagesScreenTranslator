@@ -242,10 +242,11 @@ class ScreenshotTranslatorApp:
 
         self.translating = True
         self.ui.update_status("● " + self.ui.get_string('translating'), '#ff9800')
-        self.show_notification("📸 Захват окна для OCR...")
+
+        # === ПОКАЗЫВАЕМ ИНДИКАТОР ===
+        self._show_translation_overlay()
 
         def capture_and_translate_task():
-            # === ВАЖНО: импорт time ВНУТРИ функции ===
             import time
             from PIL import Image
 
@@ -255,6 +256,7 @@ class ScreenshotTranslatorApp:
                     self.ui.update_status("● " + self.ui.get_string('capture_error'), '#f44336')
                     self.translating = False
                     self.set_actions_blocked(False)
+                    self._hide_translation_overlay()
                     return
 
                 screenshot_path = self.temp_dir / f"fullscreen_{int(time.time())}.png"
@@ -263,8 +265,6 @@ class ScreenshotTranslatorApp:
                 window_rect = self.screenshot.get_last_window_rect() or self.screenshot.get_active_window_rect()
                 if not window_rect:
                     window_rect = (0, 0, img.width, img.height)
-
-                self.ui.root.after(0, self._show_translation_overlay)
 
                 out_dir = self.temp_dir / "translated_ocr"
                 out_dir.mkdir(parents=True, exist_ok=True)
@@ -289,15 +289,13 @@ class ScreenshotTranslatorApp:
                 self.logger.error(f"[F3_HOLD] Ошибка: {e}")
                 self.translating = False
                 self.set_actions_blocked(False)
+                self._hide_translation_overlay()
                 self.ui.update_status("● " + self.ui.get_string('error'), '#f44336')
 
         threading.Thread(target=capture_and_translate_task, daemon=True).start()
 
     def _on_ocr_translate_finished(self, result, error, screenshot_path, window_rect, target_hwnd):
-        """
-        Обработчик завершения перевода для OCR режима.
-        Создаёт полноценные оверлеи с шаблонами через TranslationMonitor.
-        """
+        """Обработчик завершения перевода для OCR режима."""
         self.logger.info(f"[F3_HOLD] Перевод завершён, error={error}")
 
         self._translation_in_progress = False
@@ -319,38 +317,34 @@ class ScreenshotTranslatorApp:
                 return
 
             self.logger.info(f"[F3_HOLD] Результат перевода получен: {result}")
-            self.show_notification("🔄 Выполняется OCR анализ...")
+            self._hide_translation_overlay()
+            self.show_notification("🔄 OCR анализ...")
 
             try:
                 from PIL import Image
                 from src.window_utils import get_process_name_by_hwnd
-                import shutil
 
-                # Проверяем готовность OCR
                 if self.ocr_processor is None or not self._ocr_initialized:
                     self.logger.error("[F3_HOLD] OCR не инициализирован")
                     self.show_notification("❌ OCR не готов")
                     self.ui.update_status("● OCR не готов", '#f44336')
                     self.set_actions_blocked(False)
-                    self._hide_translation_overlay()
                     return
 
                 translated_image_path = Path(result)
-
-                # Получаем области с текстом на переведённом изображении
                 regions = self.ocr_processor.get_regions_from_image(translated_image_path)
 
                 self.logger.info(f"[F3_HOLD] Найдено {len(regions)} областей с текстом")
 
                 if not regions:
                     self.logger.info("[F3_HOLD] Текст не обнаружен")
-                    self.show_notification("ℹ️ Текст не обнаружен на переведённом изображении")
+                    self.show_notification("ℹ️ Текст не обнаружен")
                     self.ui.update_status("● " + self.ui.get_string('ready'), '#4CAF50')
                     self.set_actions_blocked(False)
-                    self._hide_translation_overlay()
                     return
 
-                # Загружаем переведённое изображение
+                self.show_notification(f"📝 Создание {len(regions)} оверлеев...")
+
                 translated_img = Image.open(translated_image_path)
                 app_name = get_process_name_by_hwnd(target_hwnd) if target_hwnd else None
 
@@ -364,93 +358,61 @@ class ScreenshotTranslatorApp:
 
                 created_count = 0
 
-                # === СОЗДАЁМ ПОЛНОЦЕННЫЕ ОВЕРЛЕИ ЧЕРЕЗ TranslationMonitor ===
+                # Временно отключаем сохранение состояния для скорости
+                if hasattr(self.overlay_manager, '_suppress_save'):
+                    self.overlay_manager._suppress_save = True
+
                 for i, (x1, y1, x2, y2) in enumerate(regions):
                     try:
-                        # Вырезаем область из переведённого изображения
                         region_img = translated_img.crop((x1, y1, x2, y2))
+                        region_path = self.temp_dir / f"ocr_region_{i}_{int(time.time())}.png"
+                        region_img.save(region_path)
 
-                        # Сохраняем как шаблон (область на экране)
-                        template_path = self.temp_dir / f"ocr_template_{i}_{int(time.time())}.png"
-                        region_img.save(template_path)
-
-                        # Вычисляем позицию на экране
                         screen_x1 = wx1 + int(x1 * scale_x)
-                        screen_y1 = wy1 + int(y1 * scale_y)
+                        screen_y1 = wy1 + int(y1 * scale_x)
                         screen_x2 = wx1 + int(x2 * scale_x)
-                        screen_y2 = wy1 + int(y2 * scale_y)
+                        screen_y2 = wy1 + int(y2 * scale_x)
 
                         if screen_x2 <= screen_x1 or screen_y2 <= screen_y1:
                             continue
 
-                        # Получаем область из ОРИГИНАЛЬНОГО скриншота для шаблона
-                        # (нужно для автозамены)
-                        original_img = Image.open(screenshot_path)
-                        orig_x1 = int(x1 * scale_x)
-                        orig_y1 = int(y1 * scale_y)
-                        orig_x2 = int(x2 * scale_x)
-                        orig_y2 = int(y2 * scale_y)
+                        region_window_rect = (screen_x1, screen_y1, screen_x2, screen_y2)
 
-                        # Обрезаем до границ изображения
-                        orig_x1 = max(0, min(orig_x1, original_img.width))
-                        orig_y1 = max(0, min(orig_y1, original_img.height))
-                        orig_x2 = max(0, min(orig_x2, original_img.width))
-                        orig_y2 = max(0, min(orig_y2, original_img.height))
-
-                        if orig_x2 <= orig_x1 or orig_y2 <= orig_y1:
-                            continue
-
-                        # Сохраняем шаблон из оригинального скриншота
-                        original_template_path = self.temp_dir / f"ocr_original_template_{i}_{int(time.time())}.png"
-                        original_img.crop((orig_x1, orig_y1, orig_x2, orig_y2)).save(original_template_path)
-
-                        # === ГЛАВНОЕ: добавляем шаблон в TranslationMonitor ===
-                        # Это создаст полноценный оверлей с автозаменой
-                        add_result = self.translation_monitor.add_template(
-                            region_image=original_template_path,  # шаблон (оригинальная область)
-                            translated_image=template_path,  # перевод этой области
-                            target_app_name=app_name,  # приложение
-                            is_temporary=False,  # не временный
-                            lifetime_seconds=180
+                        overlay = self.overlay_manager._create_overlay_from_data(
+                            image_path=region_path,
+                            window_rect=region_window_rect,
+                            target_hwnd=target_hwnd,
+                            is_auto_replace=False,
+                            is_window_screenshot=True,
+                            template_id=None,
+                            show_immediately=True,
+                            is_temporary=False,
+                            lifetime_seconds=180,
+                            app_name=app_name
                         )
 
-                        if add_result and len(add_result) == 2:
-                            pair_index, file_hash = add_result
+                        if overlay:
+                            overlay._is_visible_by_user = True
+                            overlay._hidden_by_user = False
+                            if not overlay.visible:
+                                overlay.show()
                             created_count += 1
-                            self.logger.info(
-                                f"[F3_HOLD] Создан полноценный оверлей #{pair_index} "
-                                f"для области {i} в позиции ({screen_x1},{screen_y1})-({screen_x2},{screen_y2})"
-                            )
-
-                            # Получаем созданный оверлей и устанавливаем правильную позицию
-                            for template_data in self.translation_monitor.templates:
-                                if template_data.get('hash') == file_hash:
-                                    overlay = template_data.get('overlay')
-                                    if overlay:
-                                        # Устанавливаем точную позицию
-                                        overlay.root.geometry(
-                                            f"{screen_x2 - screen_x1}x{screen_y2 - screen_y1}+{screen_x1}+{screen_y1}"
-                                        )
-                                        overlay._saved_position = (screen_x1, screen_y1)
-                                        overlay._user_moved = True
-                                        overlay._is_visible_by_user = True
-                                        overlay._hidden_by_user = False
-                                        if not overlay.visible:
-                                            overlay.show()
-                                    break
-                        else:
-                            self.logger.warning(f"[F3_HOLD] Не удалось создать оверлей для области {i}")
 
                     except Exception as e:
                         self.logger.error(f"[F3_HOLD] Ошибка создания оверлея {i}: {e}")
-                        import traceback
-                        traceback.print_exc()
 
-                self.logger.info(f"[F3_HOLD] Создано полноценных оверлеев: {created_count} из {len(regions)}")
-                self.ui.root.after(100, self.window_list.refresh)
+                # Включаем сохранение и сохраняем один раз
+                if hasattr(self.overlay_manager, '_suppress_save'):
+                    self.overlay_manager._suppress_save = False
+                    self.overlay_manager.save_overlay_state(immediate=True)
+
+                self.logger.info(f"[F3_HOLD] Создано оверлеев: {created_count} из {len(regions)}")
+
+                # Обновляем список окон один раз после создания всех оверлеев
+                self.ui.root.after(500, self.window_list.refresh)
 
                 if created_count > 0:
-                    self.show_notification(f"✅ Создано {created_count} оверлеев с автозаменой")
+                    self.show_notification(f"✅ Создано {created_count} оверлеев")
                     self.ui.update_status(f"● {created_count} оверлеев создано", '#4CAF50')
                 else:
                     self.show_notification("⚠️ Не удалось создать оверлеи")
@@ -465,7 +427,6 @@ class ScreenshotTranslatorApp:
 
         finally:
             self.set_actions_blocked(False)
-            self._hide_translation_overlay()
             self._pending_command_ids = {}
             self.is_processing_queue = False
 

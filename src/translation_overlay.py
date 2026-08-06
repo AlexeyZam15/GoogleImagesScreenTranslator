@@ -228,27 +228,14 @@ class TranslationOverlay:
         if self.root:
             try:
                 if self.root.winfo_exists():
-                    # Устанавливаем состояние "Готово" (локализовано)
-                    if self.status_label:
-                        self.status_label.config(text=self.get_string('translation_status_ready'))
-                    if self.progress:
-                        try:
-                            self.progress.stop()
-                        except:
-                            pass
-                        self.progress['mode'] = 'determinate'
-                        self.progress['value'] = 100
-                    self.root.update_idletasks()
-                    self._ensure_topmost()
-
-                    # Закрываем окно через 300мс
-                    self.root.after(300, self._close_window)
+                    # Сразу скрываем окно, без анимации
+                    self.root.withdraw()
+                    self.logger.info("[DEBUG] Индикатор скрыт")
                 else:
-                    self.logger.info("[DEBUG] Окно уже закрыто")
                     self.root = None
             except Exception as e:
                 self.logger.warning(f"[DEBUG] Ошибка при завершении: {e}")
-                self._close_window()
+                self.root = None
 
     def _close_window(self):
         """Закрывает окно с полной очисткой всех ссылок"""
