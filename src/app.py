@@ -372,6 +372,7 @@ class ScreenshotTranslatorApp:
                 from PIL import Image, ImageDraw
                 from src.window_utils import get_process_name_by_hwnd
                 import os
+                import shutil
 
                 if self.ocr_processor is None or not self._ocr_initialized:
                     self.logger.error("[F3_HOLD] OCR не инициализирован")
@@ -389,18 +390,31 @@ class ScreenshotTranslatorApp:
                 orig_w, orig_h = original_img.size
                 trans_w, trans_h = translated_img.size
 
-                regions = self.ocr_processor.get_regions_from_image(translated_image_path)
-                self.logger.info(f"[F3_HOLD] Найдено {len(regions)} областей с текстом")
+                # === ОДНА ПОСТОЯННАЯ ПАПКА ДЛЯ ДЕБАГА ===
+                debug_dir = Path.home() / "Documents" / "GoogleScreenTranslate" / "debug"
+                debug_dir.mkdir(parents=True, exist_ok=True)
+                self.logger.info(f"[DEBUG] Папка для дебага: {debug_dir}")
 
-                # Сохраняем отладочный скриншот
+                # Получаем timestamp для имён файлов
+                timestamp = time.strftime("%Y%m%d_%H%M%S")
+
+                # === ПОЛУЧАЕМ ЗОНЫ (С СОХРАНЕНИЕМ ДЕБАГА) ===
+                regions = self.ocr_processor.get_regions_from_image(
+                    translated_image_path,
+                    save_debug=True,
+                    debug_dir=debug_dir,  # <-- ПЕРЕДАЁМ ПОСТОЯННУЮ ПАПКУ
+                    debug_prefix=timestamp  # <-- ПЕРЕДАЁМ ПРЕФИКС ДЛЯ ИМЁН ФАЙЛОВ
+                )
+                self.logger.info(f"[F3_HOLD] Найдено {len(regions)} областей (после объединения)")
+
+                # === СОХРАНЯЕМ ДЕБАГ-КАРТИНКУ С ОБЪЕДИНЁННЫМИ ЗОНАМИ ===
                 try:
                     debug_img = translated_img.copy()
                     draw = ImageDraw.Draw(debug_img)
                     for i, (x1, y1, x2, y2) in enumerate(regions):
                         draw.rectangle([x1, y1, x2, y2], outline='red', width=3)
                         draw.text((x1, y1 - 20), f"#{i}", fill='red')
-                    program_dir = os.path.dirname(os.path.abspath(__file__))
-                    debug_path = os.path.join(program_dir, f"debug_translated_zones_{int(time.time())}.png")
+                    debug_path = debug_dir / f"debug_translated_zones_{timestamp}.png"
                     debug_img.save(debug_path)
                     self.logger.info(f"[DEBUG] Отладочный скриншот сохранен: {debug_path}")
                 except Exception as e:
@@ -432,7 +446,6 @@ class ScreenshotTranslatorApp:
 
                 for i, (x1, y1, x2, y2) in enumerate(regions):
                     try:
-                        # === ВЫЧИСЛЯЕМ КООРДИНАТЫ ОДИН РАЗ ===
                         screen_x1 = wx1 + int(x1 * scale_x)
                         screen_y1 = wy1 + int(y1 * scale_y)
                         screen_x2 = wx1 + int(x2 * scale_x)
@@ -443,12 +456,10 @@ class ScreenshotTranslatorApp:
 
                         region_window_rect = (screen_x1, screen_y1, screen_x2, screen_y2)
 
-                        # Вырезаем область из переведенного изображения
                         region_img = translated_img.crop((x1, y1, x2, y2))
                         region_path = self.temp_dir / f"ocr_region_{i}_{int(time.time())}.png"
                         region_img.save(region_path)
 
-                        # === СОЗДАЕМ ОВЕРЛЕЙ ===
                         overlay = self.overlay_manager._create_overlay_from_data(
                             image_path=region_path,
                             window_rect=region_window_rect,
@@ -469,10 +480,8 @@ class ScreenshotTranslatorApp:
                                 overlay.show()
                             created_count += 1
 
-                            # === СОЗДАЕМ ШАБЛОН С ТЕМИ ЖЕ КООРДИНАТАМИ ===
                             if self.translation_monitor and self.settings.get_auto_replace_translated():
                                 try:
-                                    # Координаты на исходном скриншоте (внутри окна)
                                     orig_x1 = screen_x1 - wx1
                                     orig_y1 = screen_y1 - wy1
                                     orig_x2 = screen_x2 - wx1
@@ -508,7 +517,8 @@ class ScreenshotTranslatorApp:
                                                     template_data['overlay_width'] = screen_x2 - screen_x1
                                                     template_data['overlay_height'] = screen_y2 - screen_y1
                                                     self.logger.info(
-                                                        f"[F3_HOLD] Шаблон #{pair_index} добавлен в монитор")
+                                                        f"[F3_HOLD] Шаблон #{pair_index} добавлен в монитор"
+                                                    )
                                                     break
                                 except Exception as e:
                                     self.logger.warning(f"[F3_HOLD] Не удалось создать шаблон: {e}")
