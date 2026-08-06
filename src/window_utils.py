@@ -10,6 +10,7 @@ import win32con
 import win32process
 import win32gui
 import win32file
+from typing import Optional
 
 # Psutil (опционально)
 try:
@@ -336,3 +337,40 @@ def get_process_name_by_hwnd(hwnd: int, default_name: str = None) -> str:
     except Exception as e:
         logger.error(f"Ошибка в get_process_name_by_hwnd для HWND {hwnd}: {e}")
         return default_name if default_name else "Неизвестно"
+
+
+def find_window_by_app_name(app_name: str) -> Optional[int]:
+    """
+    Находит HWND окна по имени приложения (процесса).
+
+    Args:
+        app_name: Имя исполняемого файла (например, "LIBM.exe")
+
+    Returns:
+        HWND окна или None, если окно не найдено
+    """
+    logger = logging.getLogger(__name__)
+
+    if not app_name or app_name == "Неизвестно":
+        return None
+
+    try:
+        import win32gui
+
+        def enum_callback(hwnd, hwnds):
+            if win32gui.IsWindowVisible(hwnd):
+                try:
+                    if get_process_name_by_hwnd(hwnd) == app_name:
+                        hwnds.append(hwnd)
+                        return False  # Останавливаем поиск
+                except Exception:
+                    pass
+            return True
+
+        hwnds = []
+        win32gui.EnumWindows(enum_callback, hwnds)
+        return hwnds[0] if hwnds else None
+
+    except Exception as e:
+        logger.warning(f"Ошибка поиска окна по имени {app_name}: {e}")
+        return None

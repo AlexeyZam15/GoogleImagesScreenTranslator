@@ -21,6 +21,40 @@ class OCRProcessor:
         self._initialized = False
         self._initializing = False
 
+    def draw_bboxes_with_ids(self, image: np.ndarray, results: List, colors=None) -> np.ndarray:
+        """Отрисовка bounding boxes с ID и разными цветами для отладки"""
+        import cv2
+        import numpy as np
+
+        img_copy = image.copy()
+
+        if colors is None:
+            colors = [
+                (0, 255, 0),  # Зеленый
+                (255, 0, 0),  # Синий
+                (0, 0, 255),  # Красный
+                (255, 255, 0),  # Голубой
+                (255, 0, 255),  # Пурпурный
+                (0, 255, 255),  # Желтый
+                (128, 128, 0),  # Оливковый
+                (0, 128, 128),  # Бирюзовый
+            ]
+
+        for idx, (bbox, text, confidence) in enumerate(results):
+            color = colors[idx % len(colors)]
+            pts = np.array(bbox, dtype=np.int32)
+            cv2.polylines(img_copy, [pts], True, color, 3)
+
+            x, y = pts[0]
+            label = f"#{idx + 1}: {text[:15]}"
+            cv2.putText(img_copy, label, (x, y - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
+            cv2.putText(img_copy, f"{confidence:.2f}", (x, y + 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+
+        return img_copy
+
     def initialize(self):
         """Инициализация EasyOCR (вызывается один раз при старте)"""
         if self._initialized:
@@ -120,7 +154,7 @@ class OCRProcessor:
             [x_min, y_max]
         ]
 
-    def merge_overlapping_boxes(self, results: List, iou_threshold: float = 0.05, shrink_pixels: int = 8) -> List:
+    def merge_overlapping_boxes(self, results: List, iou_threshold: float = 0.05, shrink_pixels: int = 5) -> List:
         """Объединение пересекающихся bounding boxes (как в вашем коде)"""
         if not results:
             return results
@@ -176,7 +210,7 @@ class OCRProcessor:
 
         return merged
 
-    def process_image(self, image_path: Path, max_size: int = 600) -> Tuple[List, float]:
+    def process_image(self, image_path: Path, max_size: int = 600, save_debug: bool = False) -> Tuple[List, float]:
         """
         Обработка изображения через OCR
         Возвращает: (список областей, время выполнения)
@@ -195,13 +229,12 @@ class OCRProcessor:
 
         start_time = time.time()
 
-        # Параметры как в вашем коде
         results = self.reader.readtext(
             resized_image,
             detail=1,
             paragraph=False,
-            text_threshold=0.4,  # как в вашем коде
-            low_text=0.25  # как в вашем коде
+            text_threshold=0.4,
+            low_text=0.25
         )
 
         elapsed_time = time.time() - start_time
@@ -216,8 +249,18 @@ class OCRProcessor:
 
         self.logger.info(f"  До объединения: {len(results)} областей")
 
-        # Объединяем области (параметры как в вашем коде)
-        merged_results = self.merge_overlapping_boxes(results, iou_threshold=0.05, shrink_pixels=8)
+        # Сохраняем отладочное изображение с ID
+        if save_debug:
+            try:
+                debug_image = self.draw_bboxes_with_ids(original_image.copy(), results)
+                debug_path = image_path.parent / f"{image_path.stem}_debug_ids.png"
+                cv2.imwrite(str(debug_path), debug_image)
+                self.logger.info(f"  Отладка сохранена: {debug_path.name}")
+            except Exception as e:
+                self.logger.warning(f"  Не удалось сохранить отладку: {e}")
+
+        # Объединяем области (параметры как в коде пользователя)
+        merged_results = self.merge_overlapping_boxes(results, iou_threshold=0.05, shrink_pixels=5)
 
         self.logger.info(f"  После объединения: {len(merged_results)} областей")
         self.logger.info(f"  ⏱️ Время OCR: {elapsed_time:.2f}с")

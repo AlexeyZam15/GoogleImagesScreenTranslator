@@ -290,7 +290,7 @@ class ScreenshotTranslatorApp:
         self.translating = True
         self.ui.update_status("● " + self.ui.get_string('translating'), '#ff9800')
 
-        # === ПОКАЗЫВАЕМ ИНДИКАТОР ===
+        # Показываем индикатор
         self._show_translation_overlay()
 
         def capture_and_translate_task():
@@ -320,14 +320,15 @@ class ScreenshotTranslatorApp:
                 self._pending_region_path = None
                 self._is_temporary_translation = False
 
+                # Передаем screenshot_path и window_rect в колбэк
                 cmd_id = self.browser_worker.translate_image(
                     screenshot_path,
                     out_dir,
                     lambda result, error: self._on_ocr_translate_finished(
                         result, error,
-                        screenshot_path,
-                        window_rect,
-                        current_hwnd
+                        screenshot_path,  # <-- передаем путь к скриншоту
+                        window_rect,  # <-- передаем rect окна
+                        current_hwnd  # <-- передаем HWND
                     )
                 )
                 self._pending_command_ids[cmd_id] = 'translate_ocr'
@@ -368,8 +369,9 @@ class ScreenshotTranslatorApp:
             self.show_notification("🔄 OCR анализ...")
 
             try:
-                from PIL import Image
+                from PIL import Image, ImageDraw
                 from src.window_utils import get_process_name_by_hwnd
+                import os
 
                 if self.ocr_processor is None or not self._ocr_initialized:
                     self.logger.error("[F3_HOLD] OCR не инициализирован")
@@ -379,9 +381,30 @@ class ScreenshotTranslatorApp:
                     return
 
                 translated_image_path = Path(result)
-                regions = self.ocr_processor.get_regions_from_image(translated_image_path)
 
+                # Загружаем изображения
+                original_img = Image.open(screenshot_path)
+                translated_img = Image.open(translated_image_path)
+
+                orig_w, orig_h = original_img.size
+                trans_w, trans_h = translated_img.size
+
+                regions = self.ocr_processor.get_regions_from_image(translated_image_path)
                 self.logger.info(f"[F3_HOLD] Найдено {len(regions)} областей с текстом")
+
+                # Сохраняем отладочный скриншот
+                try:
+                    debug_img = translated_img.copy()
+                    draw = ImageDraw.Draw(debug_img)
+                    for i, (x1, y1, x2, y2) in enumerate(regions):
+                        draw.rectangle([x1, y1, x2, y2], outline='red', width=3)
+                        draw.text((x1, y1 - 20), f"#{i}", fill='red')
+                    program_dir = os.path.dirname(os.path.abspath(__file__))
+                    debug_path = os.path.join(program_dir, f"debug_translated_zones_{int(time.time())}.png")
+                    debug_img.save(debug_path)
+                    self.logger.info(f"[DEBUG] Отладочный скриншот сохранен: {debug_path}")
+                except Exception as e:
+                    self.logger.warning(f"[DEBUG] Не удалось сохранить отладочный скриншот: {e}")
 
                 if not regions:
                     self.logger.info("[F3_HOLD] Текст не обнаружен")
@@ -392,44 +415,45 @@ class ScreenshotTranslatorApp:
 
                 self.show_notification(f"📝 Создание {len(regions)} оверлеев...")
 
-                translated_img = Image.open(translated_image_path)
                 app_name = get_process_name_by_hwnd(target_hwnd) if target_hwnd else None
 
                 wx1, wy1, wx2, wy2 = window_rect
                 win_width = wx2 - wx1
                 win_height = wy2 - wy1
 
-                img_width, img_height = translated_img.size
-                scale_x = win_width / img_width if img_width > 0 else 1.0
-                scale_y = win_height / img_height if img_height > 0 else 1.0
+                # Коэффициенты масштабирования
+                scale_x = win_width / trans_w if trans_w > 0 else 1.0
+                scale_y = win_height / trans_h if trans_h > 0 else 1.0
 
                 created_count = 0
 
-                # Временно отключаем сохранение состояния для скорости
                 if hasattr(self.overlay_manager, '_suppress_save'):
                     self.overlay_manager._suppress_save = True
 
                 for i, (x1, y1, x2, y2) in enumerate(regions):
                     try:
-                        region_img = translated_img.crop((x1, y1, x2, y2))
-                        region_path = self.temp_dir / f"ocr_region_{i}_{int(time.time())}.png"
-                        region_img.save(region_path)
-
+                        # === ВЫЧИСЛЯЕМ КООРДИНАТЫ ОДИН РАЗ ===
                         screen_x1 = wx1 + int(x1 * scale_x)
-                        screen_y1 = wy1 + int(y1 * scale_x)
+                        screen_y1 = wy1 + int(y1 * scale_y)
                         screen_x2 = wx1 + int(x2 * scale_x)
-                        screen_y2 = wy1 + int(y2 * scale_x)
+                        screen_y2 = wy1 + int(y2 * scale_y)
 
                         if screen_x2 <= screen_x1 or screen_y2 <= screen_y1:
                             continue
 
                         region_window_rect = (screen_x1, screen_y1, screen_x2, screen_y2)
 
+                        # Вырезаем область из переведенного изображения
+                        region_img = translated_img.crop((x1, y1, x2, y2))
+                        region_path = self.temp_dir / f"ocr_region_{i}_{int(time.time())}.png"
+                        region_img.save(region_path)
+
+                        # === СОЗДАЕМ ОВЕРЛЕЙ ===
                         overlay = self.overlay_manager._create_overlay_from_data(
                             image_path=region_path,
                             window_rect=region_window_rect,
                             target_hwnd=target_hwnd,
-                            is_auto_replace=False,
+                            is_auto_replace=True,
                             is_window_screenshot=True,
                             template_id=None,
                             show_immediately=True,
@@ -445,17 +469,58 @@ class ScreenshotTranslatorApp:
                                 overlay.show()
                             created_count += 1
 
+                            # === СОЗДАЕМ ШАБЛОН С ТЕМИ ЖЕ КООРДИНАТАМИ ===
+                            if self.translation_monitor and self.settings.get_auto_replace_translated():
+                                try:
+                                    # Координаты на исходном скриншоте (внутри окна)
+                                    orig_x1 = screen_x1 - wx1
+                                    orig_y1 = screen_y1 - wy1
+                                    orig_x2 = screen_x2 - wx1
+                                    orig_y2 = screen_y2 - wy1
+
+                                    orig_x1 = max(0, min(orig_x1, orig_w))
+                                    orig_y1 = max(0, min(orig_y1, orig_h))
+                                    orig_x2 = max(0, min(orig_x2, orig_w))
+                                    orig_y2 = max(0, min(orig_y2, orig_h))
+
+                                    if orig_x2 > orig_x1 and orig_y2 > orig_y1:
+                                        template_path = self.temp_dir / f"template_{i}_{int(time.time())}.png"
+                                        template_img = original_img.crop((orig_x1, orig_y1, orig_x2, orig_y2))
+                                        template_img.save(template_path)
+
+                                        pair_index, file_hash = self.translation_monitor.add_template(
+                                            region_image=template_path,
+                                            translated_image=region_path,
+                                            target_app_name=app_name,
+                                            is_temporary=False,
+                                            lifetime_seconds=180
+                                        )
+
+                                        if pair_index >= 0 and file_hash:
+                                            overlay._template_id = file_hash
+                                            for template_data in self.translation_monitor.templates:
+                                                if template_data.get('hash') == file_hash:
+                                                    template_data['overlay'] = overlay
+                                                    template_data['found'] = False
+                                                    template_data['offset_x'] = 0
+                                                    template_data['offset_y'] = 0
+                                                    template_data['offset_initialized'] = True
+                                                    template_data['overlay_width'] = screen_x2 - screen_x1
+                                                    template_data['overlay_height'] = screen_y2 - screen_y1
+                                                    self.logger.info(
+                                                        f"[F3_HOLD] Шаблон #{pair_index} добавлен в монитор")
+                                                    break
+                                except Exception as e:
+                                    self.logger.warning(f"[F3_HOLD] Не удалось создать шаблон: {e}")
+
                     except Exception as e:
                         self.logger.error(f"[F3_HOLD] Ошибка создания оверлея {i}: {e}")
 
-                # Включаем сохранение и сохраняем один раз
                 if hasattr(self.overlay_manager, '_suppress_save'):
                     self.overlay_manager._suppress_save = False
                     self.overlay_manager.save_overlay_state(immediate=True)
 
                 self.logger.info(f"[F3_HOLD] Создано оверлеев: {created_count} из {len(regions)}")
-
-                # Обновляем список окон один раз после создания всех оверлеев
                 self.ui.root.after(500, self.window_list.refresh)
 
                 if created_count > 0:

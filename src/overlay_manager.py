@@ -144,27 +144,9 @@ class OverlayManager:
         return "Неизвестно"
 
     def _find_window_by_app_name(self, app_name: str) -> Optional[int]:
-        """Находит HWND окна по имени приложения."""
-        try:
-            import win32gui
-
-            def enum_callback(hwnd, hwnds):
-                if win32gui.IsWindowVisible(hwnd):
-                    try:
-                        from src.window_utils import get_process_name_by_hwnd
-                        if get_process_name_by_hwnd(hwnd) == app_name:
-                            hwnds.append(hwnd)
-                            return False  # Останавливаем поиск
-                    except:
-                        pass
-                return True
-
-            hwnds = []
-            win32gui.EnumWindows(enum_callback, hwnds)
-            return hwnds[0] if hwnds else None
-        except Exception as e:
-            self.logger.warning(f"[STATE] Ошибка поиска окна по имени {app_name}: {e}")
-            return None
+        """Находит HWND окна по имени приложения (использует общую функцию)."""
+        from src.window_utils import find_window_by_app_name
+        return find_window_by_app_name(app_name)    
 
     def _create_overlay_from_data(self, image_path: Path, window_rect: tuple, target_hwnd: int,
                                   is_auto_replace: bool, is_window_screenshot: bool,

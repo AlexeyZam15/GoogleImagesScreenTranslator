@@ -21,7 +21,7 @@ import keyboard
 import win32gui
 import win32con
 import win32api
-
+from src.window_utils import find_window_by_app_name
 
 class OverlayWindow:
     """Класс для оверлейного окна (Toplevel, работает в главном потоке)"""
@@ -157,6 +157,34 @@ class OverlayWindow:
         self.root.bind('<Leave>', self._on_mouse_leave)
 
         self.logger.info("OverlayWindow инициализирован")
+
+    def _update_target_hwnd(self) -> bool:
+        """
+        Обновляет _target_hwnd, ища окно по имени приложения.
+        Возвращает True, если окно найдено.
+        """
+        if not self._app_name or self._app_name == "Неизвестно":
+            return False
+
+        # Если текущий HWND валиден, проверяем его
+        if self._target_hwnd:
+            try:
+                import win32gui
+                if win32gui.IsWindow(self._target_hwnd) and win32gui.IsWindowVisible(self._target_hwnd):
+                    return True
+            except:
+                pass
+
+        # Ищем окно по имени приложения
+        from src.window_utils import find_window_by_app_name
+        found_hwnd = find_window_by_app_name(self._app_name)
+
+        if found_hwnd:
+            self._target_hwnd = found_hwnd
+            self.logger.info(f"[MONITOR] Найдено окно для {self._app_name}: HWND={found_hwnd}")
+            return True
+
+        return False
 
     def get_app_name(self) -> Optional[str]:
         """Возвращает имя приложения для этого оверлея."""
@@ -796,7 +824,14 @@ class OverlayWindow:
                         self._show_internal(force=False)
                     return
 
+                # === НОВАЯ ЛОГИКА: обновляем target_hwnd если необходимо ===
                 target_hwnd = self.get_target_hwnd()
+
+                # Если target_hwnd не задан или невалиден, пытаемся найти по имени приложения
+                if not target_hwnd or not win32gui.IsWindow(target_hwnd):
+                    if self._update_target_hwnd():
+                        target_hwnd = self._target_hwnd
+                        self.logger.info(f"[MONITOR] Обновлен target_hwnd: {target_hwnd}")
 
                 if target_hwnd is None or active_hwnd != target_hwnd:
                     if self.visible:
@@ -1062,6 +1097,11 @@ class OverlayWindow:
 
         try:
             import win32gui
+
+            # Если target_hwnd не задан, пытаемся найти по имени приложения
+            if not self._target_hwnd and self._app_name and self._app_name != "Неизвестно":
+                self._update_target_hwnd()
+
             current_hwnd = win32gui.GetForegroundWindow()
 
             if current_hwnd == 0:
@@ -1097,6 +1137,12 @@ class OverlayWindow:
 
                 # Сбрасываем флаг таймера перед вызовом
                 self._monitor_timer = None
+
+                # === НОВАЯ ЛОГИКА: периодически обновляем target_hwnd ===
+                if not self._target_hwnd or not win32gui.IsWindow(self._target_hwnd):
+                    if self._update_target_hwnd():
+                        self.logger.info(f"[MONITOR] Обновлен target_hwnd в мониторе: {self._target_hwnd}")
+
                 self._check_and_update_visibility()
 
                 # Перезапускаем таймер
