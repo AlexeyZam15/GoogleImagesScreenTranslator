@@ -1205,8 +1205,32 @@ class ScreenshotTranslatorApp:
             self.hotkeys.set_actions_blocked(blocked)
             if blocked:
                 self.logger.info("[HOTKEYS] Горячие клавиши заблокированы на системном уровне")
+                # Дополнительная блокировка через keyboard
+                try:
+                    import keyboard
+                    keyboard.block_key('f4')
+                    keyboard.block_key('f1')
+                    keyboard.block_key('f2')
+                    keyboard.block_key('f3')
+                    keyboard.block_key('f5')
+                    keyboard.block_key('f6')
+                    keyboard.block_key('esc')
+                    self.logger.info("[HOTKEYS] Дополнительная блокировка клавиш через block_key")
+                except Exception as e:
+                    self.logger.warning(f"[HOTKEYS] Не удалось заблокировать клавиши: {e}")
             else:
                 self.logger.info("[HOTKEYS] Горячие клавиши разблокированы")
+                try:
+                    import keyboard
+                    keyboard.unblock_key('f4')
+                    keyboard.unblock_key('f1')
+                    keyboard.unblock_key('f2')
+                    keyboard.unblock_key('f3')
+                    keyboard.unblock_key('f5')
+                    keyboard.unblock_key('f6')
+                    keyboard.unblock_key('esc')
+                except:
+                    pass
         else:
             self.logger.warning("[HOTKEYS] HotkeyManager не инициализирован")
 

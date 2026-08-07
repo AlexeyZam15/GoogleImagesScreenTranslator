@@ -38,6 +38,31 @@ class HotkeyManager:
         self._f3_timer = None
         self._f3_hold_triggered = False
 
+    def _on_esc_pressed(self, event):
+        """Обработчик нажатия ESC - отменяет текущий перевод"""
+        if self._hotkeys_blocked:
+            return True
+
+        # Проверяем, есть ли активный перевод
+        if hasattr(self.app, '_translation_in_progress') and self.app._translation_in_progress:
+            self.logger.info("[HOTKEYS] ESC нажат - отменяем перевод")
+            if hasattr(self.app, '_cancel_translation'):
+                self.app._cancel_translation()
+            return False  # Блокируем ESC
+
+        # Проверяем режим захвата области
+        if hasattr(self.app, '_capture_mode') and self.app._capture_mode:
+            self.logger.info("[HOTKEYS] ESC нажат - выходим из режима захвата")
+            # Если есть area_selector, передаём ему ESC
+            if hasattr(self.app, '_area_selector') and self.app._area_selector:
+                try:
+                    self.app._area_selector._close_capture(False)
+                except:
+                    pass
+            return False  # Блокируем ESC
+
+        return True  # Пропускаем ESC дальше (если не перехвачен)
+
     def setup(self):
         """Настраивает горячие клавиши"""
         self.logger.info("=" * 60)
@@ -50,15 +75,16 @@ class HotkeyManager:
 
             self._hotkey_actions = self.settings.get_all_hotkeys()
 
-            # Регистрируем все клавиши через add_hotkey
+            # Регистрируем ВСЕ клавиши через on_press_key с suppress=True
             for action, hotkey in self._hotkey_actions.items():
                 if action == 'area':
                     # F3 обрабатываем отдельно
                     continue
                 if hotkey:
                     try:
-                        keyboard.add_hotkey(hotkey, lambda a=action: self._queue_action(a))
-                        self.logger.info(f"[HOTKEYS] Зарегистрировано: {hotkey} -> {action}")
+                        # Используем on_press_key вместо add_hotkey для полной блокировки
+                        keyboard.on_press_key(hotkey, lambda e, a=action: self._queue_action(a), suppress=True)
+                        self.logger.info(f"[HOTKEYS] Зарегистрировано (блокировка): {hotkey} -> {action}")
                     except Exception as e:
                         self.logger.warning(f"[HOTKEYS] Не удалось зарегистрировать {hotkey}: {e}")
 
@@ -66,12 +92,19 @@ class HotkeyManager:
             try:
                 keyboard.on_press_key('f3', self._on_f3_down, suppress=True)
                 keyboard.on_release_key('f3', self._on_f3_up, suppress=True)
-                self.logger.info("[HOTKEYS] Зарегистрировано: F3 (с поддержкой длительного зажатия)")
+                self.logger.info("[HOTKEYS] Зарегистрировано: F3 (с поддержкой длительного зажатия, блокировка)")
             except Exception as e:
                 self.logger.warning(f"[HOTKEYS] Не удалось зарегистрировать F3: {e}")
 
+            # Регистрируем ESC для отмены перевода
+            try:
+                keyboard.on_press_key('esc', self._on_esc_pressed, suppress=True)
+                self.logger.info("[HOTKEYS] Зарегистрировано: ESC (отмена перевода, блокировка)")
+            except Exception as e:
+                self.logger.warning(f"[HOTKEYS] Не удалось зарегистрировать ESC: {e}")
+
             self._hotkey_hook_active = True
-            self.logger.info("[HOTKEYS] Горячие клавиши зарегистрированы")
+            self.logger.info("[HOTKEYS] Горячие клавиши зарегистрированы (все с блокировкой)")
 
         except Exception as e:
             self.logger.error(f"[HOTKEYS] Ошибка регистрации: {e}")
@@ -141,6 +174,7 @@ class HotkeyManager:
     def _queue_action(self, action):
         """Ставит действие в очередь для выполнения в главном потоке"""
         if self._hotkeys_blocked:
+            self.logger.info(f"[HOTKEYS] Действие {action} заблокировано (hotkeys_blocked=True)")
             return
 
         current_time = time.time() * 1000
