@@ -10,6 +10,7 @@ class NotificationOverlay:
         self._hide_timer = None
 
     def show(self, text, duration_ms=1500):
+        # Отменяем старый таймер
         if self._hide_timer:
             try:
                 self.parent.after_cancel(self._hide_timer)
@@ -17,28 +18,37 @@ class NotificationOverlay:
                 pass
             self._hide_timer = None
 
-        if self.root is None or not self.root.winfo_exists():
-            self.root = tk.Toplevel(self.parent)
-            self.root.overrideredirect(True)
-            self.root.attributes('-topmost', True)
-            self.root.attributes('-transparentcolor', '#010101')
-            self.root.configure(bg='#010101')
+        # Закрываем старое окно полностью
+        if self.root and self.root.winfo_exists():
+            try:
+                self.root.destroy()
+            except:
+                pass
+            self.root = None
+            self.label = None
+            self.visible = False
 
-            self.label = tk.Label(
-                self.root,
-                text=text,
-                font=('Segoe UI', 16, 'bold'),
-                fg='#4CAF50',
-                bg='#010101',
-                padx=20,
-                pady=10
-            )
-            self.label.pack()
+        # Создаём новое окно
+        self.root = tk.Toplevel(self.parent)
+        self.root.overrideredirect(True)
+        self.root.attributes('-topmost', True)
+        self.root.attributes('-transparentcolor', '#010101')
+        self.root.configure(bg='#010101')
 
-            self.root.bind('<Button-1>', self.hide)
+        self.label = tk.Label(
+            self.root,
+            text=text,
+            font=('Segoe UI', 16, 'bold'),
+            fg='#4CAF50',
+            bg='#010101',
+            padx=20,
+            pady=10
+        )
+        self.label.pack()
 
-        self.label.config(text=text)
+        self.root.bind('<Button-1>', self.hide)
 
+        # Позиционируем
         screen_width = self.root.winfo_screenwidth()
         self.root.update_idletasks()
         width = self.root.winfo_width()
@@ -47,11 +57,12 @@ class NotificationOverlay:
         y = 30
         self.root.geometry(f'+{x}+{y}')
 
-        if not self.visible:
-            self.root.deiconify()
-            self.root.lift()
-            self.visible = True
+        # Показываем
+        self.root.deiconify()
+        self.root.lift()
+        self.visible = True
 
+        # Таймер скрытия
         self._hide_timer = self.parent.after(duration_ms, self.hide)
 
     def hide(self, event=None):
@@ -61,6 +72,13 @@ class NotificationOverlay:
             except:
                 pass
             self._hide_timer = None
-        if self.root and self.root.winfo_exists():
-            self.root.withdraw()
+
         self.visible = False
+
+        if self.root and self.root.winfo_exists():
+            try:
+                self.root.destroy()
+            except:
+                pass
+            self.root = None
+            self.label = None
