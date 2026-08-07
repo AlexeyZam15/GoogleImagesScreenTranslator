@@ -176,9 +176,9 @@ class OCRProcessor:
         Объединение bounding boxes по относительному gap.
 
         Объединяет зоны если:
-        1. Вертикальный gap < min(высота_зоны1, высота_зоны2) * gap_coefficient
+        1. Вертикальный gap <= min(высота_зоны1, высота_зоны2) * gap_coefficient
         2. И зоны перекрываются по X (находятся в одном столбце)
-        3. И gap < max_gap (ограничение сверху, чтобы не объединять слишком далёкие зоны)
+        3. И gap <= max_gap (ограничение сверху)
 
         Args:
             results: Список (bbox, text, confidence)
@@ -191,7 +191,8 @@ class OCRProcessor:
         results = results.copy()
 
         self.logger.info(
-            f"  Объединение ПО ОТНОСИТЕЛЬНОМУ GAP: gap < min(h1,h2) * {gap_coefficient} (макс {max_gap}px)")
+            f"  Объединение ПО ОТНОСИТЕЛЬНОМУ GAP: gap <= min(h1,h2) * {gap_coefficient} (макс {max_gap}px)"
+        )
 
         merged = []
         used_indices = set()
@@ -221,16 +222,16 @@ class OCRProcessor:
                 # Относительный порог: зависит от высоты зон
                 min_height = min(current_height, bbox_j_height)
                 relative_threshold = min_height * gap_coefficient
-
-                # Ограничение сверху
                 effective_threshold = min(relative_threshold, max_gap)
 
-                # Объединяем если gap < порога И есть перекрытие по X
-                should_merge = (gap < effective_threshold and x_overlap_ratio > 0.1)
+                # Объединяем если gap <= порога и есть перекрытие по X
+                should_merge = (gap <= effective_threshold and x_overlap_ratio > 0.1)
 
                 if should_merge:
                     self.logger.info(
-                        f"    ✅ ОБЪЕДИНЯЕМ '{current_text[:20]}' и '{text_j[:20]}' (gap={gap:.1f}px, мин.высота={min_height}px, порог={effective_threshold:.1f}px, X_ov={x_overlap_ratio:.2f})")
+                        f"    ✅ ОБЪЕДИНЯЕМ '{current_text[:20]}' и '{text_j[:20]}' "
+                        f"(gap={gap:.1f}px, порог={effective_threshold:.1f}px, X_ov={x_overlap_ratio:.2f})"
+                    )
 
                     if text_j not in current_text:
                         current_text = current_text + " " + text_j
@@ -249,14 +250,15 @@ class OCRProcessor:
 
                     used_indices.add(j)
                 else:
-                    if gap < effective_threshold * 2:
+                    if gap <= effective_threshold * 2 or x_overlap_ratio > 0.1:
                         reason = []
-                        if gap >= effective_threshold:
-                            reason.append(f"gap={gap:.1f}px >= порог={effective_threshold:.1f}px")
+                        if gap > effective_threshold:
+                            reason.append(f"gap={gap:.1f}px > порог={effective_threshold:.1f}px")
                         if x_overlap_ratio <= 0.1:
                             reason.append(f"X_ov={x_overlap_ratio:.2f} <= 0.1")
                         self.logger.info(
-                            f"    ❌ НЕ объединяем '{current_text[:15]}' и '{text_j[:15]}' ({', '.join(reason)})")
+                            f"    ❌ НЕ объединяем '{current_text[:15]}' и '{text_j[:15]}' ({', '.join(reason)})"
+                        )
 
             merged.append((current_bbox, current_text, current_conf))
             used_indices.add(i)
@@ -264,10 +266,15 @@ class OCRProcessor:
         return merged
 
     def process_image(self, image_path: Path, max_size: int = 600, save_debug: bool = False, debug_dir: Path = None,
-                      debug_prefix: str = None) -> Tuple[List, float]:
+                      debug_prefix: str = None, gap_coefficient: float = 0.5, max_gap: float = 50) -> Tuple[
+        List, float]:
         """
         Обработка изображения через OCR
         Возвращает: (список областей, время выполнения)
+
+        Args:
+            gap_coefficient: Коэффициент для объединения зон
+            max_gap: Максимальный gap в пикселях
         """
         import re
 
@@ -315,7 +322,8 @@ class OCRProcessor:
                 self.logger.debug(f"  Пропущена зона (только цифры/символы): '{text}'")
 
         self.logger.info(
-            f"  После фильтрации: {len(filtered_results)} областей (удалено {len(results) - len(filtered_results)})")
+            f"  После фильтрации: {len(filtered_results)} областей (удалено {len(results) - len(filtered_results)})"
+        )
 
         results_before_merge = filtered_results.copy()
 
@@ -342,12 +350,12 @@ class OCRProcessor:
             except Exception as e:
                 self.logger.warning(f"  Не удалось сохранить отладку: {e}")
 
-        # Объединяем области с ОТНОСИТЕЛЬНЫМ gap
+        # Объединяем области с переданными параметрами
         merged_results = self.merge_overlapping_boxes(
             filtered_results,
             iou_threshold=0.05,
-            gap_coefficient=0.5,  # <-- 50% от высоты зоны
-            max_gap=50  # <-- максимум 50px
+            gap_coefficient=gap_coefficient,
+            max_gap=max_gap
         )
 
         self.logger.info(f"  После объединения: {len(merged_results)} областей")
@@ -371,8 +379,8 @@ class OCRProcessor:
                     image_path=image_path,
                     debug_dir=debug_dir,
                     debug_prefix=debug_prefix,
-                    gap_coefficient=0.5,
-                    max_gap=50,
+                    gap_coefficient=gap_coefficient,
+                    max_gap=max_gap,
                     shrink_pixels=0
                 )
             except Exception as e:
@@ -380,17 +388,167 @@ class OCRProcessor:
 
         return merged_results, elapsed_time
 
+    def _scale_results(self, results: List, resize_scale: float) -> List:
+        """Масштабирует результаты OCR обратно к исходному размеру."""
+        if resize_scale == 1.0 or not results:
+            return results
+
+        scaled_results = []
+        for bbox, text, confidence in results:
+            scaled_bbox = [[int(x / resize_scale), int(y / resize_scale)] for x, y in bbox]
+            scaled_results.append((scaled_bbox, text, confidence))
+        return scaled_results
+
+    def _filter_text_regions(self, results: List) -> List:
+        """Фильтрует зоны, оставляя только те, где есть буквы."""
+        import re
+        filtered_results = []
+        for bbox, text, confidence in results:
+            clean_text = re.sub(r'[\s\-_/\\.,:;!?()#\'"`]', '', text)
+            has_letters = any(c.isalpha() for c in clean_text)
+            if has_letters:
+                filtered_results.append((bbox, text, confidence))
+            else:
+                self.logger.debug(f"  Пропущена зона (только цифры/символы): '{text}'")
+        return filtered_results
+
+    def _save_debug_image(self, image: np.ndarray, results: List, image_path: Path,
+                          debug_dir: Path, debug_prefix: str, suffix: str):
+        """Сохраняет отладочное изображение с bounding boxes."""
+        try:
+            if results:
+                debug_image = self.draw_bboxes_with_ids(image.copy(), results)
+            else:
+                debug_image = image.copy()
+
+            if debug_dir is None:
+                debug_dir = Path.home() / "Documents" / "GoogleScreenTranslate" / "debug"
+            debug_dir = Path(debug_dir)
+            debug_dir.mkdir(parents=True, exist_ok=True)
+
+            if debug_prefix is None:
+                debug_prefix = image_path.stem
+
+            debug_path = debug_dir / f"{debug_prefix}{suffix}.png"
+            cv2.imwrite(str(debug_path), debug_image)
+            self.logger.info(f"  Отладка сохранена: {debug_path}")
+        except Exception as e:
+            self.logger.warning(f"  Не удалось сохранить отладку: {e}")
+
+    def _save_zones_log(self, results_before: List, results_after: List, image_path: Path,
+                        debug_dir: Path, debug_prefix: str = None, gap_coefficient: float = 0.5,
+                        max_gap: float = 50, shrink_pixels: int = 0) -> Path:
+        """Сохраняет лог с информацией о зонах."""
+        if debug_prefix is None:
+            debug_prefix = image_path.stem
+
+        log_path = debug_dir / f"{debug_prefix}_zones_log.txt"
+
+        with open(log_path, 'w', encoding='utf-8') as f:
+            f.write("=" * 70 + "\n")
+            f.write(f"  📊 ОТЧЁТ ПО ЗОНАМ OCR\n")
+            f.write("=" * 70 + "\n\n")
+
+            f.write(f"📷 Изображение: {image_path.name}\n")
+            f.write(f"🕐 Время: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+
+            image = self.load_image(image_path)
+            h, w = image.shape[:2]
+            f.write(f"📐 Размер: {w}x{h}\n")
+            f.write(
+                f"🔧 Параметры: коэф. gap = {gap_coefficient}, макс. gap = {max_gap}px, сжатие = {shrink_pixels}px\n"
+            )
+            f.write("\n" + "-" * 70 + "\n\n")
+
+            # ЗОНЫ ДО ОБЪЕДИНЕНИЯ
+            f.write(f"📌 ЗОНЫ ДО ОБЪЕДИНЕНИЯ ({len(results_before)} областей):\n")
+            f.write("-" * 50 + "\n")
+            for idx, (bbox, text, confidence) in enumerate(results_before, 1):
+                x_coords = [p[0] for p in bbox]
+                y_coords = [p[1] for p in bbox]
+                x1, y1 = int(min(x_coords)), int(min(y_coords))
+                x2, y2 = int(max(x_coords)), int(max(y_coords))
+                height = y2 - y1
+                f.write(f"  #{idx}: '{text}'\n")
+                f.write(f"     Уверенность: {confidence:.3f}\n")
+                f.write(f"     Координаты: ({x1}, {y1}) - ({x2}, {y2})\n")
+                f.write(f"     Размер: {x2 - x1}x{height}\n")
+            f.write("\n" + "-" * 70 + "\n\n")
+
+            # ПРОВЕРКА GAP
+            f.write(f"🔍 ПРОВЕРКА GAP (gap < min(h1,h2) * {gap_coefficient}, макс {max_gap}px):\n")
+            f.write("-" * 50 + "\n")
+
+            any_merged = False
+            for i in range(len(results_before)):
+                for j in range(i + 1, len(results_before)):
+                    bbox_i = results_before[i][0]
+                    bbox_j = results_before[j][0]
+
+                    x_overlap = max(0, min(bbox_i[2][0], bbox_j[2][0]) - max(bbox_i[0][0], bbox_j[0][0]))
+                    min_width = min(bbox_i[2][0] - bbox_i[0][0], bbox_j[2][0] - bbox_j[0][0])
+                    x_overlap_ratio = x_overlap / min_width if min_width > 0 else 0
+
+                    gap = self.calculate_gap(bbox_i, bbox_j)
+
+                    height_i = bbox_i[2][1] - bbox_i[0][1]
+                    height_j = bbox_j[2][1] - bbox_j[0][1]
+                    min_height = min(height_i, height_j)
+                    threshold = min(min_height * gap_coefficient, max_gap)
+
+                    should_merge = (gap < threshold and x_overlap_ratio > 0.1)
+
+                    if gap < threshold * 2 or x_overlap_ratio > 0.1:
+                        text_i = results_before[i][1]
+                        text_j = results_before[j][1]
+                        status = "✅ ОБЪЕДИНЯЕМ" if should_merge else "❌ НЕ объединяем"
+                        f.write(f"  {status}: '{text_i}' vs '{text_j}'\n")
+                        f.write(
+                            f"     gap = {gap:.1f}px, мин.высота = {min_height}px, порог = {threshold:.1f}px, X_ov = {x_overlap_ratio:.2f}\n"
+                        )
+                        any_merged = True
+
+            if not any_merged:
+                f.write("  (нет зон для объединения)\n")
+            f.write("\n" + "-" * 70 + "\n\n")
+
+            # ЗОНЫ ПОСЛЕ ОБЪЕДИНЕНИЯ
+            f.write(f"📌 ЗОНЫ ПОСЛЕ ОБЪЕДИНЕНИЯ ({len(results_after)} областей):\n")
+            f.write("-" * 50 + "\n")
+            for idx, (bbox, text, confidence) in enumerate(results_after, 1):
+                x_coords = [p[0] for p in bbox]
+                y_coords = [p[1] for p in bbox]
+                x1, y1 = int(min(x_coords)), int(min(y_coords))
+                x2, y2 = int(max(x_coords)), int(max(y_coords))
+                f.write(f"  #{idx}: '{text}'\n")
+                f.write(f"     Уверенность: {confidence:.3f}\n")
+                f.write(f"     Координаты: ({x1}, {y1}) - ({x2}, {y2})\n")
+
+            f.write("\n" + "=" * 70 + "\n")
+            f.write(f"  ИТОГО: {len(results_before)} → {len(results_after)} областей\n")
+            f.write("=" * 70 + "\n")
+
+        self.logger.info(f"  📄 Лог зон сохранён: {log_path}")
+        return log_path
+
     def get_regions_from_image(self, translated_image_path: Path, save_debug: bool = False, debug_dir: Path = None,
-                               debug_prefix: str = None) -> List[Tuple[int, int, int, int]]:
+                               debug_prefix: str = None, gap_coefficient: float = 0.5, max_gap: float = 50) -> List[
+        Tuple[int, int, int, int]]:
         """
         Получает список прямоугольников областей с текстом на переведённом изображении
         Возвращает: [(x1, y1, x2, y2), ...] в координатах исходного изображения
+
+        Args:
+            gap_coefficient: Коэффициент для объединения зон (0.3 - меньше объединения, 0.5 - стандарт)
+            max_gap: Максимальный gap в пикселях
         """
         results, _ = self.process_image(
             translated_image_path,
             save_debug=save_debug,
             debug_dir=debug_dir,
-            debug_prefix=debug_prefix
+            debug_prefix=debug_prefix,
+            gap_coefficient=gap_coefficient,
+            max_gap=max_gap
         )
 
         regions = []
