@@ -1533,20 +1533,30 @@ class ScreenshotTranslatorApp:
 
         restored_count = 0
         if self.overlay_manager:
-            restored_count = self.overlay_manager.restore_overlays_from_state(self)
-            if restored_count > 0:
-                self.logger.info(f"[STATE] Восстановлено {restored_count} оверлеев")
-                self.ui.root.after(500, self.window_list.refresh)
-            else:
-                self.logger.info("[STATE] Нет сохранённых оверлеев для восстановления")
+            try:
+                restored_count = self.overlay_manager.restore_overlays_from_state(self)
+                if restored_count > 0:
+                    self.logger.info(f"[STATE] Восстановлено {restored_count} оверлеев")
+                    self.ui.root.after(500, self.window_list.refresh)
+                else:
+                    self.logger.info("[STATE] Нет сохранённых оверлеев для восстановления")
+            except Exception as e:
+                self.logger.error(f"[STATE] Ошибка восстановления оверлеев: {e}")
 
+        # === РАЗБЛОКИРУЕМ МЕНЮ НАСТРОЕК ===
         if hasattr(self.ui, 'settings_btn'):
             self.ui.settings_btn.config(state=tk.NORMAL, bg='#3c3c3c', fg='#cccccc')
 
         self.ui.set_settings_menu_enabled(True)
-        self.ui.update_status("● " + self.ui.get_string('ready'), '#4CAF50')
+
+        # === ОБНОВЛЯЕМ СТАТУС НА "ГОТОВ" ===
+        ready_text = self.ui.get_string('ready')
+        self.logger.info(f"[STATUS] Обновление статуса на: {ready_text}")
+        self.ui.update_status(f"● {ready_text}", '#4CAF50')
+        self.logger.info("[STATUS] Статус обновлён на Готов")
 
         self.window_list.refresh()
+        self.logger.info("Инициализация полностью завершена, статус: Готов")
 
     def _on_window_switch(self, new_hwnd):
         """Обработчик переключения окон - показывает/скрывает оверлеи при переключении"""

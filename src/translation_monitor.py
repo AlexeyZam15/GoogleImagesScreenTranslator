@@ -37,7 +37,11 @@ class TranslationMonitor:
         '_last_capture_time', '_last_captured_image', '_last_captured_hwnd',
         '_updating_overlay', '_idle_counter', '_last_check_time',
         '_frame_cache', '_frame_cache_hwnd', '_frame_cache_time',
-        '_frame_cache_ttl'
+        '_frame_cache_ttl',
+        # === НОВЫЕ ОТЛАДОЧНЫЕ АТРИБУТЫ ===
+        '_capture_debug_counter',
+        '_size_debug_counter',
+        '_match_debug_counter'
     )
 
     def __init__(self, parent, overlay_manager, settings, debug_mode=False):
@@ -71,6 +75,11 @@ class TranslationMonitor:
         self._frame_cache_time = 0
         self._frame_cache_ttl = 0.05
 
+        # === ОТЛАДОЧНЫЕ СЧЁТЧИКИ (ОБЯЗАТЕЛЬНО ИНИЦИАЛИЗИРОВАТЬ) ===
+        self._capture_debug_counter = 0
+        self._size_debug_counter = {}
+        self._match_debug_counter = {}
+
         # Дополнительные атрибуты
         self._updating_overlay = False
         self._last_capture_time = 0
@@ -85,13 +94,15 @@ class TranslationMonitor:
 
     def _monitor_loop(self):
         """Основной цикл мониторинга — оптимизированная версия"""
+        import win32gui
+        from src.window_utils import get_process_name_by_hwnd
+
         last_time = time.time()
         self.logger.info("[MONITOR] Цикл мониторинга запущен (оптимизированный)")
 
         iteration_count = 0
         last_found_time = {}
-
-        from src.window_utils import get_process_name_by_hwnd
+        debug_counter = 0  # Для ограничения вывода
 
         while self.monitoring:
             try:
@@ -127,6 +138,15 @@ class TranslationMonitor:
                     time.sleep(0.02)
                     continue
 
+                # --- ОТЛАДОЧНЫЙ ВЫВОД ---
+                debug_counter += 1
+                if debug_counter % 50 == 0:  # Каждые 50 итераций
+                    active_app_name = get_process_name_by_hwnd(active_hwnd)
+                    self.logger.info(
+                        f"[MONITOR_DEBUG] Активное окно: HWND={active_hwnd}, App='{active_app_name}', "
+                        f"шаблонов для этого приложения: {len([t for t in self.templates if t.get('target_app_name') == active_app_name])}"
+                    )
+
                 # --- ИЗМЕНЕНИЕ: получаем имя активного приложения (один раз) ---
                 active_app_name = self._get_cached_app_name(active_hwnd)
                 self._last_active_app_name = active_app_name
@@ -145,12 +165,20 @@ class TranslationMonitor:
                         self._frame_cache = image
                         self._frame_cache_hwnd = active_hwnd
                         self._frame_cache_time = current_time
+                        # ОТЛАДКА: размер захваченного изображения
+                        if debug_counter % 50 == 0:
+                            self.logger.info(
+                                f"[MONITOR_DEBUG] Захвачено окно: {image.shape[1]}x{image.shape[0]}, HWND={active_hwnd}"
+                            )
                     else:
                         image = self._frame_cache
+                        if debug_counter % 50 == 0:
+                            self.logger.warning(f"[MONITOR_DEBUG] НЕ удалось захватить окно HWND={active_hwnd}")
                 else:
                     image = self._frame_cache
 
                 if image is None:
+                    time.sleep(0.02)
                     continue
 
                 # --- ИЗМЕНЕНИЕ: проверяем только шаблоны для активного приложения по имени ---
@@ -331,24 +359,42 @@ class TranslationMonitor:
 
         t_h, t_w = template.shape[:2]
 
+        # ОТЛАДКА: проверяем размеры
         if t_h > img_h or t_w > img_w:
             if template_data.get('found', False):
                 template_data['found'] = False
                 overlay = template_data.get('overlay')
                 if overlay and overlay.visible:
                     self._hide_overlay_in_main_thread(overlay, idx)
+            # ОТЛАДКА: выводим информацию о размерах (каждые 50 попыток)
+            if not hasattr(self, '_size_debug_counter'):
+                self._size_debug_counter = {}
+            if idx not in self._size_debug_counter:
+                self._size_debug_counter[idx] = 0
+            self._size_debug_counter[idx] += 1
+            if self._size_debug_counter[idx] % 50 == 0:
+                self.logger.warning(
+                    f"[MONITOR_DEBUG] Шаблон #{idx} слишком большой: {t_w}x{t_h} > окно {img_w}x{img_h}"
+                )
             return
 
         try:
             result = cv2.matchTemplate(image, template, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, max_loc = cv2.minMaxLoc(result)
 
-            if max_val >= self.confidence_threshold:
-                # === НОВАЯ ПРОВЕРКА: если монитор остановлен во время поиска, не обновляем ===
-                if not self.monitoring:
-                    self.logger.info(f"[MONITOR] Монитор остановлен во время поиска шаблона #{idx}, пропускаем")
-                    return
+            # ОТЛАДКА: выводим максимальное значение совпадения (каждые 100 попыток)
+            if not hasattr(self, '_match_debug_counter'):
+                self._match_debug_counter = {}
+            if idx not in self._match_debug_counter:
+                self._match_debug_counter[idx] = 0
+            self._match_debug_counter[idx] += 1
+            if self._match_debug_counter[idx] % 100 == 0:
+                self.logger.info(
+                    f"[MONITOR_DEBUG] Шаблон #{idx}: max_val={max_val:.3f}, порог={self.confidence_threshold:.3f}, "
+                    f"размер шаблона={t_w}x{t_h}"
+                )
 
+            if max_val >= self.confidence_threshold:
                 template_x = max_loc[0]
                 template_y = max_loc[1]
 
@@ -369,7 +415,7 @@ class TranslationMonitor:
             self.logger.warning(f"Ошибка поиска шаблона #{idx}: {e}")
 
     def _capture_window(self, hwnd: int) -> Optional[np.ndarray]:
-        """Оптимизированный захват окна"""
+        """Оптимизированный захват окна с проверкой"""
         if not hwnd:
             return None
 
@@ -384,6 +430,11 @@ class TranslationMonitor:
 
             if width <= 0 or height <= 0:
                 return None
+
+            # ОТЛАДКА: размер окна
+            self._capture_debug_counter += 1
+            if self._capture_debug_counter % 20 == 0:
+                self.logger.info(f"[MONITOR_DEBUG] Захват окна: {width}x{height}, HWND={hwnd}")
 
             # Пытаемся захватить через PrintWindow
             hwnd_dc = win32gui.GetWindowDC(hwnd)
@@ -425,10 +476,15 @@ class TranslationMonitor:
             win32gui.ReleaseDC(hwnd, hwnd_dc)
             win32gui.DeleteObject(bitmap.GetHandle())
 
+            # ОТЛАДКА: PrintWindow не сработал
+            if self._capture_debug_counter % 20 == 0:
+                self.logger.warning(f"[MONITOR_DEBUG] PrintWindow не сработал для HWND={hwnd}, пробуем BitBlt")
+
             return self._capture_window_bitblt(hwnd)
 
         except Exception as e:
-            self.logger.warning(f"Ошибка захвата окна {hwnd}: {e}")
+            if self._capture_debug_counter % 20 == 0:
+                self.logger.warning(f"[MONITOR_DEBUG] Ошибка захвата окна {hwnd}: {e}")
             return self._capture_window_bitblt(hwnd)
 
     def _capture_window_bitblt(self, hwnd: int) -> Optional[np.ndarray]:
@@ -484,16 +540,30 @@ class TranslationMonitor:
         self.logger.info(f"[MONITOR] Удаление шаблона #{pair_index}")
         for i, template_data in enumerate(self.templates):
             if template_data['pair_index'] == pair_index:
+                # Закрываем оверлей, если он есть
                 if template_data.get('overlay'):
                     try:
                         overlay = template_data['overlay']
                         if overlay.root and overlay.root.winfo_exists():
                             overlay.close()
+                        self.logger.info(f"[MONITOR] Оверлей закрыт для шаблона #{pair_index}")
                     except Exception as e:
                         self.logger.warning(f"[MONITOR] Ошибка закрытия оверлея при удалении: {e}")
+                    template_data['overlay'] = None
+
+                # Удаляем шаблон из списка
                 del self.templates[i]
                 self.logger.info(f"[MONITOR] ✅ Шаблон #{pair_index} удален. Осталось {len(self.templates)} шаблонов")
+
+                # ИСПРАВЛЕНИЕ: сбрасываем кэш, чтобы монитор не пытался восстановить удалённый шаблон
+                self._frame_cache = None
+                self._frame_cache_hwnd = None
+                self._frame_cache_time = 0
+                self._last_active_hwnd = None
+                self._last_active_app_name = None
+
                 return
+
         self.logger.warning(f"[MONITOR] ❌ Шаблон #{pair_index} не найден в списке")
 
     def start(self):
@@ -689,6 +759,7 @@ class TranslationMonitor:
                 template_data['overlay_width'] = overlay_w
                 template_data['overlay_height'] = overlay_h
 
+            # Вычисляем финальную позицию с учётом смещения
             final_x = template_x + offset_x
             final_y = template_y + offset_y
             final_w = overlay_w
@@ -761,6 +832,7 @@ class TranslationMonitor:
                         template_data['overlay_width'] = template_w
                         template_data['overlay_height'] = template_h
 
+                    # Используем final_x и final_y для позиции оверлея
                     window_rect = (final_x, final_y, final_x + final_w, final_y + final_h)
 
                     target_hwnd = None
@@ -791,7 +863,8 @@ class TranslationMonitor:
                         self.logger.info(f"[MONITOR_DEBUG] ✅ Оверлей создан успешно")
                         template_data['overlay'] = new_overlay
                         template_data['last_template_position'] = current_template_pos
-                        new_overlay._is_visible_by_user = True
+                        # ИСПРАВЛЕНИЕ: только при обнаружении шаблона устанавливаем _is_visible_by_user = True
+                        new_overlay._is_visible_by_user = True  # <-- ШАБЛОН НАЙДЕН, МОЖНО ПОКАЗЫВАТЬ
                         new_overlay._hidden_by_user = False
                         new_overlay._is_auto_replace = True
                         new_overlay._creation_time = time.time()

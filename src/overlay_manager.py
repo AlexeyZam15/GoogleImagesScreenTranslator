@@ -531,6 +531,7 @@ class OverlayManager:
         self.logger.info(f"[OVERLAY_MANAGER] target_hwnd={target_hwnd}, app_name={app_name}")
 
         # 1. Удаляем шаблон из монитора (если есть template_id)
+        # ИСПРАВЛЕНИЕ: теперь удаляем шаблон ВСЕГДА при удалении оверлея
         if hasattr(overlay, '_template_id') and overlay._template_id:
             template_id = overlay._template_id
             self.logger.info(f"[OVERLAY_MANAGER] Найден template_id: {template_id}")
@@ -702,9 +703,8 @@ class OverlayManager:
                         self.logger.info(
                             f"[STATE] Окно для {app_name} не найдено, оверлей будет скрыт до появления окна")
 
-                # Если окно не найдено — создаём оверлей, но НЕ показываем его
-                # и НЕ добавляем в шаблоны для монитора (потому что монитор всё равно не сможет его найти)
-                show_immediately = False  # Всегда скрываем при восстановлении
+                # Всегда скрываем при восстановлении
+                show_immediately = False
 
                 # Создаём оверлей (скрытый)
                 overlay = self._create_overlay_from_data(
@@ -726,6 +726,15 @@ class OverlayManager:
                 )
 
                 if overlay:
+                    # ИСПРАВЛЕНИЕ: НЕ устанавливаем _is_visible_by_user = True для автозамены
+                    # Оверлей будет показан только когда монитор найдёт шаблон
+                    if is_auto_replace:
+                        overlay._is_visible_by_user = False  # <-- ЖДЁМ НАХОЖДЕНИЯ ШАБЛОНА
+                        overlay._hidden_by_user = False
+                    else:
+                        overlay._is_visible_by_user = True
+                        overlay._hidden_by_user = False
+
                     restored_count += 1
                     all_overlays.append(overlay)
 
@@ -759,9 +768,6 @@ class OverlayManager:
 
         self._restoring = False
 
-        # === ПРОХОД 2: НЕ ПОКАЗЫВАЕМ ОВЕРЛЕИ ПРИ ЗАПУСКЕ ===
-        # Оверлеи будут показаны только когда пользователь переключится на окно
-        # или TranslationMonitor найдёт шаблон
         self.logger.info(f"[STATE] Создано {restored_count} оверлеев (все скрыты)")
 
         # === ПРОХОД 3: Восстанавливаем шаблоны в мониторе (только для существующих окон) ===
@@ -1116,8 +1122,22 @@ class OverlayManager:
 
         try:
             if overlay in self.overlays:
+                # ИСПРАВЛЕНИЕ: перед удалением убеждаемся, что шаблон будет удалён
+                # remove_overlay теперь удаляет шаблон автоматически
                 self.remove_overlay(overlay)
                 self.logger.info("[DEBUG] Оверлей удален")
+
+                # Дополнительно проверяем, что шаблон удалён из монитора
+                if hasattr(self.parent, 'translation_monitor') and self.parent.translation_monitor:
+                    monitor = self.parent.translation_monitor
+                    if overlay._template_id:
+                        for template_data in monitor.templates[:]:
+                            if template_data.get('hash') == overlay._template_id:
+                                monitor.templates.remove(template_data)
+                                self.logger.info(
+                                    f"[DEBUG] Шаблон {overlay._template_id[:8]} удалён из монитора (дополнительная проверка)"
+                                )
+                                break
             else:
                 self.logger.warning("[DEBUG] Оверлей уже удален из списка")
         except Exception as e:

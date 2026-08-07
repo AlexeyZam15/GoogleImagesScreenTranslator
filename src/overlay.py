@@ -949,10 +949,11 @@ class OverlayWindow:
             self.logger.info("[DEBUG] show_immediately=True, показываем оверлей")
             self._stop_visibility_monitor()
 
-            # Если режим редактирования включён - сразу показываем панель
+            # Если режим редактирования включён - сразу показываем рамку
+            # ИСПРАВЛЕНИЕ: вызов _show_title_bar() заменён на _show_edit_frame()
             if self._edit_mode_enabled:
-                self._show_title_bar()
-                self.logger.info("[DEBUG] Режим редактирования: панель показана сразу")
+                self._show_edit_frame()
+                self.logger.info("[DEBUG] Режим редактирования: рамка показана сразу")
         else:
             self.logger.info("[DEBUG] show_immediately=False, оверлей сохранен но НЕ показан")
             if self.auto_hide_enabled:

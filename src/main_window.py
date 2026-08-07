@@ -414,8 +414,16 @@ class MainWindow:
 
     def update_status(self, text, color='white'):
         """Обновляет статус"""
+        self.logger.info(f"[STATUS_UI] update_status вызван: text='{text}', color='{color}'")
         if self.status:
-            self.status.config(text=text, fg=color)
+            try:
+                self.status.config(text=text, fg=color)
+                self.status.update_idletasks()
+                self.logger.info(f"[STATUS_UI] Статус обновлён: '{text}'")
+            except Exception as e:
+                self.logger.error(f"[STATUS_UI] Ошибка обновления статуса: {e}")
+        else:
+            self.logger.warning("[STATUS_UI] self.status отсутствует!")
 
     def set_settings_menu_enabled(self, enabled):
         """Блокирует/разблокирует меню настроек и хоткеев"""
