@@ -171,20 +171,27 @@ class OCRProcessor:
         ]
 
     def merge_overlapping_boxes(self, results: List, iou_threshold: float = 0.05, shrink_pixels: int = 0,
-                                gap_threshold: float = 30) -> List:
+                                gap_coefficient: float = 0.5, max_gap: float = 50) -> List:
         """
-        Объединение bounding boxes по расстоянию между границами (gap).
+        Объединение bounding boxes по относительному gap.
 
         Объединяет зоны если:
-        1. Расстояние между границами (вертикальный gap) < gap_threshold
+        1. Вертикальный gap < min(высота_зоны1, высота_зоны2) * gap_coefficient
         2. И зоны перекрываются по X (находятся в одном столбце)
+        3. И gap < max_gap (ограничение сверху, чтобы не объединять слишком далёкие зоны)
+
+        Args:
+            results: Список (bbox, text, confidence)
+            gap_coefficient: Коэффициент для вычисления порога от высоты зон
+            max_gap: Максимальный абсолютный gap (ограничение сверху)
         """
         if not results:
             return results
 
         results = results.copy()
 
-        self.logger.info(f"  Объединение ПО GAP: вертикальный gap < {gap_threshold}px")
+        self.logger.info(
+            f"  Объединение ПО ОТНОСИТЕЛЬНОМУ GAP: gap < min(h1,h2) * {gap_coefficient} (макс {max_gap}px)")
 
         merged = []
         used_indices = set()
@@ -194,24 +201,36 @@ class OCRProcessor:
                 continue
 
             current_bbox, current_text, current_conf = results[i]
+            current_height = current_bbox[2][1] - current_bbox[0][1]
 
             for j in range(i + 1, len(results)):
                 if j in used_indices:
                     continue
 
                 bbox_j, text_j, conf_j = results[j]
+                bbox_j_height = bbox_j[2][1] - bbox_j[0][1]
 
+                # Перекрытие по X
                 x_overlap = max(0, min(current_bbox[2][0], bbox_j[2][0]) - max(current_bbox[0][0], bbox_j[0][0]))
                 min_width = min(current_bbox[2][0] - current_bbox[0][0], bbox_j[2][0] - bbox_j[0][0])
                 x_overlap_ratio = x_overlap / min_width if min_width > 0 else 0
 
+                # Вычисляем gap между границами
                 gap = self.calculate_gap(current_bbox, bbox_j)
 
-                should_merge = (gap < gap_threshold and x_overlap_ratio > 0.1)
+                # Относительный порог: зависит от высоты зон
+                min_height = min(current_height, bbox_j_height)
+                relative_threshold = min_height * gap_coefficient
+
+                # Ограничение сверху
+                effective_threshold = min(relative_threshold, max_gap)
+
+                # Объединяем если gap < порога И есть перекрытие по X
+                should_merge = (gap < effective_threshold and x_overlap_ratio > 0.1)
 
                 if should_merge:
                     self.logger.info(
-                        f"    ✅ ОБЪЕДИНЯЕМ '{current_text[:20]}' и '{text_j[:20]}' (gap={gap:.1f}px, X_ov={x_overlap_ratio:.2f})")
+                        f"    ✅ ОБЪЕДИНЯЕМ '{current_text[:20]}' и '{text_j[:20]}' (gap={gap:.1f}px, мин.высота={min_height}px, порог={effective_threshold:.1f}px, X_ov={x_overlap_ratio:.2f})")
 
                     if text_j not in current_text:
                         current_text = current_text + " " + text_j
@@ -226,13 +245,14 @@ class OCRProcessor:
                         [max(x_coords), max(y_coords)],
                         [min(x_coords), max(y_coords)]
                     ]
+                    current_height = current_bbox[2][1] - current_bbox[0][1]
 
                     used_indices.add(j)
                 else:
-                    if gap < gap_threshold * 2:
+                    if gap < effective_threshold * 2:
                         reason = []
-                        if gap >= gap_threshold:
-                            reason.append(f"gap={gap:.1f}px >= {gap_threshold}")
+                        if gap >= effective_threshold:
+                            reason.append(f"gap={gap:.1f}px >= порог={effective_threshold:.1f}px")
                         if x_overlap_ratio <= 0.1:
                             reason.append(f"X_ov={x_overlap_ratio:.2f} <= 0.1")
                         self.logger.info(
@@ -284,15 +304,11 @@ class OCRProcessor:
 
         self.logger.info(f"  До фильтрации: {len(results)} областей")
 
-        # === ФИЛЬТРУЕМ ЗОНЫ ДО ОБЪЕДИНЕНИЯ ===
+        # Фильтруем зоны (только с буквами)
         filtered_results = []
         for bbox, text, confidence in results:
-            # Удаляем пробелы и спецсимволы для проверки
             clean_text = re.sub(r'[\s\-_/\\.,:;!?()#\'"`]', '', text)
-
-            # Проверяем, есть ли буквы в тексте
             has_letters = any(c.isalpha() for c in clean_text)
-
             if has_letters:
                 filtered_results.append((bbox, text, confidence))
             else:
@@ -301,7 +317,6 @@ class OCRProcessor:
         self.logger.info(
             f"  После фильтрации: {len(filtered_results)} областей (удалено {len(results) - len(filtered_results)})")
 
-        # Сохраняем копию ДО объединения для лога
         results_before_merge = filtered_results.copy()
 
         if save_debug:
@@ -309,7 +324,6 @@ class OCRProcessor:
                 if filtered_results:
                     debug_image = self.draw_bboxes_with_ids(original_image.copy(), filtered_results)
                 else:
-                    # Если нет зон, показываем пустую картинку
                     debug_image = original_image.copy()
 
                 if debug_dir is None:
@@ -328,13 +342,17 @@ class OCRProcessor:
             except Exception as e:
                 self.logger.warning(f"  Не удалось сохранить отладку: {e}")
 
-        # Объединяем области (ТОЛЬКО отфильтрованные)
-        merged_results = self.merge_overlapping_boxes(filtered_results, iou_threshold=0.05, gap_threshold=30)
+        # Объединяем области с ОТНОСИТЕЛЬНЫМ gap
+        merged_results = self.merge_overlapping_boxes(
+            filtered_results,
+            iou_threshold=0.05,
+            gap_coefficient=0.5,  # <-- 50% от высоты зоны
+            max_gap=50  # <-- максимум 50px
+        )
 
         self.logger.info(f"  После объединения: {len(merged_results)} областей")
         self.logger.info(f"  ⏱️ Время OCR: {elapsed_time:.2f}с")
 
-        # Сохраняем лог зон
         if save_debug:
             try:
                 if debug_dir is None:
@@ -353,7 +371,8 @@ class OCRProcessor:
                     image_path=image_path,
                     debug_dir=debug_dir,
                     debug_prefix=debug_prefix,
-                    gap_threshold=30,
+                    gap_coefficient=0.5,
+                    max_gap=50,
                     shrink_pixels=0
                 )
             except Exception as e:
@@ -390,7 +409,8 @@ class OCRProcessor:
         return regions
 
     def save_zones_log(self, results_before: List, results_after: List, image_path: Path, debug_dir: Path,
-                       debug_prefix: str = None, gap_threshold: float = 30, shrink_pixels: int = 0) -> Path:
+                       debug_prefix: str = None, gap_coefficient: float = 0.5, max_gap: float = 50,
+                       shrink_pixels: int = 0) -> Path:
         """Сохраняет лог с информацией о зонах"""
         if debug_prefix is None:
             debug_prefix = image_path.stem
@@ -408,9 +428,11 @@ class OCRProcessor:
             image = self.load_image(image_path)
             h, w = image.shape[:2]
             f.write(f"📐 Размер: {w}x{h}\n")
-            f.write(f"🔧 Параметры: gap порог = {gap_threshold}px, сжатие = {shrink_pixels}px\n")
+            f.write(
+                f"🔧 Параметры: коэф. gap = {gap_coefficient}, макс. gap = {max_gap}px, сжатие = {shrink_pixels}px\n")
             f.write("\n" + "-" * 70 + "\n\n")
 
+            # ЗОНЫ ДО ОБЪЕДИНЕНИЯ
             f.write(f"📌 ЗОНЫ ДО ОБЪЕДИНЕНИЯ ({len(results_before)} областей):\n")
             f.write("-" * 50 + "\n")
             for idx, (bbox, text, confidence) in enumerate(results_before, 1):
@@ -418,13 +440,15 @@ class OCRProcessor:
                 y_coords = [p[1] for p in bbox]
                 x1, y1 = int(min(x_coords)), int(min(y_coords))
                 x2, y2 = int(max(x_coords)), int(max(y_coords))
+                height = y2 - y1
                 f.write(f"  #{idx}: '{text}'\n")
                 f.write(f"     Уверенность: {confidence:.3f}\n")
                 f.write(f"     Координаты: ({x1}, {y1}) - ({x2}, {y2})\n")
-                f.write(f"     Размер: {x2 - x1}x{y2 - y1}\n")
+                f.write(f"     Размер: {x2 - x1}x{height}\n")
             f.write("\n" + "-" * 70 + "\n\n")
 
-            f.write(f"🔍 ПРОВЕРКА GAP (вертикальный gap < {gap_threshold}px):\n")
+            # ПРОВЕРКА GAP
+            f.write(f"🔍 ПРОВЕРКА GAP (gap < min(h1,h2) * {gap_coefficient}, макс {max_gap}px):\n")
             f.write("-" * 50 + "\n")
 
             any_merged = False
@@ -439,20 +463,27 @@ class OCRProcessor:
 
                     gap = self.calculate_gap(bbox_i, bbox_j)
 
-                    should_merge = (gap < gap_threshold and x_overlap_ratio > 0.1)
+                    height_i = bbox_i[2][1] - bbox_i[0][1]
+                    height_j = bbox_j[2][1] - bbox_j[0][1]
+                    min_height = min(height_i, height_j)
+                    threshold = min(min_height * gap_coefficient, max_gap)
 
-                    if gap < gap_threshold * 2:
+                    should_merge = (gap < threshold and x_overlap_ratio > 0.1)
+
+                    if gap < threshold * 2 or x_overlap_ratio > 0.1:
                         text_i = results_before[i][1]
                         text_j = results_before[j][1]
                         status = "✅ ОБЪЕДИНЯЕМ" if should_merge else "❌ НЕ объединяем"
                         f.write(f"  {status}: '{text_i}' vs '{text_j}'\n")
-                        f.write(f"     gap = {gap:.1f}px, X_ov = {x_overlap_ratio:.2f}\n")
+                        f.write(
+                            f"     gap = {gap:.1f}px, мин.высота = {min_height}px, порог = {threshold:.1f}px, X_ov = {x_overlap_ratio:.2f}\n")
                         any_merged = True
 
             if not any_merged:
-                f.write("  (нет зон с gap < порога)\n")
+                f.write("  (нет зон для объединения)\n")
             f.write("\n" + "-" * 70 + "\n\n")
 
+            # ЗОНЫ ПОСЛЕ ОБЪЕДИНЕНИЯ
             f.write(f"📌 ЗОНЫ ПОСЛЕ ОБЪЕДИНЕНИЯ ({len(results_after)} областей):\n")
             f.write("-" * 50 + "\n")
             for idx, (bbox, text, confidence) in enumerate(results_after, 1):
