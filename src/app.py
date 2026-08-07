@@ -2426,7 +2426,20 @@ class ScreenshotTranslatorApp:
                 else:
                     self.logger.info("[SETTINGS] Браузер не готов, перезапуск отложен")
 
-        self.ui.update_status("● " + self.ui.get_string('ready'), '#4CAF50')
+        # === НОВЫЙ КОД: ОБНОВЛЕНИЕ СТАТУСА ПРИ СМЕНЕ ЯЗЫКА ===
+        # Обновляем статус, если приложение готово
+        if self.ready:
+            engine = self.settings.get_translator_engine()
+            engine_name = "Google Translate" if engine == "google" else "Яндекс.Переводчик (OCR)"
+            self.ui.update_status(
+                f"● {self.ui.get_string('ready')} ({engine_name})",
+                '#4CAF50'
+            )
+        elif hasattr(self, 'initializing') and self.initializing:
+            self.ui.update_status(
+                "● " + self.ui.get_string('starting_browser'),
+                '#ff9800'
+            )
 
     def reset_settings(self):
         import tkinter.messagebox as messagebox

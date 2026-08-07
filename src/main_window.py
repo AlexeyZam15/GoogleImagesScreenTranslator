@@ -328,6 +328,39 @@ class MainWindow:
                 bg='#4CAF50' if is_enabled else '#3c3c3c'
             )
 
+        # === НОВЫЙ КОД: ОБНОВЛЕНИЕ СТАТУСА ПРИ СМЕНЕ ЯЗЫКА ===
+        # Проверяем, есть ли статусная строка и приложение инициализировано
+        if self.status and hasattr(self.app, 'ready'):
+            current_text = self.status.cget('text')
+
+            # Получаем текущий цвет статуса, чтобы определить состояние
+            current_color = self.status.cget('fg')
+
+            # Если приложение ещё не готово (инициализация)
+            if not self.app.ready:
+                # Обновляем статус на локализованную версию "Запуск браузера..."
+                if hasattr(self.app, 'initializing') and self.app.initializing:
+                    self.status.config(
+                        text="● " + self.get_string('starting_browser'),
+                        fg='#ff9800'
+                    )
+                else:
+                    # Если приложение не инициализируется, но и не готово
+                    self.status.config(
+                        text="● " + self.get_string('starting'),
+                        fg='#ff9800'
+                    )
+            else:
+                # Приложение готово — обновляем статус с учётом языка
+                # Получаем текущий движок для отображения в статусе
+                engine = self.app.settings.get_translator_engine()
+                engine_name = "Google Translate" if engine == "google" else "Яндекс.Переводчик (OCR)"
+                ready_text = self.get_string('ready')
+                self.status.config(
+                    text=f"● {ready_text} ({engine_name})",
+                    fg='#4CAF50'
+                )
+
         # Сохраняем состояние готовности приложения
         is_ready = False
         if hasattr(self.app, 'ready') and self.app.ready:
