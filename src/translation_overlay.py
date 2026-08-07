@@ -16,21 +16,20 @@ class TranslationOverlay:
 
     def __init__(self, parent=None, settings=None):
         self.parent = parent
-        self.settings = settings  # <-- СОХРАНЯЕМ НАСТРОЙКИ
+        self.settings = settings
         self.root = None
         self.progress = None
         self.status_label = None
         self.visible = False
         self._stop_animation = False
-        self._status_text = self.get_string('translation_status_translating')  # <-- ЛОКАЛИЗОВАНО
+        self._status_text = self.get_string('translation_status_translating')
         self._close_after = None
         self.logger = logging.getLogger(__name__)
+        self._app = None  # <-- ДОБАВЛЯЕМ ССЫЛКУ НА ПРИЛОЖЕНИЕ
 
-    def get_string(self, key: str) -> str:
-        """Возвращает локализованную строку через settings"""
-        if self.settings:
-            return self.settings.get_string(key)
-        return key  # Fallback
+    def set_app(self, app):
+        """Устанавливает ссылку на приложение для отмены перевода"""
+        self._app = app
 
     def _create_window(self):
         """Создает окно оверлея как Toplevel от главного окна"""
@@ -91,7 +90,7 @@ class TranslationOverlay:
 
             self.status_label = tk.Label(
                 main,
-                text=self._status_text,  # <-- ИСПОЛЬЗУЕТ ЛОКАЛИЗОВАННУЮ СТРОКУ
+                text=self._status_text,
                 bg='#1e1e1e',
                 fg='#4CAF50',
                 font=('Segoe UI', 14, 'bold')
@@ -138,7 +137,13 @@ class TranslationOverlay:
             self.progress.start(10)
             self._update_status_animation()
 
-            self.root.bind('<Escape>', self._on_escape)
+            # === НОВЫЙ ОБРАБОТЧИК ESC НАД ИНДИКАТОРОМ ===
+            # Привязываем ESC к окну индикатора
+            self.root.bind('<Escape>', self._on_esc_over_indicator)
+            self.status_label.bind('<Escape>', self._on_esc_over_indicator)
+            self.progress.bind('<Escape>', self._on_esc_over_indicator)
+            main.bind('<Escape>', self._on_esc_over_indicator)
+
             if self.root.winfo_exists():
                 self.root.bind('<Button-1>', lambda e: "break")
                 self.root.bind('<ButtonRelease-1>', lambda e: "break")
@@ -151,6 +156,48 @@ class TranslationOverlay:
             import traceback
             traceback.print_exc()
             self.visible = False
+
+    def _on_esc_over_indicator(self, event):
+        """
+        Обработчик ESC, когда курсор мыши находится над индикатором перевода.
+        Отменяет текущий перевод.
+        """
+        self.logger.info("[INDICATOR] ESC нажат над индикатором перевода")
+
+        # Проверяем, находится ли курсор мыши над индикатором
+        try:
+            import win32api
+            import win32gui
+
+            cursor_pos = win32api.GetCursorPos()
+            cursor_x, cursor_y = cursor_pos
+
+            if self.root and self.root.winfo_exists():
+                rect = win32gui.GetWindowRect(int(self.root.winfo_id()))
+                x1, y1, x2, y2 = rect
+
+                if x1 <= cursor_x <= x2 and y1 <= cursor_y <= y2:
+                    self.logger.info("[INDICATOR] Курсор над индикатором, отменяем перевод")
+
+                    # Отменяем перевод через приложение
+                    if self._app and hasattr(self._app, '_cancel_translation'):
+                        self._app._cancel_translation()
+                        self.logger.info("[INDICATOR] Перевод отменён")
+                        return "break"
+                    else:
+                        self.logger.warning("[INDICATOR] Не удалось отменить перевод: нет ссылки на приложение")
+                else:
+                    self.logger.info("[INDICATOR] Курсор не над индикатором, игнорируем ESC")
+        except Exception as e:
+            self.logger.warning(f"[INDICATOR] Ошибка проверки положения курсора: {e}")
+
+        return "break"
+
+    def get_string(self, key: str) -> str:
+        """Возвращает локализованную строку через settings"""
+        if self.settings:
+            return self.settings.get_string(key)
+        return key  # Fallback
 
     def show(self, text=None):
         """Показывает оверлей с индикатором"""

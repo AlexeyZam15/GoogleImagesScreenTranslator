@@ -649,7 +649,6 @@ class OverlayManager:
 
         restored_count = 0
         templates_to_restore = []
-        overlays_to_show = []
         all_overlays = []
 
         # === ПРОХОД 1: Создаём все оверлеи (скрытыми) ===
@@ -690,11 +689,22 @@ class OverlayManager:
                     except:
                         pass
 
+                # === ПРОВЕРЯЕМ, СУЩЕСТВУЕТ ЛИ ОКНО ===
                 target_hwnd_to_use = None
+                window_exists = False
+
                 if app_name != 'Неизвестно':
                     target_hwnd_to_use = self._find_window_by_app_name(app_name)
-                    if not target_hwnd_to_use:
-                        self.logger.info(f"[STATE] Окно для {app_name} не найдено")
+                    if target_hwnd_to_use:
+                        window_exists = True
+                        self.logger.info(f"[STATE] Найдено окно для {app_name}: HWND={target_hwnd_to_use}")
+                    else:
+                        self.logger.info(
+                            f"[STATE] Окно для {app_name} не найдено, оверлей будет скрыт до появления окна")
+
+                # Если окно не найдено — создаём оверлей, но НЕ показываем его
+                # и НЕ добавляем в шаблоны для монитора (потому что монитор всё равно не сможет его найти)
+                show_immediately = False  # Всегда скрываем при восстановлении
 
                 # Создаём оверлей (скрытый)
                 overlay = self._create_overlay_from_data(
@@ -704,7 +714,7 @@ class OverlayManager:
                     is_auto_replace=is_auto_replace,
                     is_window_screenshot=is_window_screenshot,
                     template_id=template_id,
-                    show_immediately=False,  # <-- НЕ ПОКАЗЫВАЕМ СРАЗУ
+                    show_immediately=False,  # <-- НЕ ПОКАЗЫВАЕМ
                     saved_x=saved_x,
                     saved_y=saved_y,
                     saved_w=saved_w,
@@ -722,12 +732,8 @@ class OverlayManager:
                     if overlay not in self.overlays:
                         self.overlays.append(overlay)
 
-                    # Сохраняем для показа
-                    if state.get('visible', False) and not state.get('hidden_by_user', False):
-                        overlays_to_show.append(overlay)
-
-                    # Для автозамены: сохраняем шаблон для восстановления
-                    if is_auto_replace and template_id:
+                    # Для автозамены: сохраняем шаблон ТОЛЬКО если окно существует
+                    if is_auto_replace and template_id and window_exists:
                         templates_to_restore.append({
                             'template_id': template_id,
                             'overlay': overlay,
@@ -744,38 +750,33 @@ class OverlayManager:
                             'translated_path': image_path,
                             'window_rect': window_rect
                         })
+                    elif is_auto_replace and template_id and not window_exists:
+                        self.logger.info(
+                            f"[STATE] Шаблон {template_id[:8]} не восстановлен (окно {app_name} не найдено)")
 
             except Exception as e:
                 self.logger.error(f"[STATE] Ошибка восстановления оверлея {key}: {e}")
 
         self._restoring = False
 
-        # === ПРОХОД 2: Показываем все оверлеи (пакетно) ===
-        if overlays_to_show:
-            self.logger.info(f"[STATE] Пакетный показ {len(overlays_to_show)} оверлеев...")
-            for overlay in overlays_to_show:
-                try:
-                    if overlay._is_visible_by_user and not overlay.visible:
-                        overlay.visible = True
-                        overlay.root.deiconify()
-                        overlay.root.lift()
-                        overlay._ensure_topmost()
-                except Exception as e:
-                    self.logger.warning(f"[STATE] Ошибка показа оверлея: {e}")
+        # === ПРОХОД 2: НЕ ПОКАЗЫВАЕМ ОВЕРЛЕИ ПРИ ЗАПУСКЕ ===
+        # Оверлеи будут показаны только когда пользователь переключится на окно
+        # или TranslationMonitor найдёт шаблон
+        self.logger.info(f"[STATE] Создано {restored_count} оверлеев (все скрыты)")
 
-        # === ПРОХОД 3: Восстанавливаем шаблоны в мониторе ===
+        # === ПРОХОД 3: Восстанавливаем шаблоны в мониторе (только для существующих окон) ===
         if parent_app and hasattr(parent_app, 'translation_monitor'):
             monitor = parent_app.translation_monitor
             if monitor and templates_to_restore:
                 self.logger.info(f"[STATE] Восстановление {len(templates_to_restore)} шаблонов в мониторе...")
                 for template_info in templates_to_restore:
                     try:
-                        # ... логика восстановления шаблонов (без изменений)
                         template_id = template_info['template_id']
                         overlay = template_info['overlay']
                         target_hwnd = template_info['target_hwnd']
                         app_name = template_info['app_name']
 
+                        # Проверяем, есть ли уже такой шаблон в мониторе
                         template_exists = False
                         for template in monitor.templates:
                             if template.get('hash') == template_id:
@@ -841,6 +842,7 @@ class OverlayManager:
                 if parent_app.settings.get_auto_replace_translated() and monitor.templates:
                     if not monitor.is_running():
                         monitor.start()
+                        self.logger.info(f"[STATE] Монитор запущен с {len(monitor.templates)} шаблонами")
 
         self.logger.info(f"[STATE] Восстановлено {restored_count} оверлеев")
 

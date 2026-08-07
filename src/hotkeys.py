@@ -5,6 +5,7 @@
 import logging
 import time
 import keyboard
+import win32con
 
 
 class HotkeyManager:
@@ -38,31 +39,6 @@ class HotkeyManager:
         self._f3_timer = None
         self._f3_hold_triggered = False
 
-    def _on_esc_pressed(self, event):
-        """Обработчик нажатия ESC - отменяет текущий перевод"""
-        if self._hotkeys_blocked:
-            return True
-
-        # Проверяем, есть ли активный перевод
-        if hasattr(self.app, '_translation_in_progress') and self.app._translation_in_progress:
-            self.logger.info("[HOTKEYS] ESC нажат - отменяем перевод")
-            if hasattr(self.app, '_cancel_translation'):
-                self.app._cancel_translation()
-            return False  # Блокируем ESC
-
-        # Проверяем режим захвата области
-        if hasattr(self.app, '_capture_mode') and self.app._capture_mode:
-            self.logger.info("[HOTKEYS] ESC нажат - выходим из режима захвата")
-            # Если есть area_selector, передаём ему ESC
-            if hasattr(self.app, '_area_selector') and self.app._area_selector:
-                try:
-                    self.app._area_selector._close_capture(False)
-                except:
-                    pass
-            return False  # Блокируем ESC
-
-        return True  # Пропускаем ESC дальше (если не перехвачен)
-
     def setup(self):
         """Настраивает горячие клавиши"""
         self.logger.info("=" * 60)
@@ -75,14 +51,12 @@ class HotkeyManager:
 
             self._hotkey_actions = self.settings.get_all_hotkeys()
 
-            # Регистрируем ВСЕ клавиши через on_press_key с suppress=True
+            # Регистрируем все клавиши через on_press_key с suppress=True
             for action, hotkey in self._hotkey_actions.items():
                 if action == 'area':
-                    # F3 обрабатываем отдельно
                     continue
                 if hotkey:
                     try:
-                        # Используем on_press_key вместо add_hotkey для полной блокировки
                         keyboard.on_press_key(hotkey, lambda e, a=action: self._queue_action(a), suppress=True)
                         self.logger.info(f"[HOTKEYS] Зарегистрировано (блокировка): {hotkey} -> {action}")
                     except Exception as e:
@@ -90,18 +64,12 @@ class HotkeyManager:
 
             # Регистрируем F3 отдельно для обработки длительного зажатия
             try:
+                keyboard.unhook_key('f3')
                 keyboard.on_press_key('f3', self._on_f3_down, suppress=True)
                 keyboard.on_release_key('f3', self._on_f3_up, suppress=True)
                 self.logger.info("[HOTKEYS] Зарегистрировано: F3 (с поддержкой длительного зажатия, блокировка)")
             except Exception as e:
                 self.logger.warning(f"[HOTKEYS] Не удалось зарегистрировать F3: {e}")
-
-            # Регистрируем ESC для отмены перевода
-            try:
-                keyboard.on_press_key('esc', self._on_esc_pressed, suppress=True)
-                self.logger.info("[HOTKEYS] Зарегистрировано: ESC (отмена перевода, блокировка)")
-            except Exception as e:
-                self.logger.warning(f"[HOTKEYS] Не удалось зарегистрировать ESC: {e}")
 
             self._hotkey_hook_active = True
             self.logger.info("[HOTKEYS] Горячие клавиши зарегистрированы (все с блокировкой)")
@@ -123,11 +91,12 @@ class HotkeyManager:
             try:
                 if hasattr(self.app, 'root') and self.app.root:
                     self.app.root.after_cancel(self._f3_timer)
-            except:
-                pass
+                    self.logger.info("[HOTKEYS] Старый таймер F3 отменён")
+            except Exception as e:
+                self.logger.warning(f"[HOTKEYS] Ошибка отмены таймера: {e}")
             self._f3_timer = None
 
-        # Запускаем таймер на HOLD_THRESHOLD_MS
+        # Запускаем новый таймер
         if hasattr(self.app, 'root') and self.app.root:
             self._f3_timer = self.app.root.after(
                 self.HOLD_THRESHOLD_MS,
@@ -148,17 +117,22 @@ class HotkeyManager:
                 if hasattr(self.app, 'root') and self.app.root:
                     self.app.root.after_cancel(self._f3_timer)
                     self.logger.info("[HOTKEYS] Таймер F3 отменён (клавиша отпущена)")
-            except:
-                pass
+            except Exception as e:
+                self.logger.warning(f"[HOTKEYS] Ошибка отмены таймера: {e}")
             self._f3_timer = None
 
         # Если длительное зажатие НЕ сработало - выполняем обычное F3
         if not self._f3_hold_triggered:
             if self._f3_down_time > 0:
                 elapsed_ms = (time.time() - self._f3_down_time) * 1000
-                if elapsed_ms > 50:  # Игнорируем случайные срабатывания
-                    self.logger.info(f"[HOTKEYS] Короткое нажатие F3 ({elapsed_ms:.0f}мс) -> area")
+                self.logger.info(f"[HOTKEYS] Время удержания F3: {elapsed_ms:.0f}мс")
+                if elapsed_ms > 50 and elapsed_ms < self.HOLD_THRESHOLD_MS:
+                    self.logger.info("[HOTKEYS] Короткое нажатие F3 -> area")
                     self._queue_action('area')
+                elif elapsed_ms >= self.HOLD_THRESHOLD_MS:
+                    # Если таймер не сработал, но время удержания больше порога
+                    self.logger.info("[HOTKEYS] Длительное удержание F3 (таймер не сработал) -> fullscreen_ocr")
+                    self._queue_action('fullscreen_ocr')
                 self._f3_down_time = 0
         else:
             self.logger.info("[HOTKEYS] Длительное зажатие уже сработало, пропускаем")
@@ -169,6 +143,7 @@ class HotkeyManager:
         self.logger.info("[HOTKEYS] ⏰ Длительное зажатие F3 (500мс) -> fullscreen_ocr")
         self._f3_hold_triggered = True
         self._f3_timer = None
+        self._f3_down_time = 0
         self._queue_action('fullscreen_ocr')
 
     def _queue_action(self, action):
@@ -241,8 +216,32 @@ class HotkeyManager:
         self._hotkeys_blocked = blocked
         if blocked:
             self.logger.info("[HOTKEYS] Горячие клавиши заблокированы")
+            # Дополнительная блокировка через keyboard
+            try:
+                import keyboard
+                keyboard.block_key('f4')
+                keyboard.block_key('f1')
+                keyboard.block_key('f2')
+                keyboard.block_key('f3')
+                keyboard.block_key('f5')
+                keyboard.block_key('f6')
+                # НЕ БЛОКИРУЕМ ESC
+                # keyboard.block_key('esc')
+            except Exception as e:
+                self.logger.warning(f"[HOTKEYS] Не удалось заблокировать клавиши: {e}")
         else:
             self.logger.info("[HOTKEYS] Горячие клавиши разблокированы")
+            try:
+                import keyboard
+                keyboard.unblock_key('f4')
+                keyboard.unblock_key('f1')
+                keyboard.unblock_key('f2')
+                keyboard.unblock_key('f3')
+                keyboard.unblock_key('f5')
+                keyboard.unblock_key('f6')
+                # keyboard.unblock_key('esc')
+            except:
+                pass
 
     def cleanup(self):
         """Очищает все хуки"""

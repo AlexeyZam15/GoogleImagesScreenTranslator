@@ -31,6 +31,16 @@ class AreaSelector:
         """Закрывает окно захвата и восстанавливает состояние"""
         self.logger.info(f"[DEBUG] AreaSelector._close_capture(success={success}) - начало")
 
+        # Сначала закрываем окно
+        if self.root and self.root.winfo_exists():
+            try:
+                self.root.grab_release()
+                self.root.destroy()
+                self.logger.info("[DEBUG] Окно захвата закрыто")
+            except Exception as ex:
+                self.logger.error(f"[DEBUG] Ошибка закрытия окна захвата: {ex}")
+
+        # Потом восстанавливаем состояние
         try:
             if self.parent and hasattr(self.parent, 'root'):
                 self.parent.root.deiconify()
@@ -48,14 +58,6 @@ class AreaSelector:
                 self.logger.info("[DEBUG] Флаги захвата сброшены, хоткеи разблокированы")
         except Exception as ex:
             self.logger.error(f"[DEBUG] Ошибка сброса флагов захвата: {ex}")
-
-        try:
-            if self.root:
-                self.root.grab_release()
-                self.root.destroy()
-                self.logger.info("[DEBUG] Окно захвата закрыто")
-        except Exception as ex:
-            self.logger.error(f"[DEBUG] Ошибка закрытия окна захвата: {ex}")
 
         if success and self.callback and hasattr(self, '_selected_rect'):
             self.logger.info(f"[DEBUG] Вызов callback с rect={self._selected_rect}")
