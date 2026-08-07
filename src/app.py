@@ -1422,10 +1422,7 @@ class ScreenshotTranslatorApp:
             self.show_notification(self.get_string('overlay_toggle_no_overlays_for_app').format(app_name=current_app))
             return
 
-        # === ИСПРАВЛЕНИЕ: проверяем, есть ли видимые оверлеи ===
-        # Если автозамена включена и есть найденные шаблоны — показываем только их
-        # ИНАЧЕ показываем все оверлеи для этого приложения
-
+        # === ИСПРАВЛЕНИЕ: определяем, какие оверлеи показывать/скрывать ===
         auto_replace_enabled = self.settings.get_auto_replace_translated()
         overlays_to_toggle = []
 
@@ -1465,6 +1462,7 @@ class ScreenshotTranslatorApp:
             return
 
         # Проверяем, все ли оверлеи для этого приложения скрыты или видны
+        # === ИСПРАВЛЕНИЕ: проверяем ТОЛЬКО те оверлеи, которые собираемся переключать ===
         all_visible = all(ov.visible for ov in overlays_to_toggle)
         new_state = not all_visible
 
@@ -1486,6 +1484,18 @@ class ScreenshotTranslatorApp:
                     overlay.hide(by_user=True)
             except Exception as e:
                 self.logger.error(f"Ошибка при переключении оверлея: {e}")
+
+        # === ИСПРАВЛЕНИЕ: если скрываем, то скрываем ВСЕ оверлеи для этого приложения ===
+        if not new_state:
+            # Скрываем все оверлеи для этого приложения, даже те, что не были в overlays_to_toggle
+            for overlay in overlays_for_app:
+                if overlay not in overlays_to_toggle and overlay.visible:
+                    try:
+                        overlay._hidden_by_user = True
+                        overlay._is_visible_by_user = False
+                        overlay.hide(by_user=True)
+                    except Exception as e:
+                        self.logger.error(f"Ошибка при скрытии оверлея: {e}")
 
         # Сохраняем состояние
         self.overlay_manager.save_overlay_state()
@@ -1611,51 +1621,12 @@ class ScreenshotTranslatorApp:
                     except Exception as e:
                         self.logger.warning(f"[WINDOW] Ошибка скрытия оверлея: {e}")
 
-        # === ПОКАЗЫВАЕМ ОВЕРЛЕИ ДЛЯ ТЕКУЩЕГО ПРИЛОЖЕНИЯ ===
-        if active_app_name and active_app_name in self.overlay_manager.overlays_by_app_name:
-            overlays_for_app = self.overlay_manager.overlays_by_app_name[active_app_name]
+        # === ИСПРАВЛЕНИЕ: НЕ ПОКАЗЫВАЕМ ОВЕРЛЕИ ПРИ ПЕРЕКЛЮЧЕНИИ ===
+        # Оверлеи будут показаны только монитором при нахождении шаблона
+        # Удалена вся логика показа оверлеев
 
-            # Проверяем, есть ли автозамена и найденные шаблоны
-            auto_replace_enabled = self.settings.get_auto_replace_translated()
-            found_hashes = set()
-
-            if auto_replace_enabled and self.translation_monitor:
-                for template_data in self.translation_monitor.templates:
-                    if template_data.get('found', False):
-                        template_hash = template_data.get('hash')
-                        if template_hash:
-                            found_hashes.add(template_hash)
-
-            for overlay in overlays_for_app:
-                try:
-                    # Проверяем, должен ли оверлей быть виден
-                    should_show = False
-
-                    # Если оверлей скрыт пользователем — не показываем
-                    if overlay._hidden_by_user:
-                        continue
-
-                    # Если есть автозамена и шаблон найден — показываем
-                    if auto_replace_enabled and overlay._template_id:
-                        if overlay._template_id in found_hashes:
-                            should_show = True
-                        # Если нет найденных шаблонов, но оверлей был виден раньше — показываем
-                        elif not found_hashes and overlay._is_visible_by_user:
-                            should_show = True
-                    else:
-                        # Если автозамена выключена — показываем если должен быть виден
-                        if overlay._is_visible_by_user:
-                            should_show = True
-
-                    if should_show and not overlay.visible:
-                        overlay.show()
-                        self.logger.info(f"[WINDOW] Показан оверлей для {active_app_name}")
-                    elif not should_show and overlay.visible:
-                        overlay.hide(by_user=False)
-                        self.logger.info(f"[WINDOW] Скрыт оверлей для {active_app_name} (не должен быть виден)")
-
-                except Exception as e:
-                    self.logger.warning(f"[WINDOW] Ошибка показа/скрытия оверлея: {e}")
+        self.logger.info(
+            f"[WINDOW] Переключение на {active_app_name}, оверлеи будут показаны монитором при нахождении шаблонов")
 
     def toggle_edit_mode(self):
         """Переключает режим редактирования"""

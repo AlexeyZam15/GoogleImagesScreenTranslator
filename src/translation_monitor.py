@@ -93,7 +93,7 @@ class TranslationMonitor:
         self.logger.info("TranslationMonitor инициализирован")
 
     def _monitor_loop(self):
-        """Основной цикл мониторинга — оптимизированная версия"""
+        """Основной цикл мониторинга — оптимизированная версия с усиленной отладкой"""
         import win32gui
         from src.window_utils import get_process_name_by_hwnd
 
@@ -102,7 +102,7 @@ class TranslationMonitor:
 
         iteration_count = 0
         last_found_time = {}
-        debug_counter = 0  # Для ограничения вывода
+        debug_counter = 0
 
         while self.monitoring:
             try:
@@ -138,16 +138,14 @@ class TranslationMonitor:
                     time.sleep(0.02)
                     continue
 
-                # --- ОТЛАДОЧНЫЙ ВЫВОД ---
                 debug_counter += 1
-                if debug_counter % 50 == 0:  # Каждые 50 итераций
+                if debug_counter % 50 == 0:
                     active_app_name = get_process_name_by_hwnd(active_hwnd)
                     self.logger.info(
                         f"[MONITOR_DEBUG] Активное окно: HWND={active_hwnd}, App='{active_app_name}', "
                         f"шаблонов для этого приложения: {len([t for t in self.templates if t.get('target_app_name') == active_app_name])}"
                     )
 
-                # --- ИЗМЕНЕНИЕ: получаем имя активного приложения (один раз) ---
                 active_app_name = self._get_cached_app_name(active_hwnd)
                 self._last_active_app_name = active_app_name
 
@@ -165,7 +163,6 @@ class TranslationMonitor:
                         self._frame_cache = image
                         self._frame_cache_hwnd = active_hwnd
                         self._frame_cache_time = current_time
-                        # ОТЛАДКА: размер захваченного изображения
                         if debug_counter % 50 == 0:
                             self.logger.info(
                                 f"[MONITOR_DEBUG] Захвачено окно: {image.shape[1]}x{image.shape[0]}, HWND={active_hwnd}"
@@ -181,7 +178,7 @@ class TranslationMonitor:
                     time.sleep(0.02)
                     continue
 
-                # --- ИЗМЕНЕНИЕ: проверяем только шаблоны для активного приложения по имени ---
+                # Фильтруем шаблоны для активного приложения
                 active_templates = []
                 for template_data in self.templates:
                     if not template_data.get('enabled', True):
@@ -189,37 +186,83 @@ class TranslationMonitor:
                     target_app_name = template_data.get('target_app_name')
                     if target_app_name and target_app_name == active_app_name:
                         active_templates.append(template_data)
+                    elif not target_app_name or target_app_name == "Неизвестно":
+                        active_templates.append(template_data)
 
                 # Если нет активных шаблонов для этого приложения, пропускаем
                 if not active_templates:
+                    if debug_counter % 20 == 0:
+                        self.logger.info(
+                            f"[MONITOR_DEBUG] Нет активных шаблонов для {active_app_name}. "
+                            f"Всего шаблонов: {len(self.templates)}"
+                        )
                     time.sleep(0.02)
                     continue
 
-                # Используем локальные переменные для скорости
+                # Выводим информацию о шаблонах
+                if debug_counter % 20 == 0:
+                    self.logger.info(
+                        f"[MONITOR_DEBUG] Найдено {len(active_templates)} шаблонов для {active_app_name}"
+                    )
+                    for t in active_templates[:5]:
+                        t_hash = t.get('hash', 'unknown')[:8]
+                        t_w = t.get('template', None)
+                        t_size = f"{t_w.shape[1]}x{t_w.shape[0]}" if t_w is not None else "None"
+                        self.logger.info(
+                            f"[MONITOR_DEBUG]   Шаблон #{t.get('pair_index')} (hash={t_hash}), размер={t_size}"
+                        )
+
                 img_h, img_w = image.shape[:2]
 
-                for template_data in active_templates:
+                # === ОБРАБОТКА КАЖДОГО ШАБЛОНА С ОТЛАДКОЙ ===
+                self.logger.info(f"[MONITOR_DEBUG] НАЧАЛО ЦИКЛА ОБРАБОТКИ {len(active_templates)} шаблонов")
+                for idx, template_data in enumerate(active_templates):
+                    self.logger.info(f"[MONITOR_DEBUG] Цикл: шаблон #{idx} из {len(active_templates)}")
+
+                    # Проверяем enabled
                     if not template_data.get('enabled', True):
+                        self.logger.info(
+                            f"[MONITOR_DEBUG] Шаблон #{template_data.get('pair_index')} отключен (enabled=False)")
                         continue
 
-                    # Проверяем, не скрыт ли оверлей пользователем
-                    overlay = template_data.get('overlay')
-                    if overlay and not overlay._is_visible_by_user:
-                        continue
+                    # === ИСПРАВЛЕНИЕ: убрана проверка overlay._is_visible_by_user ===
+                    # Оверлей может быть невидимым, но это не должно блокировать поиск шаблона
+                    # Монитор должен искать шаблон и показывать оверлей, когда найдёт
 
                     # Проверка: не находили ли шаблон слишком недавно
                     pair_index = template_data.get('pair_index', 0)
+                    overlay = template_data.get('overlay')
                     if pair_index in last_found_time:
                         time_since_found = current_time - last_found_time[pair_index]
                         if template_data.get('found', False) and overlay and overlay.visible and time_since_found < 2.0:
+                            self.logger.info(
+                                f"[MONITOR_DEBUG] Шаблон #{pair_index} пропущен: найден недавно ({time_since_found:.2f}с назад)"
+                            )
                             continue
 
-                    # --- ИЗМЕНЕНИЕ: проверяем, активно ли приложение ---
-                    target_app_name = template_data.get('target_app_name')
-                    if target_app_name and target_app_name != active_app_name:
+                    # === ОТЛАДКА: ВЫВОДИМ ИНФОРМАЦИЮ О КАЖДОМ ШАБЛОНЕ ===
+                    self.logger.info(
+                        f"[MONITOR_DEBUG] Обработка шаблона #{pair_index}, "
+                        f"found={template_data.get('found', False)}, "
+                        f"overlay={overlay is not None}, "
+                        f"visible={overlay.visible if overlay else False}"
+                    )
+
+                    # Проверяем валидность шаблона
+                    template = template_data.get('template')
+                    if template is None:
+                        self.logger.warning(f"[MONITOR_DEBUG] Шаблон #{pair_index} имеет template=None, пропускаем")
                         continue
 
-                    # Ищем шаблон в окне
+                    t_h, t_w = template.shape[:2]
+                    if t_h > img_h or t_w > img_w:
+                        self.logger.warning(
+                            f"[MONITOR_DEBUG] Шаблон #{pair_index} слишком большой: {t_w}x{t_h} > окно {img_w}x{img_h}"
+                        )
+                        continue
+
+                    # === ВЫЗЫВАЕМ ПОИСК ===
+                    self.logger.info(f"[MONITOR_DEBUG] Вызов _find_in_window_optimized для шаблона #{pair_index}")
                     self._find_in_window_optimized(image, template_data, img_h, img_w)
 
                     if template_data.get('found', False):
@@ -342,57 +385,46 @@ class TranslationMonitor:
             return -1, None
 
     def _find_in_window_optimized(self, image: np.ndarray, template_data: Dict, img_h: int, img_w: int):
-        """Оптимизированная версия поиска шаблона"""
+        """Оптимизированная версия поиска шаблона с усиленной отладкой"""
+
         if image is None:
+            self.logger.warning("[MONITOR_DEBUG] _find_in_window: image is None")
             return
 
-        # === НОВАЯ ПРОВЕРКА: если монитор остановлен, не ищем ===
         if not self.monitoring:
+            self.logger.debug("[MONITOR_DEBUG] _find_in_window: monitoring is False, skipping")
             return
 
         idx = template_data.get('pair_index')
         template = template_data.get('template')
 
         if template is None:
-            self.logger.warning(f"Шаблон #{idx} пустой")
+            self.logger.warning(f"[MONITOR_DEBUG] Шаблон #{idx} пустой (template=None)")
             return
 
         t_h, t_w = template.shape[:2]
 
-        # ОТЛАДКА: проверяем размеры
+        # Проверка размеров
         if t_h > img_h or t_w > img_w:
+            self.logger.warning(f"[MONITOR_DEBUG] Шаблон #{idx} слишком большой: {t_w}x{t_h} > окно {img_w}x{img_h}")
             if template_data.get('found', False):
                 template_data['found'] = False
                 overlay = template_data.get('overlay')
                 if overlay and overlay.visible:
                     self._hide_overlay_in_main_thread(overlay, idx)
-            # ОТЛАДКА: выводим информацию о размерах (каждые 50 попыток)
-            if not hasattr(self, '_size_debug_counter'):
-                self._size_debug_counter = {}
-            if idx not in self._size_debug_counter:
-                self._size_debug_counter[idx] = 0
-            self._size_debug_counter[idx] += 1
-            if self._size_debug_counter[idx] % 50 == 0:
-                self.logger.warning(
-                    f"[MONITOR_DEBUG] Шаблон #{idx} слишком большой: {t_w}x{t_h} > окно {img_w}x{img_h}"
-                )
             return
 
         try:
+            # === ПОИСК ШАБЛОНА ===
+            self.logger.info(f"[MONITOR_DEBUG] Выполнение matchTemplate для шаблона #{idx}, размер={t_w}x{t_h}")
             result = cv2.matchTemplate(image, template, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, max_loc = cv2.minMaxLoc(result)
 
-            # ОТЛАДКА: выводим максимальное значение совпадения (каждые 100 попыток)
-            if not hasattr(self, '_match_debug_counter'):
-                self._match_debug_counter = {}
-            if idx not in self._match_debug_counter:
-                self._match_debug_counter[idx] = 0
-            self._match_debug_counter[idx] += 1
-            if self._match_debug_counter[idx] % 100 == 0:
-                self.logger.info(
-                    f"[MONITOR_DEBUG] Шаблон #{idx}: max_val={max_val:.3f}, порог={self.confidence_threshold:.3f}, "
-                    f"размер шаблона={t_w}x{t_h}"
-                )
+            # === ВСЕГДА ВЫВОДИМ ЗНАЧЕНИЕ СОВПАДЕНИЯ ===
+            self.logger.info(
+                f"[MONITOR_DEBUG] Шаблон #{idx}: max_val={max_val:.4f}, порог={self.confidence_threshold:.3f}, "
+                f"позиция=({max_loc[0]}, {max_loc[1]})"
+            )
 
             if max_val >= self.confidence_threshold:
                 template_x = max_loc[0]
@@ -400,7 +432,7 @@ class TranslationMonitor:
 
                 if not template_data.get('found', False):
                     template_data['found'] = True
-                    self.logger.info(f"Шаблон #{idx} найден с точностью {max_val:.3f}")
+                    self.logger.info(f"✅ Шаблон #{idx} найден с точностью {max_val:.3f}")
 
                 template_data['last_position'] = (template_x, template_y, t_w, t_h)
                 self._update_overlay(template_data, template_x, template_y, t_w, t_h)
@@ -412,7 +444,9 @@ class TranslationMonitor:
                         self._hide_overlay_in_main_thread(overlay, idx)
 
         except Exception as e:
-            self.logger.warning(f"Ошибка поиска шаблона #{idx}: {e}")
+            self.logger.error(f"[MONITOR_DEBUG] Ошибка поиска шаблона #{idx}: {e}")
+            import traceback
+            traceback.print_exc()
 
     def _capture_window(self, hwnd: int) -> Optional[np.ndarray]:
         """Оптимизированный захват окна с проверкой"""
@@ -640,30 +674,22 @@ class TranslationMonitor:
             overlay = template_data.get('overlay')
             target_app_name = template_data.get('target_app_name')
 
-            if overlay and not overlay._is_visible_by_user:
-                return
+            # === УБРАНА ПРОВЕРКА overlay._is_visible_by_user ===
+            # Оверлей может быть скрыт, но это не должно блокировать показ
 
             if self.overlay_manager and self.overlay_manager.is_dragging():
                 self.logger.debug(f"[MONITOR] Перетаскивание активно, пропускаем обновление шаблона #{pair_index}")
                 return
 
-            if target_app_name:
-                try:
-                    active_hwnd = win32gui.GetForegroundWindow()
-                    if active_hwnd:
-                        from src.window_utils import get_process_name_by_hwnd
-                        active_app_name = get_process_name_by_hwnd(active_hwnd)
-                        if active_app_name != target_app_name:
-                            if overlay and overlay.visible:
-                                self._hide_overlay_in_main_thread(overlay, pair_index)
-                            return
-                except Exception as e:
-                    self.logger.warning(f"[DEBUG] Ошибка проверки активного приложения: {e}")
+            # === УБРАНА ПРОВЕРКА АКТИВНОГО ПРИЛОЖЕНИЯ ===
+            # Проверка будет выполняться в _update_overlay_gui в главном потоке
 
             if self.parent and hasattr(self.parent, 'root'):
                 root = self.parent.root
                 if root and root.winfo_exists():
-                    # === НОВАЯ ПРОВЕРКА: передаем флаг monitoring в главный поток ===
+                    # === ВСЕГДА ВЫЗЫВАЕМ _update_overlay_gui, КОГДА ШАБЛОН НАЙДЕН ===
+                    self.logger.info(
+                        f"[MONITOR] Отправка _update_overlay_gui в главный поток для шаблона #{pair_index}")
                     root.after(0, lambda: self._update_overlay_gui(template_data, x, y, w, h, translated_path,
                                                                    template_id))
                 else:
@@ -699,45 +725,20 @@ class TranslationMonitor:
             if overlay:
                 self.logger.info(f"[MONITOR_DEBUG] overlay.visible={overlay.visible}")
                 self.logger.info(f"[MONITOR_DEBUG] overlay._is_visible_by_user={overlay._is_visible_by_user}")
+                self.logger.info(f"[MONITOR_DEBUG] overlay._hidden_by_user={overlay._hidden_by_user}")
 
             if not template_id:
                 template_id = template_data.get('hash')
 
+            # Если шаблон НЕ найден - скрываем оверлей
             if not is_found:
                 self.logger.info(f"[MONITOR_DEBUG] is_found=False, скрываем оверлей если виден")
                 if overlay and overlay.visible:
                     self._hide_overlay_in_main_thread(overlay, pair_index)
                 return
 
-            # === ПРОВЕРКА: активно ли окно для этого шаблона ===
-            try:
-                import win32gui
-                from src.window_utils import get_process_name_by_hwnd
-
-                active_hwnd = win32gui.GetForegroundWindow()
-                self.logger.info(f"[MONITOR_DEBUG] active_hwnd={active_hwnd}")
-
-                if active_hwnd:
-                    active_app_name = get_process_name_by_hwnd(active_hwnd)
-                    self.logger.info(f"[MONITOR_DEBUG] active_app_name='{active_app_name}'")
-                    self.logger.info(f"[MONITOR_DEBUG] target_app_name='{target_app_name}'")
-
-                    if target_app_name and target_app_name != "Неизвестно" and target_app_name != active_app_name:
-                        self.logger.info(
-                            f"[MONITOR_DEBUG] ❌ Активное окно '{active_app_name}' НЕ совпадает с '{target_app_name}'")
-                        if overlay and overlay.visible:
-                            self.logger.info(f"[MONITOR_DEBUG] Скрываем оверлей #{pair_index} (окно не активно)")
-                            self._hide_overlay_in_main_thread(overlay, pair_index)
-                        else:
-                            self.logger.info(f"[MONITOR_DEBUG] Оверлей уже скрыт или None")
-                        return
-                    else:
-                        self.logger.info(
-                            f"[MONITOR_DEBUG] ✅ Активное окно '{active_app_name}' совпадает с target_app_name='{target_app_name}'")
-                else:
-                    self.logger.info(f"[MONITOR_DEBUG] active_hwnd=0, пропускаем проверку")
-            except Exception as e:
-                self.logger.warning(f"[MONITOR] Ошибка проверки активного окна: {e}")
+            # === ШАБЛОН НАЙДЕН - ПОКАЗЫВАЕМ ОВЕРЛЕЙ ===
+            self.logger.info(f"[MONITOR_DEBUG] ✅ ШАБЛОН НАЙДЕН, показываем оверлей")
 
             template_x = x
             template_y = y
@@ -770,21 +771,23 @@ class TranslationMonitor:
             current_template_pos = (template_x, template_y)
             last_template_pos = template_data.get('last_template_position')
 
+            # === ЕСЛИ ОВЕРЛЕЙ УЖЕ СУЩЕСТВУЕТ - ОБНОВЛЯЕМ И ПОКАЗЫВАЕМ ===
             if overlay:
                 self.logger.info(f"[MONITOR_DEBUG] Существующий оверлей найден, обновляем")
                 try:
                     if overlay.root and overlay.root.winfo_exists():
                         self.logger.info(f"[MONITOR_DEBUG] overlay.root существует")
-                        self.logger.info(f"[MONITOR_DEBUG] overlay._hidden_by_user={overlay._hidden_by_user}")
 
+                        # Если оверлей скрыт пользователем (через F1) - НЕ ПОКАЗЫВАЕМ
                         if overlay._hidden_by_user:
-                            self.logger.info(f"[MONITOR_DEBUG] Оверлей скрыт пользователем, не показываем")
+                            self.logger.info(f"[MONITOR_DEBUG] Оверлей скрыт пользователем (F1), не показываем")
                             return
 
                         if hasattr(overlay, '_closing') and overlay._closing:
                             self.logger.info(f"[MONITOR_DEBUG] Оверлей помечен на закрытие, пропускаем")
                             return
 
+                        # Обновляем позицию
                         if last_template_pos is None or last_template_pos != current_template_pos:
                             self.logger.info(f"[MONITOR_DEBUG] Позиция изменилась, обновляем geometry")
                             overlay.root.geometry(f"{final_w}x{final_h}+{final_x}+{final_y}")
@@ -796,17 +799,29 @@ class TranslationMonitor:
                         else:
                             self.logger.info(f"[MONITOR_DEBUG] Позиция не изменилась")
 
+                        # === ПРИНУДИТЕЛЬНО ПОКАЗЫВАЕМ ОВЕРЛЕЙ ===
+                        overlay._is_visible_by_user = True
+                        overlay._hidden_by_user = False
+                        overlay._hidden_by_mouse = False
+                        overlay._mouse_over = False
+
                         self.logger.info(f"[MONITOR_DEBUG] overlay.visible={overlay.visible}")
                         if not overlay.visible:
                             self.logger.info(f"[MONITOR_DEBUG] Оверлей скрыт, показываем")
-                            overlay._hidden_by_user = False
-                            overlay._is_visible_by_user = True
                             overlay.show()
                             self.logger.info(f"[MONITOR_DEBUG] Оверлей показан")
                         else:
                             self.logger.info(f"[MONITOR_DEBUG] Оверлей уже виден, поднимаем")
                             overlay.root.lift()
                             overlay.root.update_idletasks()
+
+                        # Убеждаемся, что оверлей действительно виден
+                        if not overlay.visible:
+                            self.logger.warning(f"[MONITOR_DEBUG] Оверлей всё ещё скрыт после show(), пробуем снова")
+                            overlay.root.deiconify()
+                            overlay.visible = True
+                            overlay._ensure_topmost()
+
                         return
                     else:
                         self.logger.info(f"[MONITOR_DEBUG] overlay.root не существует, сбрасываем overlay")
@@ -815,11 +830,11 @@ class TranslationMonitor:
                     self.logger.warning(f"[DEBUG] Ошибка при обновлении существующего оверлея: {e}")
                     template_data['overlay'] = None
 
+            # === СОЗДАЁМ НОВЫЙ ОВЕРЛЕЙ ===
             if not self.monitoring:
                 self.logger.info(f"[MONITOR] Монитор остановлен, не создаем новый оверлей для шаблона #{pair_index}")
                 return
 
-            # Создаём новый оверлей
             self.logger.info(f"[MONITOR_DEBUG] Создаём новый оверлей для шаблона #{pair_index}")
 
             if self.overlay_manager:
@@ -832,7 +847,6 @@ class TranslationMonitor:
                         template_data['overlay_width'] = template_w
                         template_data['overlay_height'] = template_h
 
-                    # Используем final_x и final_y для позиции оверлея
                     window_rect = (final_x, final_y, final_x + final_w, final_y + final_h)
 
                     target_hwnd = None
@@ -863,14 +877,17 @@ class TranslationMonitor:
                         self.logger.info(f"[MONITOR_DEBUG] ✅ Оверлей создан успешно")
                         template_data['overlay'] = new_overlay
                         template_data['last_template_position'] = current_template_pos
-                        # ИСПРАВЛЕНИЕ: только при обнаружении шаблона устанавливаем _is_visible_by_user = True
-                        new_overlay._is_visible_by_user = True  # <-- ШАБЛОН НАЙДЕН, МОЖНО ПОКАЗЫВАТЬ
+
+                        new_overlay._is_visible_by_user = True
                         new_overlay._hidden_by_user = False
                         new_overlay._is_auto_replace = True
                         new_overlay._creation_time = time.time()
                         new_overlay._monitor_stable_time = time.time() + 3.0
                         new_overlay.auto_hide_enabled = False
                         new_overlay._stop_visibility_monitor()
+
+                        if not new_overlay.visible:
+                            new_overlay.show()
 
                         template_data['overlay_width'] = final_w
                         template_data['overlay_height'] = final_h
@@ -879,7 +896,7 @@ class TranslationMonitor:
                         new_overlay.root.update()
 
                         self.logger.info(
-                            f"[MONITOR] Создан оверлей для шаблона #{pair_index} в позиции ({final_x}, {final_y})")
+                            f"[MONITOR] Создан и показан оверлей для шаблона #{pair_index} в позиции ({final_x}, {final_y})")
                     else:
                         self.logger.warning(f"[MONITOR_DEBUG] ❌ Не удалось создать оверлей для шаблона #{pair_index}")
                 except Exception as e:

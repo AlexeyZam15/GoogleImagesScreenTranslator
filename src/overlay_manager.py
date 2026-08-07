@@ -714,7 +714,7 @@ class OverlayManager:
                     is_auto_replace=is_auto_replace,
                     is_window_screenshot=is_window_screenshot,
                     template_id=template_id,
-                    show_immediately=False,  # <-- НЕ ПОКАЗЫВАЕМ
+                    show_immediately=False,
                     saved_x=saved_x,
                     saved_y=saved_y,
                     saved_w=saved_w,
@@ -726,11 +726,13 @@ class OverlayManager:
                 )
 
                 if overlay:
-                    # ИСПРАВЛЕНИЕ: НЕ устанавливаем _is_visible_by_user = True для автозамены
-                    # Оверлей будет показан только когда монитор найдёт шаблон
+                    # === ИСПРАВЛЕНИЕ: для автозамены НЕ показываем оверлей до нахождения шаблона ===
                     if is_auto_replace:
-                        overlay._is_visible_by_user = False  # <-- ЖДЁМ НАХОЖДЕНИЯ ШАБЛОНА
-                        overlay._hidden_by_user = False
+                        # Оверлей ждёт нахождения шаблона
+                        overlay._is_visible_by_user = False  # Ждём нахождения шаблона
+                        overlay._hidden_by_user = False  # Не скрыт пользователем
+                        overlay._is_auto_replace = True
+                        self.logger.info(f"[STATE] Оверлей для автозамены восстановлен (ждёт шаблон)")
                     else:
                         overlay._is_visible_by_user = True
                         overlay._hidden_by_user = False
@@ -770,7 +772,7 @@ class OverlayManager:
 
         self.logger.info(f"[STATE] Создано {restored_count} оверлеев (все скрыты)")
 
-        # === ПРОХОД 3: Восстанавливаем шаблоны в мониторе (только для существующих окон) ===
+        # === ПРОХОД 2: Восстанавливаем шаблоны в мониторе ===
         if parent_app and hasattr(parent_app, 'translation_monitor'):
             monitor = parent_app.translation_monitor
             if monitor and templates_to_restore:
@@ -841,6 +843,8 @@ class OverlayManager:
                                             template['offset_initialized'] = True
                                             template['overlay_width'] = template_info['saved_w']
                                             template['overlay_height'] = template_info['saved_h']
+                                            # === ИСПРАВЛЕНИЕ: НЕ сбрасываем _is_visible_by_user, он уже False ===
+                                            # Оверлей покажется только когда монитор найдёт шаблон
                                             break
                     except Exception as e:
                         self.logger.error(f"[STATE] Ошибка восстановления шаблона: {e}")
