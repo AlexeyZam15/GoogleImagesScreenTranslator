@@ -445,6 +445,7 @@ class ScreenshotTranslatorApp:
         import win32gui
         import win32con
         import time
+        import keyboard  # <-- ДОБАВИТЬ
 
         img = Image.open(screenshot_path)
         img_width, img_height = img.size
@@ -501,6 +502,10 @@ class ScreenshotTranslatorApp:
         selection_data['counter_id'] = counter_id
 
         target_hwnd_for_exit = self._area_target_hwnd
+
+        # ========== ПЕРЕМЕННЫЕ ДЛЯ ХУКА ==========
+        esc_hook_active = False
+        esc_hook_handler = None
 
         # ========== ЛКМ (постоянный оверлей, красная рамка) ==========
         def on_mouse_down(event):
@@ -625,7 +630,18 @@ class ScreenshotTranslatorApp:
             self.logger.info("[DEBUG] exit_area_mode() - выход из режима захвата")
             self._capture_mode = False
 
-            # Отключаем глобальную привязку ESC
+            # ОТКЛЮЧАЕМ ГЛОБАЛЬНЫЙ ХУК ESC
+            nonlocal esc_hook_active, esc_hook_handler
+            if esc_hook_active and esc_hook_handler:
+                try:
+                    keyboard.unhook_key(esc_hook_handler)
+                    self.logger.info("[F3] Глобальный хук ESC отключен")
+                except Exception as e:
+                    self.logger.warning(f"[F3] Ошибка отключения хука ESC: {e}")
+                esc_hook_active = False
+                esc_hook_handler = None
+
+            # Отключаем глобальную привязку ESC через Tkinter
             self.ui.root.unbind_all("<Escape>")
 
             self.hotkeys.set_actions_blocked(False)
@@ -675,12 +691,22 @@ class ScreenshotTranslatorApp:
         # Привязываем ESC к canvas и window
         canvas.bind("<Escape>", on_esc_pressed)
         selection_window.bind("<Escape>", on_esc_pressed)
-
-        # === ГЛАВНОЕ: привязываем к корневому окну через bind_all ===
-        # Это перехватит ESC даже если фокус не на canvas/selection_window
         self.ui.root.bind_all("<Escape>", on_esc_pressed)
 
-        # Также привязываем Enter для выхода
+        # === ГЛОБАЛЬНЫЙ ХУК ЧЕРЕЗ keyboard (перехватывает ESC на системном уровне) ===
+        def global_esc_handler(e):
+            self.logger.info("[F3] Глобальный хук: ESC нажат -> выход из режима захвата")
+            exit_area_mode()
+            return False  # Блокируем дальнейшую обработку
+
+        try:
+            esc_hook_handler = keyboard.on_press_key('esc', global_esc_handler, suppress=True)
+            esc_hook_active = True
+            self.logger.info("[F3] Глобальный хук ESC установлен через keyboard")
+        except Exception as e:
+            self.logger.warning(f"[F3] Не удалось установить глобальный хук ESC: {e}")
+
+        # Enter для выхода
         canvas.bind("<Return>", lambda e: exit_area_mode())
         selection_window.bind("<Return>", lambda e: exit_area_mode())
 
