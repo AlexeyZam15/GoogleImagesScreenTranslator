@@ -249,6 +249,8 @@ class OCRProcessor:
         Обработка изображения через OCR
         Возвращает: (список областей, время выполнения)
         """
+        import re
+
         if not self._initialized:
             raise RuntimeError("EasyOCR не инициализирован. Вызовите initialize() сначала.")
 
@@ -280,11 +282,35 @@ class OCRProcessor:
                 scaled_results.append((scaled_bbox, text, confidence))
             results = scaled_results
 
-        self.logger.info(f"  До объединения: {len(results)} областей")
+        self.logger.info(f"  До фильтрации: {len(results)} областей")
+
+        # === ФИЛЬТРУЕМ ЗОНЫ ДО ОБЪЕДИНЕНИЯ ===
+        filtered_results = []
+        for bbox, text, confidence in results:
+            # Удаляем пробелы и спецсимволы для проверки
+            clean_text = re.sub(r'[\s\-_/\\.,:;!?()#\'"`]', '', text)
+
+            # Проверяем, есть ли буквы в тексте
+            has_letters = any(c.isalpha() for c in clean_text)
+
+            if has_letters:
+                filtered_results.append((bbox, text, confidence))
+            else:
+                self.logger.debug(f"  Пропущена зона (только цифры/символы): '{text}'")
+
+        self.logger.info(
+            f"  После фильтрации: {len(filtered_results)} областей (удалено {len(results) - len(filtered_results)})")
+
+        # Сохраняем копию ДО объединения для лога
+        results_before_merge = filtered_results.copy()
 
         if save_debug:
             try:
-                debug_image = self.draw_bboxes_with_ids(original_image.copy(), results)
+                if filtered_results:
+                    debug_image = self.draw_bboxes_with_ids(original_image.copy(), filtered_results)
+                else:
+                    # Если нет зон, показываем пустую картинку
+                    debug_image = original_image.copy()
 
                 if debug_dir is None:
                     debug_dir = Path.home() / "Documents" / "GoogleScreenTranslate" / "debug"
@@ -302,10 +328,36 @@ class OCRProcessor:
             except Exception as e:
                 self.logger.warning(f"  Не удалось сохранить отладку: {e}")
 
-        merged_results = self.merge_overlapping_boxes(results, iou_threshold=0.05, gap_threshold=30)
+        # Объединяем области (ТОЛЬКО отфильтрованные)
+        merged_results = self.merge_overlapping_boxes(filtered_results, iou_threshold=0.05, gap_threshold=30)
 
         self.logger.info(f"  После объединения: {len(merged_results)} областей")
         self.logger.info(f"  ⏱️ Время OCR: {elapsed_time:.2f}с")
+
+        # Сохраняем лог зон
+        if save_debug:
+            try:
+                if debug_dir is None:
+                    debug_dir = Path.home() / "Documents" / "GoogleScreenTranslate" / "debug"
+                    debug_dir.mkdir(parents=True, exist_ok=True)
+                else:
+                    debug_dir = Path(debug_dir)
+                    debug_dir.mkdir(parents=True, exist_ok=True)
+
+                if debug_prefix is None:
+                    debug_prefix = image_path.stem
+
+                self.save_zones_log(
+                    results_before=results_before_merge,
+                    results_after=merged_results,
+                    image_path=image_path,
+                    debug_dir=debug_dir,
+                    debug_prefix=debug_prefix,
+                    gap_threshold=30,
+                    shrink_pixels=0
+                )
+            except Exception as e:
+                self.logger.warning(f"  Не удалось сохранить лог зон: {e}")
 
         return merged_results, elapsed_time
 
