@@ -712,30 +712,41 @@ class TranslationMonitor:
             if overlay:
                 try:
                     if overlay.root and overlay.root.winfo_exists():
-                        # Если оверлей скрыт пользователем (через F1) - НЕ ПОКАЗЫВАЕМ
-                        if overlay._hidden_by_user:
+                        # Проверяем, можно ли показывать оверлей
+                        if not overlay.can_be_shown_by_monitor():
+                            self.logger.info(
+                                f"[MONITOR] Шаблон #{pair_index} найден, но оверлей скрыт мышью/пользователем, не показываем"
+                            )
                             return
 
                         if hasattr(overlay, '_closing') and overlay._closing:
                             return
 
+                        # === ОСНОВНОЕ ИСПРАВЛЕНИЕ ===
                         # Обновляем позицию только если она изменилась
-                        if last_template_pos is None or last_template_pos != current_template_pos:
+                        position_changed = (last_template_pos is None or last_template_pos != current_template_pos)
+
+                        if position_changed:
                             overlay.root.geometry(f"{final_w}x{final_h}+{final_x}+{final_y}")
                             overlay.root.update_idletasks()
                             overlay._last_window_rect = (final_x, final_y, final_x + final_w, final_y + final_h)
                             overlay._saved_position = (final_x, final_y)
                             template_data['last_template_position'] = current_template_pos
+                            self.logger.info(f"[MONITOR] Обновлена позиция оверлея #{pair_index}")
 
-                        # Показываем оверлей
-                        overlay._is_visible_by_user = True
+                        # Сбрасываем флаги скрытия
                         overlay._hidden_by_user = False
                         overlay._hidden_by_mouse = False
 
+                        # === ГЛАВНОЕ: НЕ ВЫЗЫВАЕМ show() ЕСЛИ ОВЕРЛЕЙ УЖЕ ВИДЕН ===
                         if not overlay.visible:
                             overlay.show()
+                            self.logger.info(f"[MONITOR] Показан оверлей #{pair_index}")
                         else:
-                            overlay.root.lift()
+                            # Оверлей уже виден — просто поднимаем его, если нужно
+                            # Но только если не было обновления позиции (чтобы не дергать окно)
+                            if position_changed:
+                                overlay.root.lift()
 
                         return
                     else:
@@ -786,6 +797,7 @@ class TranslationMonitor:
 
                         new_overlay._is_visible_by_user = True
                         new_overlay._hidden_by_user = False
+                        new_overlay._hidden_by_mouse = False
                         new_overlay._is_auto_replace = True
                         new_overlay._creation_time = time.time()
                         new_overlay._monitor_stable_time = time.time() + 3.0

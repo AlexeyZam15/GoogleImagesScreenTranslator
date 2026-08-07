@@ -23,6 +23,7 @@ import win32con
 import win32api
 from src.window_utils import find_window_by_app_name
 
+
 class OverlayWindow:
     """Класс для оверлейного окна (Toplevel, работает в главном потоке)"""
 
@@ -157,6 +158,21 @@ class OverlayWindow:
         self.root.bind('<Leave>', self._on_mouse_leave)
 
         self.logger.info("OverlayWindow инициализирован")
+
+    def can_be_shown_by_monitor(self) -> bool:
+        """
+        Проверяет, можно ли показывать оверлей через монитор автозамены.
+        Возвращает False, только если оверлей скрыт мышью или пользователем (F1).
+        """
+        # Если мышь над оверлеем — не показываем
+        if self._hidden_by_mouse or self._mouse_over:
+            return False
+        # Если пользователь явно скрыл оверлей (F1) — не показываем
+        if self._hidden_by_user:
+            return False
+        # Для автозамены НЕ проверяем _is_visible_by_user,
+        # так как этот флаг используется для ручного управления (F1)
+        return True
 
     def _update_target_hwnd(self) -> bool:
         """
@@ -329,6 +345,11 @@ class OverlayWindow:
         if self._is_dragging:
             return
 
+        # === НОВАЯ ПРОВЕРКА: если оверлей не должен быть виден — игнорируем ===
+        if not self._is_visible_by_user:
+            self.logger.info(f"[DEBUG] _on_mouse_enter: _is_visible_by_user=False, игнорируем")
+            return
+
         if self._suppress_enter_events:
             self._suppress_enter_events = False
             return
@@ -339,8 +360,6 @@ class OverlayWindow:
 
         self._mouse_over = True
         self.logger.info(f"[DEBUG] _on_mouse_enter: mouse_over=True, edit_mode={self._edit_mode_enabled}")
-
-        # Рамка управляется через update_edit_mode, не показываем её здесь
 
         if self._edit_mode_enabled:
             self.logger.info("[DEBUG] _on_mouse_enter: режим редактирования, оверлей не скрываем")
@@ -358,6 +377,11 @@ class OverlayWindow:
         if self._is_dragging:
             return
 
+        # === НОВАЯ ПРОВЕРКА: если оверлей не должен быть виден — игнорируем ===
+        if not self._is_visible_by_user:
+            self.logger.info(f"[DEBUG] _on_mouse_leave: _is_visible_by_user=False, игнорируем")
+            return
+
         # Защита от множественных вызовов
         if not self._mouse_over:
             return
@@ -365,9 +389,13 @@ class OverlayWindow:
         self._mouse_over = False
         self.logger.info(f"[DEBUG] _on_mouse_leave: mouse_over=False, edit_mode={self._edit_mode_enabled}")
 
-        # Рамка управляется через update_edit_mode, не скрываем её здесь
-
         self._hidden_by_mouse = False
+
+        # === ИСПРАВЛЕНИЕ: в режиме просмотра НЕ показываем оверлей при выходе мыши ===
+        # Оверлей может быть показан только монитором или явным действием пользователя
+        if not self._edit_mode_enabled:
+            self.logger.info("[DEBUG] _on_mouse_leave: режим просмотра, не показываем оверлей автоматически")
+            return
 
         if self._last_image_path and self._last_window_rect:
             if not self.visible and not self._hidden_by_mouse:
@@ -417,6 +445,16 @@ class OverlayWindow:
         """Показывает оверлей."""
         self.logger.info("[DEBUG] show() вызван")
 
+        # === ИСПРАВЛЕНИЕ: НЕ проверяем _is_visible_by_user, так как это блокирует автозамену ===
+        # Проверяем только _hidden_by_user (ручное скрытие через F1)
+        if self._hidden_by_user:
+            self.logger.info("[DEBUG] show() - оверлей скрыт пользователем (F1), пропускаем")
+            return
+
+        if hasattr(self, '_closing') and self._closing:
+            self.logger.info("[DEBUG] show() - оверлей закрывается, пропускаем")
+            return
+
         if not self._last_image_path or not self._last_window_rect:
             self.logger.warning("[DEBUG] show() - нет сохраненного изображения или rect")
             return
@@ -450,8 +488,6 @@ class OverlayWindow:
                         self._saved_position = (expected_x, expected_y)
                 except Exception as e:
                     self.logger.warning(f"[DEBUG] show() - ошибка проверки позиции: {e}")
-
-            # Рамка управляется через update_edit_mode
             return
 
         self._hidden_by_user = False
@@ -474,8 +510,6 @@ class OverlayWindow:
             self._ensure_topmost()
             self._is_visible_by_user = True
             self._enable_esc_hook()
-
-            # Рамка управляется через update_edit_mode
 
             if self.auto_hide_enabled:
                 self._start_visibility_monitor()
@@ -783,6 +817,11 @@ class OverlayWindow:
         self._updating_visibility = True
 
         try:
+            # === НОВАЯ ПРОВЕРКА: если оверлей не должен быть виден — не управляем им ===
+            if not self._is_visible_by_user:
+                self._updating_visibility = False
+                return
+
             if self._context_menu_visible:
                 if self._is_visible_by_user and not self.visible and not self._hidden_by_mouse:
                     self._show_internal(force=False)
@@ -841,46 +880,23 @@ class OverlayWindow:
                 cursor_pos = win32api.GetCursorPos()
                 cursor_x, cursor_y = cursor_pos
 
-                overlay_type, template_found = self._get_overlay_status()
-
-                if overlay_type == 'auto_replace':
-                    if template_found:
-                        is_cursor_inside = False
-                        if self._last_window_rect:
-                            x1, y1, x2, y2 = self._last_window_rect
-                            if x1 <= cursor_x <= x2 and y1 <= cursor_y <= y2:
-                                is_cursor_inside = True
-
-                        if is_cursor_inside and self.visible:
-                            self._hidden_by_mouse = True
-                            self._hide_internal()
-                            return
-
-                        if not is_cursor_inside and not self.visible and self._is_visible_by_user and not self._hidden_by_user:
-                            self._hidden_by_mouse = False
-                            self._show_internal(force=False)
-                    else:
-                        if self.visible:
-                            self._hide_internal()
-                    return
-
+                # === ИСПРАВЛЕНИЕ: упрощаем логику для режима просмотра ===
+                # В режиме просмотра оверлей должен быть скрыт, если курсор над ним
                 is_cursor_inside = False
                 if self._last_window_rect:
                     x1, y1, x2, y2 = self._last_window_rect
                     if x1 <= cursor_x <= x2 and y1 <= cursor_y <= y2:
                         is_cursor_inside = True
 
+                # Если курсор внутри — скрываем оверлей
                 if is_cursor_inside and self.visible:
-                    if hasattr(self, '_user_moved') and self._user_moved:
-                        return
                     self._hidden_by_mouse = True
                     self._hide_internal()
                     return
 
-                if not is_cursor_inside and not self.visible and self._is_visible_by_user and not self._hidden_by_user:
-                    self._hidden_by_mouse = False
-                    self._show_internal(force=False)
-                    return
+                # === УДАЛЕНА ЛОГИКА АВТОМАТИЧЕСКОГО ПОКАЗА ПРИ ВЫХОДЕ МЫШИ ===
+                # В режиме просмотра оверлей не должен показываться автоматически
+                # Он может быть показан только монитором или действием пользователя
 
             except Exception as e:
                 self.logger.warning(f"Ошибка в _check_and_update_visibility: {e}")
@@ -1201,6 +1217,11 @@ class OverlayWindow:
         self._showing_in_progress = True
 
         try:
+            # === НОВАЯ ПРОВЕРКА: если оверлей не должен быть виден — не показываем ===
+            if not self._is_visible_by_user:
+                self.logger.debug("[DEBUG] _show_internal: _is_visible_by_user=False, пропускаем")
+                return
+
             if self._mouse_over or self._hidden_by_mouse:
                 self.logger.debug("[DEBUG] _show_internal: мышь в зоне оверлея, не показываем")
                 return
@@ -1233,8 +1254,6 @@ class OverlayWindow:
                     if self.auto_hide_enabled:
                         self._start_visibility_monitor()
 
-                    # Рамка управляется через update_edit_mode
-
                     self.root.after(500, lambda: setattr(self, '_suppress_enter_events', False))
                     return
                 except Exception as e:
@@ -1242,8 +1261,6 @@ class OverlayWindow:
 
             self._load_and_show_image(self._last_image_path, self._last_window_rect)
             self._image_loaded = True
-
-            # Рамка управляется через update_edit_mode
 
         except Exception as e:
             self.logger.error(f"[DEBUG] _show_internal: ошибка: {e}")

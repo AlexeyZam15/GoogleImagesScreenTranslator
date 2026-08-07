@@ -1175,7 +1175,8 @@ class ScreenshotTranslatorApp:
     def _process_ocr_regions(self, regions, original_img, translated_img, window_rect, target_hwnd,
                              app_name, existing_overlays, scale_x, scale_y, wx1, wy1,
                              orig_w, orig_h):
-        """Обрабатывает все OCR регионы и создает оверлеи."""
+        """Обрабатывает все OCR регионы — ТОЛЬКО ДОБАВЛЯЕТ ШАБЛОНЫ В МОНИТОР, без создания оверлеев."""
+
         import time
         from pathlib import Path
 
@@ -1184,8 +1185,8 @@ class ScreenshotTranslatorApp:
 
         created_count = 0
         skipped_count = 0
-        updated_count = 0
 
+        # Временно отключаем сохранение состояния, чтобы не создавать лишних записей
         if hasattr(self.overlay_manager, '_suppress_save'):
             self.overlay_manager._suppress_save = True
 
@@ -1211,17 +1212,44 @@ class ScreenshotTranslatorApp:
                     self.logger.info(f"[F3_HOLD] Зона #{i} пропущена (уже занята)")
                     continue
 
-                # Создаем оверлей для региона
-                created = self._create_overlay_for_region(
-                    i, x1, y1, x2, y2, translated_img, region_window_rect,
-                    target_hwnd, app_name, existing_overlays, original_img,
-                    orig_w, orig_h, wx1, wy1
-                )
-                if created:
-                    created_count += 1
+                # === ИЗМЕНЕНИЕ: НЕ создаем оверлей, только добавляем шаблон в монитор ===
+                # Сохраняем регион изображения как шаблон
+                region_img = translated_img.crop((x1, y1, x2, y2))
+                region_path = self.temp_dir / f"ocr_region_{i}_{int(time.time())}.png"
+                region_img.save(region_path)
+
+                # Сохраняем соответствующий участок оригинального изображения для шаблона
+                orig_x1 = max(0, min(screen_x1 - wx1, orig_w))
+                orig_y1 = max(0, min(screen_y1 - wy1, orig_h))
+                orig_x2 = max(0, min(screen_x2 - wx1, orig_w))
+                orig_y2 = max(0, min(screen_y2 - wy1, orig_h))
+
+                if orig_x2 > orig_x1 and orig_y2 > orig_y1:
+                    template_path = self.temp_dir / f"template_{i}_{int(time.time())}.png"
+                    template_img = original_img.crop((orig_x1, orig_y1, orig_x2, orig_y2))
+                    template_img.save(template_path)
+
+                    # Добавляем шаблон в монитор — оверлей будет создан автоматически при нахождении
+                    if self.translation_monitor:
+                        pair_index, file_hash = self.translation_monitor.add_template(
+                            region_image=template_path,
+                            translated_image=region_path,
+                            target_app_name=app_name,
+                            is_temporary=False,
+                            lifetime_seconds=180
+                        )
+
+                        if pair_index >= 0 and file_hash:
+                            created_count += 1
+                            self.logger.info(
+                                f"[F3_HOLD] Шаблон #{pair_index} добавлен в монитор (оверлей будет создан при нахождении)")
+                        else:
+                            self.logger.warning(f"[F3_HOLD] Не удалось добавить шаблон #{i} в монитор")
+                    else:
+                        self.logger.warning("[F3_HOLD] TranslationMonitor не инициализирован, шаблон не добавлен")
 
             except Exception as e:
-                self.logger.error(f"[F3_HOLD] Ошибка создания оверлея {i}: {e}")
+                self.logger.error(f"[F3_HOLD] Ошибка обработки зоны {i}: {e}")
 
             zone_time = time.time() - zone_start
             if zone_time > 0.1:
@@ -1229,14 +1257,13 @@ class ScreenshotTranslatorApp:
 
         loop_time = time.time() - loop_start
         self.logger.info(
-            f"[TIMING] Этап 7: {loop_time:.3f}с (создано {created_count}, пропущено {skipped_count})"
+            f"[TIMING] Этап 7: {loop_time:.3f}с (добавлено шаблонов: {created_count}, пропущено: {skipped_count})"
         )
 
         if hasattr(self.overlay_manager, '_suppress_save'):
             self.overlay_manager._suppress_save = False
-            self.overlay_manager.save_overlay_state(immediate=True)
 
-        return created_count, skipped_count, updated_count
+        return created_count, skipped_count, 0
 
     def _find_overlapping_overlay(self, existing_overlays, region_window_rect, region_area):
         """Находит существующий оверлей, перекрывающий регион."""
