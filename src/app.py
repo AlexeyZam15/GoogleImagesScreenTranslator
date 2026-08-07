@@ -955,6 +955,10 @@ class ScreenshotTranslatorApp:
 
     def _on_ocr_translate_finished(self, result, error, screenshot_path, window_rect, target_hwnd):
         """Обработчик завершения перевода для OCR режима."""
+        import time
+        total_start = time.time()
+        self.logger.info(f"[F3_HOLD] ===== НАЧАЛО ОБРАБОТКИ OCR РЕЗУЛЬТАТА =====")
+
         self.logger.info(f"[F3_HOLD] Перевод завершён, error={error}")
 
         self._translation_in_progress = False
@@ -979,6 +983,10 @@ class ScreenshotTranslatorApp:
             self._hide_translation_overlay()
             self.show_notification("🔄 OCR анализ...")
 
+            # === ЭТАП 1: ПРОВЕРКА OCR ===
+            step_start = time.time()
+            self.logger.info("[TIMING] Этап 1: Проверка OCR...")
+
             try:
                 from PIL import Image, ImageDraw
                 from src.window_utils import get_process_name_by_hwnd
@@ -992,7 +1000,13 @@ class ScreenshotTranslatorApp:
                     self.set_actions_blocked(False)
                     return
 
+                self.logger.info(f"[TIMING] Этап 1: {time.time() - step_start:.3f}с")
+
                 translated_image_path = Path(result)
+
+                # === ЭТАП 2: ЗАГРУЗКА ИЗОБРАЖЕНИЙ ===
+                step_start = time.time()
+                self.logger.info("[TIMING] Этап 2: Загрузка изображений...")
 
                 # Загружаем изображения
                 original_img = Image.open(screenshot_path)
@@ -1000,22 +1014,35 @@ class ScreenshotTranslatorApp:
 
                 orig_w, orig_h = original_img.size
                 trans_w, trans_h = translated_img.size
+                self.logger.info(
+                    f"[TIMING] Этап 2: {time.time() - step_start:.3f}с (ориг: {orig_w}x{orig_h}, пер: {trans_w}x{trans_h})")
 
-                # === ОДНА ПОСТОЯННАЯ ПАПКА ДЛЯ ДЕБАГА ===
+                # === ЭТАП 3: ПОДГОТОВКА ДЕБАГА ===
+                step_start = time.time()
+                self.logger.info("[TIMING] Этап 3: Подготовка дебаг-папки...")
+
                 debug_dir = Path.home() / "Documents" / "GoogleScreenTranslate" / "debug"
                 debug_dir.mkdir(parents=True, exist_ok=True)
                 timestamp = time.strftime("%Y%m%d_%H%M%S")
+                self.logger.info(f"[TIMING] Этап 3: {time.time() - step_start:.3f}с")
 
-                # === ПОЛУЧАЕМ ЗОНЫ ===
+                # === ЭТАП 4: OCR-ОБРАБОТКА (САМЫЙ ТЯЖЁЛЫЙ) ===
+                step_start = time.time()
+                self.logger.info("[TIMING] Этап 4: OCR-обработка (get_regions_from_image)...")
+
                 regions = self.ocr_processor.get_regions_from_image(
                     translated_image_path,
                     save_debug=True,
                     debug_dir=debug_dir,
                     debug_prefix=timestamp
                 )
-                self.logger.info(f"[F3_HOLD] Найдено {len(regions)} областей (после объединения)")
+                ocr_time = time.time() - step_start
+                self.logger.info(f"[TIMING] Этап 4: {ocr_time:.3f}с (найдено {len(regions)} областей)")
 
-                # === СОХРАНЯЕМ ДЕБАГ-КАРТИНКУ С ОБЪЕДИНЁННЫМИ ЗОНАМИ ===
+                # === ЭТАП 5: СОХРАНЕНИЕ ДЕБАГ-КАРТИНКИ ===
+                step_start = time.time()
+                self.logger.info("[TIMING] Этап 5: Сохранение дебаг-картинки...")
+
                 try:
                     debug_img = translated_img.copy()
                     draw = ImageDraw.Draw(debug_img)
@@ -1027,6 +1054,7 @@ class ScreenshotTranslatorApp:
                     self.logger.info(f"[DEBUG] Отладочный скриншот сохранен: {debug_path}")
                 except Exception as e:
                     self.logger.warning(f"[DEBUG] Не удалось сохранить отладочный скриншот: {e}")
+                self.logger.info(f"[TIMING] Этап 5: {time.time() - step_start:.3f}с")
 
                 if not regions:
                     self.logger.info("[F3_HOLD] Текст не обнаружен")
@@ -1036,6 +1064,10 @@ class ScreenshotTranslatorApp:
                     return
 
                 self.show_notification(f"📝 Создание {len(regions)} оверлеев...")
+
+                # === ЭТАП 6: ПОЛУЧЕНИЕ СУЩЕСТВУЮЩИХ ОВЕРЛЕЕВ ===
+                step_start = time.time()
+                self.logger.info("[TIMING] Этап 6: Получение существующих оверлеев...")
 
                 app_name = get_process_name_by_hwnd(target_hwnd) if target_hwnd else None
 
@@ -1048,6 +1080,7 @@ class ScreenshotTranslatorApp:
                 scale_y = win_height / trans_h if trans_h > 0 else 1.0
 
                 created_count = 0
+                skipped_count = 0
                 updated_count = 0
 
                 # === СОБИРАЕМ СУЩЕСТВУЮЩИЕ ОВЕРЛЕИ ДЛЯ ЭТОГО ПРИЛОЖЕНИЯ ===
@@ -1055,11 +1088,17 @@ class ScreenshotTranslatorApp:
                 if self.overlay_manager and app_name:
                     existing_overlays = self.overlay_manager.get_overlays_by_app_name(app_name)
                     self.logger.info(f"[F3_HOLD] Найдено {len(existing_overlays)} существующих оверлеев для {app_name}")
+                self.logger.info(f"[TIMING] Этап 6: {time.time() - step_start:.3f}с")
 
                 if hasattr(self.overlay_manager, '_suppress_save'):
                     self.overlay_manager._suppress_save = True
 
+                # === ЭТАП 7: ОСНОВНОЙ ЦИКЛ ОБРАБОТКИ ЗОН ===
+                loop_start = time.time()
+                self.logger.info(f"[TIMING] Этап 7: Обработка {len(regions)} зон...")
+
                 for i, (x1, y1, x2, y2) in enumerate(regions):
+                    zone_start = time.time()
                     try:
                         screen_x1 = wx1 + int(x1 * scale_x)
                         screen_y1 = wy1 + int(y1 * scale_y)
@@ -1086,50 +1125,16 @@ class ScreenshotTranslatorApp:
                                     if overlap_area > region_area * 0.3:  # >30% перекрытия
                                         existing_overlay = overlay
                                         self.logger.info(
-                                            f"[F3_HOLD] Обнаружен существующий оверлей в области #{i}, "
+                                            f"[F3_HOLD] Зона #{i} уже занята оверлеем, "
                                             f"перекрытие {overlap_area / region_area * 100:.0f}%"
                                         )
                                         break
 
                         if existing_overlay:
-                            # === ОБНОВЛЯЕМ СУЩЕСТВУЮЩИЙ ОВЕРЛЕЙ ===
-                            try:
-                                # Обновляем изображение
-                                region_img = translated_img.crop((x1, y1, x2, y2))
-                                region_path = self.temp_dir / f"ocr_region_{i}_{int(time.time())}.png"
-                                region_img.save(region_path)
-
-                                # Обновляем оверлей
-                                existing_overlay._last_image_path = region_path
-                                existing_overlay._last_window_rect = region_window_rect
-                                existing_overlay._image_loaded = False
-                                existing_overlay._load_and_show_image(region_path, region_window_rect,
-                                                                      show_immediately=True)
-
-                                if not existing_overlay.visible:
-                                    existing_overlay.show()
-
-                                updated_count += 1
-                                self.logger.info(f"[F3_HOLD] Оверлей #{i} обновлён")
-
-                                # Обновляем шаблон в мониторе
-                                if self.translation_monitor and self.settings.get_auto_replace_translated():
-                                    # Ищем шаблон для этого оверлея
-                                    for template_data in self.translation_monitor.templates:
-                                        if template_data.get('overlay') is existing_overlay:
-                                            # Обновляем путь к переводу
-                                            template_data['translated_path'] = region_path
-                                            self.logger.info(f"[F3_HOLD] Шаблон обновлён")
-                                            break
-
-                                continue
-                            except Exception as e:
-                                self.logger.warning(f"[F3_HOLD] Не удалось обновить оверлей: {e}")
-                                # Если не удалось обновить, удаляем старый и создаём новый
-                                try:
-                                    self.overlay_manager.remove_overlay(existing_overlay, force=True)
-                                except:
-                                    pass
+                            # === ПРОПУСКАЕМ ЗОНУ — ОВЕРЛЕЙ УЖЕ ЕСТЬ ===
+                            skipped_count += 1
+                            self.logger.info(f"[F3_HOLD] Зона #{i} пропущена (уже занята)")
+                            continue  # <-- ПРОПУСКАЕМ, НЕ ОБНОВЛЯЕМ!
 
                         # === СОЗДАЁМ НОВЫЙ ОВЕРЛЕЙ ===
                         region_img = translated_img.crop((x1, y1, x2, y2))
@@ -1204,21 +1209,35 @@ class ScreenshotTranslatorApp:
                     except Exception as e:
                         self.logger.error(f"[F3_HOLD] Ошибка создания оверлея {i}: {e}")
 
+                    # Логируем время обработки каждой зоны (только если >100мс)
+                    zone_time = time.time() - zone_start
+                    if zone_time > 0.1:
+                        self.logger.info(f"[TIMING] Зона #{i} обработана за {zone_time:.3f}с")
+
+                loop_time = time.time() - loop_start
+                self.logger.info(
+                    f"[TIMING] Этап 7: {loop_time:.3f}с (создано {created_count}, пропущено {skipped_count})")
+
                 if hasattr(self.overlay_manager, '_suppress_save'):
                     self.overlay_manager._suppress_save = False
                     self.overlay_manager.save_overlay_state(immediate=True)
 
                 total_count = created_count + updated_count
-                self.logger.info(f"[F3_HOLD] Создано {created_count} новых оверлеев, обновлено {updated_count}")
+                self.logger.info(
+                    f"[F3_HOLD] Создано {created_count} новых оверлеев, пропущено {skipped_count} занятых зон")
                 self.ui.root.after(500, self.window_list.refresh)
 
-                if total_count > 0:
+                if created_count > 0:
                     self.show_notification(
-                        f"✅ {total_count} оверлеев готово ({created_count} новых, {updated_count} обновлено)")
-                    self.ui.update_status(f"● {total_count} оверлеев готово", '#4CAF50')
+                        f"✅ {created_count} оверлеев создано ({skipped_count} пропущено)")
+                    self.ui.update_status(f"● {created_count} оверлеев создано", '#4CAF50')
                 else:
-                    self.show_notification("⚠️ Не удалось создать оверлеи")
-                    self.ui.update_status("● " + self.ui.get_string('error'), '#f44336')
+                    if skipped_count > 0:
+                        self.show_notification(f"ℹ️ Все {skipped_count} зон уже заняты оверлеями")
+                        self.ui.update_status("● Все зоны уже заняты", '#ff9800')
+                    else:
+                        self.show_notification("⚠️ Не удалось создать оверлеи")
+                        self.ui.update_status("● " + self.ui.get_string('error'), '#f44336')
 
             except Exception as e:
                 self.logger.error(f"[F3_HOLD] Ошибка OCR: {e}")
@@ -1228,6 +1247,9 @@ class ScreenshotTranslatorApp:
                 self.ui.update_status("● " + self.ui.get_string('error'), '#f44336')
 
         finally:
+            total_time = time.time() - total_start
+            self.logger.info(f"[TIMING] ===== ИТОГО: {total_time:.3f}с =====")
+            self.logger.info("[F3_HOLD] ===== ЗАВЕРШЕНИЕ ОБРАБОТКИ OCR РЕЗУЛЬТАТА =====")
             self.set_actions_blocked(False)
             self._pending_command_ids = {}
             self.is_processing_queue = False
