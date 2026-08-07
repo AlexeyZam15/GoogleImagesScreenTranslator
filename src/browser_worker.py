@@ -154,7 +154,7 @@ class BrowserWorker:
         return processed
 
     def _init_browser(self, show_browser: bool, target_lang: str):
-        """Инициализация браузера с полной очисткой при ошибке."""
+        """Инициализация браузера с выбором движка"""
         self.logger.info("Инициализация браузера...")
         self._initializing = True
         try:
@@ -169,19 +169,30 @@ class BrowserWorker:
             import time
             time.sleep(0.5)
 
-            self.logger.info("Создаем новый экземпляр GoogleTranslateDebug...")
-            self.translator = GoogleTranslateDebug(
-                headless=not show_browser,
-                target_lang=target_lang,
-                settings=self.settings
-            )
+            engine = self.settings.get_translator_engine()
+            self.logger.info(f"Используемый движок перевода: {engine}")
+
+            if engine == "yandex":
+                from src.translator import YandexOcrTranslator
+                self.translator = YandexOcrTranslator(
+                    headless=not show_browser,
+                    target_lang=target_lang,
+                    settings=self.settings
+                )
+            else:
+                from src.translator import GoogleTranslateDebug
+                self.translator = GoogleTranslateDebug(
+                    headless=not show_browser,
+                    target_lang=target_lang,
+                    settings=self.settings
+                )
 
             self.logger.info("Запускаем браузер...")
             self.translator.start_browser()
 
             self._ready = True
             self._initializing = False
-            self.logger.info("Браузер инициализирован успешно")
+            self.logger.info(f"Браузер инициализирован успешно (движок: {engine})")
             return {'ready': True}
 
         except Exception as e:
@@ -190,16 +201,12 @@ class BrowserWorker:
             self.logger.error(f"Ошибка инициализации браузера: {e}")
             if self.translator:
                 try:
-                    self.logger.info("Закрываем браузер после ошибки...")
                     self.translator.close_browser()
                 except Exception as e2:
                     self.logger.warning(f"Ошибка при закрытии браузера после ошибки: {e2}")
-                # === ВАЖНО: полностью освобождаем translator ===
                 self.translator = None
-            # === НЕМНОГО ЖДЕМ ПЕРЕД ПОВТОРНОЙ ПОПЫТКОЙ ===
             import time
             time.sleep(0.5)
-            # Пробрасываем исключение для перезапуска через app
             raise
 
     def _restart_browser(self, show_browser: bool, target_lang: str):

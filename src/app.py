@@ -163,6 +163,34 @@ class ScreenshotTranslatorApp:
         # Запуск инициализации
         self.ui.root.after(100, self._init_translator_step)
 
+    def _restart_translator(self):
+        """Перезапускает переводчик с сохранением текущих настроек"""
+        self.logger.info("[APP] === _restart_translator НАЧАЛО ===")
+
+        if not self.browser_worker:
+            self.logger.warning("[APP] browser_worker не инициализирован, пропускаем")
+            return
+
+        # Проверяем, изменился ли движок
+        engine = self.settings.get_translator_engine()
+        if not hasattr(self, '_last_engine'):
+            self._last_engine = engine
+        elif self._last_engine != engine:
+            self.logger.info(f"[APP] Движок изменен: {self._last_engine} -> {engine}")
+            self._last_engine = engine
+
+        show_browser = self.settings.get_show_browser()
+        target_lang = self.settings.get_target_language()
+
+        self.ready = False
+        self.initializing = True
+        self.ui.update_status("● " + self.ui.get_string('starting_browser'), '#ff9800')
+
+        cmd_id = self.browser_worker.restart_browser(show_browser, target_lang, self._on_init_complete)
+        self._pending_command_ids[cmd_id] = 'restart'
+
+        self.logger.info(f"[APP] Команда перезапуска отправлена (id={cmd_id})")
+
     def _create_selection_window(self, screenshot_path):
         """
         Создает окно выбора области и возвращает его вместе с данными.
@@ -1528,8 +1556,13 @@ class ScreenshotTranslatorApp:
         self._init_done = True
         self._init_attempts = 0
 
-        # === ПОКАЗЫВАЕМ УВЕДОМЛЕНИЕ О ГОТОВНОСТИ ===
-        self.show_notification("✅ " + self.ui.get_string('ready_notification'), 2000)
+        # Сохраняем используемый движок
+        self._last_engine = self.settings.get_translator_engine()
+        engine_name = "Google Translate" if self._last_engine == "google" else "Яндекс.Переводчик (OCR)"
+        self.logger.info(f"[APP] Используется движок: {engine_name}")
+
+        # Показываем уведомление о готовности
+        self.show_notification(f"✅ {self.ui.get_string('ready_notification')} ({engine_name})", 2000)
 
         if not self.overlay_manager:
             self.overlay_manager = OverlayManager(self)
@@ -1553,16 +1586,16 @@ class ScreenshotTranslatorApp:
             except Exception as e:
                 self.logger.error(f"[STATE] Ошибка восстановления оверлеев: {e}")
 
-        # === РАЗБЛОКИРУЕМ МЕНЮ НАСТРОЕК ===
+        # Разблокируем меню настроек
         if hasattr(self.ui, 'settings_btn'):
             self.ui.settings_btn.config(state=tk.NORMAL, bg='#3c3c3c', fg='#cccccc')
 
         self.ui.set_settings_menu_enabled(True)
 
-        # === ОБНОВЛЯЕМ СТАТУС НА "ГОТОВ" ===
+        # Обновляем статус на "Готов"
         ready_text = self.ui.get_string('ready')
         self.logger.info(f"[STATUS] Обновление статуса на: {ready_text}")
-        self.ui.update_status(f"● {ready_text}", '#4CAF50')
+        self.ui.update_status(f"● {ready_text} ({engine_name})", '#4CAF50')
         self.logger.info("[STATUS] Статус обновлён на Готов")
 
         self.window_list.refresh()
@@ -2112,7 +2145,7 @@ class ScreenshotTranslatorApp:
             self.ui.root.after(100, self._process_results_loop)
 
     def _init_translator_step(self):
-        """Инициализация переводчика"""
+        """Инициализация переводчика с учетом выбранного движка"""
         if self._init_done or self.initializing:
             return
 
@@ -2128,6 +2161,10 @@ class ScreenshotTranslatorApp:
 
         show_browser = self.settings.get_show_browser()
         target_lang = self.settings.get_target_language()
+        engine = self.settings.get_translator_engine()
+        self._last_engine = engine
+
+        self.logger.info(f"[APP] Инициализация с движком: {engine}")
 
         cmd_id = self.browser_worker.init_browser(show_browser, target_lang, self._on_init_complete)
         self._pending_command_ids[cmd_id] = 'init'
@@ -2248,12 +2285,31 @@ class ScreenshotTranslatorApp:
     # === НАСТРОЙКИ И ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ===
 
     def open_settings(self):
+        """Открывает окно настроек"""
         from src.settings_window import SettingsWindow
+        # Сохраняем текущий движок для отслеживания изменений
+        self._last_engine = self.settings.get_translator_engine()
         SettingsWindow(self, self.settings, self.on_settings_changed)
 
     def on_settings_changed(self):
+        """Обработчик изменения настроек"""
         self.ui.update_ui_language()
         self.hotkeys.setup()
+
+        # Проверяем, изменился ли движок перевода
+        if not hasattr(self, '_last_engine'):
+            self._last_engine = self.settings.get_translator_engine()
+        else:
+            new_engine = self.settings.get_translator_engine()
+            if self._last_engine != new_engine:
+                self._last_engine = new_engine
+                self.logger.info(
+                    f"[SETTINGS] Движок изменен: {self._last_engine} -> {new_engine}, перезапускаем браузер")
+                if self.ready:
+                    self._restart_translator()
+                else:
+                    self.logger.info("[SETTINGS] Браузер не готов, перезапуск отложен")
+
         self.ui.update_status("● " + self.ui.get_string('ready'), '#4CAF50')
 
     def reset_settings(self):

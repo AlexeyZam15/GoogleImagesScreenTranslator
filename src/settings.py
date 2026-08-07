@@ -26,7 +26,8 @@ class Settings:
         "auto_windowed_fullscreen": True,
         "edit_mode_enabled": False,
         "auto_replace_translated": True,
-        "temporary_lifetime": 180
+        "temporary_lifetime": 180,
+        "translator_engine": "google",  # "google" или "yandex"
     }
 
     # Значения горячих клавиш по умолчанию
@@ -47,6 +48,16 @@ class Settings:
         self._config_dir = Path.home() / "Documents" / "GoogleScreenTranslate" / "config"
         self._config_file = self._config_dir / "settings.json"
         self.load()
+
+    def get_translator_engine(self) -> str:
+        """Возвращает выбранный движок перевода ('google' или 'yandex')"""
+        return self.settings.get("translator_engine", "google")
+
+    def set_translator_engine(self, engine: str):
+        """Устанавливает движок перевода ('google' или 'yandex')"""
+        if engine in ["google", "yandex"]:
+            self.settings["translator_engine"] = engine
+            self.save()
 
     def get_auto_replace_translated(self) -> bool:
         """Возвращает настройку автозамены уже переведенных областей."""
