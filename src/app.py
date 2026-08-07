@@ -122,7 +122,7 @@ class ScreenshotTranslatorApp:
 
         # === НОВЫЙ АТРИБУТ ДЛЯ ИНДИКАТОРА ===
         self._indicator_shown = False
-        self._indicator_hidden = False
+        self._indicator_hidden = True  # <-- ИЗМЕНЕНО: по умолчанию скрыт
 
         # Состояния окон
         self._window_states = {}
@@ -964,23 +964,25 @@ class ScreenshotTranslatorApp:
         self._translation_in_progress = False
         self.translating = False
 
+        # <-- НЕ СКРЫВАЕМ ИНДИКАТОР ЗДЕСЬ, ОН БУДЕТ СКРЫТ ПОСЛЕ СОЗДАНИЯ ОВЕРЛЕЕВ
+
         try:
             if error:
                 self.logger.error(f"[F3_HOLD] Ошибка перевода: {error}")
                 self.ui.update_status("● " + self.ui.get_string('translate_error'), '#f44336')
                 self.set_actions_blocked(False)
-                self._hide_translation_overlay()
+                self._hide_translation_overlay()  # <-- СКРЫВАЕМ ПРИ ОШИБКЕ
                 return
 
             if not result or not Path(result).exists():
                 self.logger.error("[F3_HOLD] Результат перевода не найден")
                 self.ui.update_status("● " + self.ui.get_string('translate_error'), '#f44336')
                 self.set_actions_blocked(False)
-                self._hide_translation_overlay()
+                self._hide_translation_overlay()  # <-- СКРЫВАЕМ ПРИ ОШИБКЕ
                 return
 
             self.logger.info(f"[F3_HOLD] Результат перевода получен: {result}")
-            self._hide_translation_overlay()
+            # <-- НЕ СКРЫВАЕМ ИНДИКАТОР ЗДЕСЬ
             self.show_notification("🔄 OCR анализ...")
 
             # === ЭТАП 1: ПРОВЕРКА OCR ===
@@ -998,6 +1000,7 @@ class ScreenshotTranslatorApp:
                     self.show_notification("❌ OCR не готов")
                     self.ui.update_status("● OCR не готов", '#f44336')
                     self.set_actions_blocked(False)
+                    self._hide_translation_overlay()  # <-- СКРЫВАЕМ ПРИ ОШИБКЕ
                     return
 
                 self.logger.info(f"[TIMING] Этап 1: {time.time() - step_start:.3f}с")
@@ -1008,7 +1011,6 @@ class ScreenshotTranslatorApp:
                 step_start = time.time()
                 self.logger.info("[TIMING] Этап 2: Загрузка изображений...")
 
-                # Загружаем изображения
                 original_img = Image.open(screenshot_path)
                 translated_img = Image.open(translated_image_path)
 
@@ -1056,11 +1058,14 @@ class ScreenshotTranslatorApp:
                     self.logger.warning(f"[DEBUG] Не удалось сохранить отладочный скриншот: {e}")
                 self.logger.info(f"[TIMING] Этап 5: {time.time() - step_start:.3f}с")
 
+                overlay_created_count = 0  # <-- СЧЁТЧИК СОЗДАННЫХ ОВЕРЛЕЕВ
+
                 if not regions:
                     self.logger.info("[F3_HOLD] Текст не обнаружен")
                     self.show_notification("ℹ️ Текст не обнаружен")
                     self.ui.update_status("● " + self.ui.get_string('ready'), '#4CAF50')
                     self.set_actions_blocked(False)
+                    self._hide_translation_overlay()  # <-- СКРЫВАЕМ, Т.К. НЕТ ЗОН
                     return
 
                 self.show_notification(f"📝 Создание {len(regions)} оверлеев...")
@@ -1075,7 +1080,6 @@ class ScreenshotTranslatorApp:
                 win_width = wx2 - wx1
                 win_height = wy2 - wy1
 
-                # Коэффициенты масштабирования
                 scale_x = win_width / trans_w if trans_w > 0 else 1.0
                 scale_y = win_height / trans_h if trans_h > 0 else 1.0
 
@@ -1083,7 +1087,6 @@ class ScreenshotTranslatorApp:
                 skipped_count = 0
                 updated_count = 0
 
-                # === СОБИРАЕМ СУЩЕСТВУЮЩИЕ ОВЕРЛЕИ ДЛЯ ЭТОГО ПРИЛОЖЕНИЯ ===
                 existing_overlays = []
                 if self.overlay_manager and app_name:
                     existing_overlays = self.overlay_manager.get_overlays_by_app_name(app_name)
@@ -1111,7 +1114,6 @@ class ScreenshotTranslatorApp:
                         region_window_rect = (screen_x1, screen_y1, screen_x2, screen_y2)
                         region_area = (screen_x2 - screen_x1) * (screen_y2 - screen_y1)
 
-                        # === ПРОВЕРКА: ЕСТЬ ЛИ УЖЕ ОВЕРЛЕЙ В ЭТОЙ ОБЛАСТИ ===
                         existing_overlay = None
                         for overlay in existing_overlays:
                             if overlay._last_window_rect:
@@ -1122,7 +1124,7 @@ class ScreenshotTranslatorApp:
                                 overlap_y2 = min(screen_y2, oy2)
                                 if overlap_x2 > overlap_x1 and overlap_y2 > overlap_y1:
                                     overlap_area = (overlap_x2 - overlap_x1) * (overlap_y2 - overlap_y1)
-                                    if overlap_area > region_area * 0.3:  # >30% перекрытия
+                                    if overlap_area > region_area * 0.3:
                                         existing_overlay = overlay
                                         self.logger.info(
                                             f"[F3_HOLD] Зона #{i} уже занята оверлеем, "
@@ -1131,12 +1133,10 @@ class ScreenshotTranslatorApp:
                                         break
 
                         if existing_overlay:
-                            # === ПРОПУСКАЕМ ЗОНУ — ОВЕРЛЕЙ УЖЕ ЕСТЬ ===
                             skipped_count += 1
                             self.logger.info(f"[F3_HOLD] Зона #{i} пропущена (уже занята)")
-                            continue  # <-- ПРОПУСКАЕМ, НЕ ОБНОВЛЯЕМ!
+                            continue
 
-                        # === СОЗДАЁМ НОВЫЙ ОВЕРЛЕЙ ===
                         region_img = translated_img.crop((x1, y1, x2, y2))
                         region_path = self.temp_dir / f"ocr_region_{i}_{int(time.time())}.png"
                         region_img.save(region_path)
@@ -1160,9 +1160,9 @@ class ScreenshotTranslatorApp:
                             if not overlay.visible:
                                 overlay.show()
                             created_count += 1
-                            existing_overlays.append(overlay)  # Добавляем в список для последующих проверок
+                            overlay_created_count += 1  # <-- УВЕЛИЧИВАЕМ СЧЁТЧИК
+                            existing_overlays.append(overlay)
 
-                            # Добавляем шаблон в монитор
                             if self.translation_monitor and self.settings.get_auto_replace_translated():
                                 try:
                                     orig_x1 = screen_x1 - wx1
@@ -1209,7 +1209,6 @@ class ScreenshotTranslatorApp:
                     except Exception as e:
                         self.logger.error(f"[F3_HOLD] Ошибка создания оверлея {i}: {e}")
 
-                    # Логируем время обработки каждой зоны (только если >100мс)
                     zone_time = time.time() - zone_start
                     if zone_time > 0.1:
                         self.logger.info(f"[TIMING] Зона #{i} обработана за {zone_time:.3f}с")
@@ -1226,6 +1225,14 @@ class ScreenshotTranslatorApp:
                 self.logger.info(
                     f"[F3_HOLD] Создано {created_count} новых оверлеев, пропущено {skipped_count} занятых зон")
                 self.ui.root.after(500, self.window_list.refresh)
+
+                # <-- СКРЫВАЕМ ИНДИКАТОР ПОСЛЕ СОЗДАНИЯ ОВЕРЛЕЕВ
+                if created_count > 0 or skipped_count > 0:
+                    self.logger.info("[F3_HOLD] Обработка завершена, скрываем индикатор")
+                    self._hide_translation_overlay()
+                else:
+                    self.logger.info("[F3_HOLD] Не создано ни одного оверлея, скрываем индикатор")
+                    self._hide_translation_overlay()
 
                 if created_count > 0:
                     self.show_notification(
@@ -1245,6 +1252,7 @@ class ScreenshotTranslatorApp:
                 traceback.print_exc()
                 self.show_notification(f"❌ Ошибка OCR: {str(e)[:30]}")
                 self.ui.update_status("● " + self.ui.get_string('error'), '#f44336')
+                self._hide_translation_overlay()  # <-- СКРЫВАЕМ ПРИ ОШИБКЕ
 
         finally:
             total_time = time.time() - total_start
@@ -1734,16 +1742,20 @@ class ScreenshotTranslatorApp:
                 self._pending_area_rect = None
                 self.is_processing_queue = False
                 self.set_actions_blocked(False)
+                self._hide_translation_overlay()  # <-- СКРЫВАЕМ ПРИ ОТМЕНЕ
                 self._process_next_in_queue()
                 return
 
             if error:
                 self.logger.error(f"Ошибка перевода: {error}")
                 self._on_translate_error(error)
+                self._hide_translation_overlay()  # <-- СКРЫВАЕМ ПРИ ОШИБКЕ
                 return
 
             is_temporary = getattr(self, '_is_temporary_translation', False)
             self._is_temporary_translation = False
+
+            overlay_created = False  # <-- ФЛАГ СОЗДАНИЯ ОВЕРЛЕЯ
 
             if result and self.overlay_manager:
                 self.logger.info(f"Результат перевода получен: {result}")
@@ -1752,7 +1764,6 @@ class ScreenshotTranslatorApp:
                 region_path = getattr(self, '_pending_region_path', None)
                 auto_replace_enabled = self.settings.get_auto_replace_translated()
 
-                # Получаем время жизни из настроек для временного оверлея
                 lifetime_seconds = self.settings.get_temporary_lifetime() if is_temporary else 180
 
                 if region_path and region_path.exists() and self.translation_monitor and auto_replace_enabled:
@@ -1764,13 +1775,14 @@ class ScreenshotTranslatorApp:
                         region_path, result,
                         target_app_name,
                         is_temporary=is_temporary,
-                        lifetime_seconds=lifetime_seconds  # <-- ПЕРЕДАЁМ ВРЕМЯ ЖИЗНИ
+                        lifetime_seconds=lifetime_seconds
                     )
                     if add_result and len(add_result) == 2:
                         pair_index, file_hash = add_result
                         self.logger.info(
                             f"[DEBUG] {'Временный' if is_temporary else 'Постоянный'} шаблон #{pair_index} добавлен в монитор, время жизни: {lifetime_seconds}с"
                         )
+                        overlay_created = True  # <-- ШАБЛОН ДОБАВЛЕН, ОВЕРЛЕЙ БУДЕТ СОЗДАН МОНИТОРОМ
                     else:
                         self.logger.warning("[DEBUG] Не удалось добавить шаблон в монитор")
                 else:
@@ -1802,6 +1814,7 @@ class ScreenshotTranslatorApp:
                             if not overlay.visible:
                                 overlay.show()
                             self.ui.root.after(100, self.window_list.refresh)
+                            overlay_created = True  # <-- ОВЕРЛЕЙ СОЗДАН
 
                     self._pending_region_path = None
 
@@ -1810,12 +1823,22 @@ class ScreenshotTranslatorApp:
                 self.ui.update_status("● " + self.ui.get_string('translate_error'), '#f44336')
                 self.show_notification("Ошибка перевода")
 
+            # <-- СКРЫВАЕМ ИНДИКАТОР ТОЛЬКО ПОСЛЕ СОЗДАНИЯ ОВЕРЛЕЯ
+            if overlay_created:
+                self.logger.info("[DEBUG] Оверлей создан, скрываем индикатор")
+                self._hide_translation_overlay()
+            else:
+                self.logger.info("[DEBUG] Оверлей НЕ создан, скрываем индикатор (fallback)")
+                self._hide_translation_overlay()
+
         except Exception as e:
             self.logger.error(f"Ошибка показа результата: {e}")
             import traceback
             traceback.print_exc()
             self.ui.update_status("● " + self.ui.get_string('error'), '#f44336')
             self.show_notification("Ошибка при обработке перевода")
+            self._hide_translation_overlay()  # <-- СКРЫВАЕМ ПРИ ИСКЛЮЧЕНИИ
+
         finally:
             self.translating = False
             self._pending_command_ids = {}
@@ -1826,10 +1849,7 @@ class ScreenshotTranslatorApp:
             if self.translation_queue:
                 self._process_next_in_queue()
             else:
-                if self._indicator_shown:
-                    self._hide_translation_overlay()
-                    self._indicator_shown = False
-                    self.logger.info("[DEBUG] Индикатор перевода скрыт (очередь пуста)")
+                self.logger.info("[DEBUG] Очередь пуста")
 
     def toggle_auto_replace_mode(self):
         if not self.translation_monitor:
@@ -2172,9 +2192,12 @@ class ScreenshotTranslatorApp:
         self._translation_in_progress = True
         self.translating = True
 
+        # <-- ПОКАЗЫВАЕМ ИНДИКАТОР ПЕРЕВОДА
+        self._show_translation_overlay()
+
         self._pending_area_rect = area_rect
         self._pending_region_path = region_path
-        self._is_temporary_translation = is_temporary  # <-- СОХРАНЯЕМ ФЛАГ
+        self._is_temporary_translation = is_temporary
 
         out = self.temp_dir / "translated"
         cmd_id = self.browser_worker.translate_image(image_path, out, self._on_translate_finished)
@@ -2185,21 +2208,25 @@ class ScreenshotTranslatorApp:
         if not self.settings.get_show_translation_indicator():
             return
 
+        # <-- ЗАЩИТА ОТ ПОВТОРНЫХ ВЫЗЫВОВ
+        if self._indicator_shown:
+            self.logger.debug("[DEBUG] Индикатор уже показан, пропускаем")
+            return
+
         try:
             from src.translation_overlay import TranslationOverlay
 
-            # Если индикатор еще не создан - создаем с передачей настроек
             if not self.translation_overlay:
                 self.logger.info("[DEBUG] Создаем новый индикатор перевода")
                 self.translation_overlay = TranslationOverlay(
                     parent=self.ui.root,
                     settings=self.settings
                 )
-                # === ПЕРЕДАЁМ ССЫЛКУ НА ПРИЛОЖЕНИЕ ===
                 self.translation_overlay.set_app(self)
 
-            # Показываем индикатор (локализованная строка)
             self.translation_overlay.show(self.get_string('translation_status_translating'))
+            self._indicator_shown = True
+            self._indicator_hidden = False
             self.logger.info("[DEBUG] Индикатор перевода показан")
 
         except Exception as e:
@@ -2207,10 +2234,17 @@ class ScreenshotTranslatorApp:
 
     def _hide_translation_overlay(self):
         """Скрывает индикатор перевода"""
+        # <-- ЗАЩИТА ОТ ПОВТОРНЫХ ВЫЗЫВОВ
+        if self._indicator_hidden:
+            self.logger.debug("[DEBUG] Индикатор уже скрыт, пропускаем")
+            return
+
         try:
             if self.translation_overlay:
                 self.logger.info("[DEBUG] Скрываем индикатор перевода")
                 self.translation_overlay.finish()
+                self._indicator_shown = False
+                self._indicator_hidden = True
                 self.logger.info("[DEBUG] Индикатор перевода скрыт")
         except Exception as e:
             self.logger.warning(f"Не удалось скрыть индикатор: {e}")
