@@ -11,8 +11,8 @@ from pathlib import Path
 # Добавляем папку src в путь импорта
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
-from src.app import ScreenshotTranslatorApp
-from src.settings import Settings
+# === ИМПОРТ ДЛЯ ПРОВЕРКИ ВЕРСИИ ===
+from src.version_checker import check_and_clean_version
 
 # Проверяем аргументы командной строки
 DEBUG_MODE = '--debug' in sys.argv or '-d' in sys.argv
@@ -28,21 +28,6 @@ def is_admin():
         return False
 
 
-def ensure_app_directories():
-    """Создает все необходимые папки приложения"""
-    try:
-        config_dir = Path.home() / "Documents" / "GoogleScreenTranslate" / "config"
-        logs_dir = Path.home() / "Documents" / "GoogleScreenTranslate" / "logs"
-        temp_dir = Path.home() / "Documents" / "GoogleScreenTranslate" / "temp"
-        config_dir.mkdir(parents=True, exist_ok=True)
-        logs_dir.mkdir(parents=True, exist_ok=True)
-        temp_dir.mkdir(parents=True, exist_ok=True)
-        return True
-    except Exception as e:
-        print(f"Ошибка создания папок: {e}")
-        return False
-
-
 def run_as_admin():
     """Перезапускает программу с правами администратора"""
     try:
@@ -50,12 +35,9 @@ def run_as_admin():
         import sys
         import os
 
-        # Получаем путь к текущему скрипту
         script_path = os.path.abspath(sys.argv[0])
-        # Формируем аргументы командной строки (убираем --admin чтобы не было рекурсии)
         args = ' '.join([arg for arg in sys.argv[1:] if arg != '--admin'])
 
-        # Запускаем с правами администратора
         ctypes.windll.shell32.ShellExecuteW(
             None,
             "runas",
@@ -71,6 +53,12 @@ def run_as_admin():
 
 
 if __name__ == "__main__":
+    # === ПРОВЕРКА ВЕРСИИ В САМОМ НАЧАЛЕ ===
+    app_docs_path = Path.home() / "Documents" / "GoogleScreenTranslate"
+    version_ok = check_and_clean_version(app_docs_path)
+    if not version_ok:
+        print("⚠️ Ошибка при проверке версии, работа продолжается...")
+
     # Проверяем режим администратора
     if ADMIN_MODE and not is_admin():
         print("👑 Запрос прав администратора...")
@@ -83,10 +71,9 @@ if __name__ == "__main__":
     elif ADMIN_MODE and is_admin():
         print("👑 РЕЖИМ АДМИНИСТРАТОРА: программа запущена с правами администратора")
 
-    # Создаем необходимые папки
-    ensure_app_directories()
+    # Инициализация настроек (после проверки версии)
+    from src.settings import Settings
 
-    # Инициализация настроек
     settings = Settings()
     if not settings.profiles:
         settings.profiles = {
@@ -97,13 +84,13 @@ if __name__ == "__main__":
         }
         settings.save()
 
-    # Если включен режим отладки - показываем браузер
     if DEBUG_MODE:
         settings.set_show_browser(True)
         print("🔧 РЕЖИМ ОТЛАДКИ: браузер будет показан")
     else:
-        # В обычном режиме браузер скрыт
         settings.set_show_browser(False)
+
+    from src.app import ScreenshotTranslatorApp
 
     app = ScreenshotTranslatorApp()
     app.run()
