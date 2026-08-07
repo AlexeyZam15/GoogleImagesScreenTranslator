@@ -567,13 +567,13 @@ class ScreenshotTranslatorApp:
 
         if not self.overlay_manager:
             self.logger.warning("[CLEAR_ALL] OverlayManager не инициализирован")
-            self.show_notification(self.get_string('notification_remove_no_app'))  # <-- ЛОКАЛИЗОВАНО
+            self.show_notification(self.get_string('notification_remove_no_app'))
             return
 
         current_app = self._get_current_app_name()
         if not current_app:
             self.logger.warning("[CLEAR_ALL] Не удалось определить текущее приложение")
-            self.show_notification(self.get_string('notification_remove_no_app'))  # <-- ЛОКАЛИЗОВАНО
+            self.show_notification(self.get_string('notification_remove_no_app'))
             return
 
         overlays_for_app = self.overlay_manager.get_overlays_by_app_name(current_app)
@@ -586,7 +586,7 @@ class ScreenshotTranslatorApp:
         overlays_count = len(overlays_for_app)
         self.logger.info(f"[CLEAR_ALL] Найдено {overlays_count} оверлеев для приложения {current_app}")
 
-        # === ШАГ 1: ОСТАНАВЛИВАЕМ МОНИТОР ===
+        # === ОСТАНАВЛИВАЕМ МОНИТОР ===
         monitor_was_running = False
         if self.translation_monitor:
             if self.translation_monitor.is_running():
@@ -594,10 +594,7 @@ class ScreenshotTranslatorApp:
                 self.translation_monitor.stop()
                 self.logger.info("[CLEAR_ALL] Монитор остановлен")
 
-            import time
-            time.sleep(0.1)
-            self.logger.info("[CLEAR_ALL] Ожидание завершения запланированных задач (100мс)")
-
+            # Очищаем шаблоны для этого приложения из монитора
             templates_to_remove = []
             for template_data in self.translation_monitor.templates[:]:
                 if template_data.get('target_app_name') == current_app:
@@ -607,41 +604,28 @@ class ScreenshotTranslatorApp:
                 self.translation_monitor.remove_template(pair_index)
                 self.logger.info(f"[CLEAR_ALL] Удален шаблон #{pair_index} для {current_app}")
 
-            self.translation_monitor.templates = [
-                t for t in self.translation_monitor.templates
-                if t.get('target_app_name') != current_app
-            ]
-            self.logger.info(
-                f"[CLEAR_ALL] Очищены все шаблоны для {current_app}, осталось {len(self.translation_monitor.templates)} шаблонов")
-
+            # Очищаем кэш монитора
             self.translation_monitor._frame_cache = None
             self.translation_monitor._frame_cache_hwnd = None
             self.translation_monitor._last_active_hwnd = None
             self.translation_monitor._last_active_app_name = None
-            self.logger.info("[CLEAR_ALL] Кэш монитора очищен")
 
-        # === ШАГ 2: УДАЛЯЕМ ОВЕРЛЕИ ===
-        removed_count = 0
-        for overlay in overlays_for_app[:]:
-            try:
-                self.overlay_manager.remove_overlay(overlay, force=True)
-                removed_count += 1
-            except Exception as e:
-                self.logger.error(f"[CLEAR_ALL] Ошибка удаления оверлея: {e}")
+        # === ИСПОЛЬЗУЕМ МАССОВОЕ УДАЛЕНИЕ ===
+        if hasattr(self.overlay_manager, 'remove_all_overlays_for_app'):
+            # Быстрое массовое удаление
+            self.overlay_manager.remove_all_overlays_for_app(current_app, force=True)
+            removed_count = overlays_count
+        else:
+            # Fallback на поштучное удаление
+            removed_count = 0
+            for overlay in overlays_for_app[:]:
+                try:
+                    self.overlay_manager.remove_overlay(overlay, force=True)
+                    removed_count += 1
+                except Exception as e:
+                    self.logger.error(f"[CLEAR_ALL] Ошибка удаления оверлея: {e}")
 
-        self.logger.info(f"[CLEAR_ALL] Удалено {removed_count} оверлеев для {current_app}")
-
-        # === ШАГ 3: ОЧИЩАЕМ СПИСКИ ===
-        self.overlay_manager.overlays = [
-            ov for ov in self.overlay_manager.overlays
-            if ov not in overlays_for_app
-        ]
-
-        if current_app in self.overlay_manager.overlays_by_app_name:
-            del self.overlay_manager.overlays_by_app_name[current_app]
-            self.logger.info(f"[CLEAR_ALL] Очищен список оверлеев для {current_app} в менеджере")
-
-        # === ШАГ 4: УДАЛЯЕМ ИЗ ФАЙЛА СОСТОЯНИЯ ===
+        # === УДАЛЯЕМ ИЗ ФАЙЛА СОСТОЯНИЯ ===
         try:
             import json
             state_file = Path.home() / "Documents" / "GoogleScreenTranslate" / "config" / "overlay_state.json"
@@ -660,27 +644,7 @@ class ScreenshotTranslatorApp:
         except Exception as e:
             self.logger.warning(f"[CLEAR_ALL] Не удалось обновить файл состояния: {e}")
 
-        # === ШАГ 5: ОЧИЩАЕМ _window_states ===
-        keys_to_remove = []
-        for key in self._window_states.keys():
-            if key == current_app or (isinstance(key, int) and self._get_app_name_by_hwnd(key) == current_app):
-                keys_to_remove.append(key)
-
-        for key in keys_to_remove:
-            del self._window_states[key]
-            self.logger.info(f"[CLEAR_ALL] Удалено состояние окна: {key}")
-
-        self.logger.info(f"[CLEAR_ALL] Состояние для {current_app} очищено")
-
-        # === ШАГ 6: СОХРАНЯЕМ СОСТОЯНИЕ ===
-        try:
-            self.overlay_manager._suppress_save = False
-            self.overlay_manager.save_overlay_state(immediate=True)
-            self.logger.info("[CLEAR_ALL] Состояние сохранено")
-        except Exception as e:
-            self.logger.warning(f"[CLEAR_ALL] Ошибка сохранения состояния: {e}")
-
-        # === ШАГ 7: ПЕРЕЗАПУСКАЕМ МОНИТОР, ЕСЛИ ЕСТЬ ШАБЛОНЫ ДЛЯ ДРУГИХ ПРИЛОЖЕНИЙ ===
+        # === ПЕРЕЗАПУСКАЕМ МОНИТОР, ЕСЛИ ЕСТЬ ШАБЛОНЫ ДЛЯ ДРУГИХ ПРИЛОЖЕНИЙ ===
         if self.translation_monitor:
             remaining_templates = len(self.translation_monitor.templates)
             if remaining_templates > 0 and self.settings.get_auto_replace_translated():
@@ -689,16 +653,17 @@ class ScreenshotTranslatorApp:
                 self.logger.info("[CLEAR_ALL] Монитор перезапущен")
             elif remaining_templates > 0:
                 self.logger.info(
-                    f"[CLEAR_ALL] Монитор не перезапущен (автозамена выключена), осталось {remaining_templates} шаблонов")
+                    f"[CLEAR_ALL] Монитор не перезапущен (автозамена выключена), осталось {remaining_templates} шаблонов"
+                )
             else:
                 self.logger.info("[CLEAR_ALL] Нет оставшихся шаблонов, монитор не перезапускается")
 
-        # === ШАГ 8: ОБНОВЛЯЕМ СПИСОК ОКОН ===
+        # === ОБНОВЛЯЕМ СПИСОК ОКОН ===
         self.ui.root.after(100, lambda: self.window_list.refresh(skip_restore=True))
 
         self.logger.info(f"[CLEAR_ALL] Очистка завершена для {current_app}")
         self.show_notification(
-            self.get_string('clear_all_completed').format(app_name=current_app, count=removed_count)  # <-- ЛОКАЛИЗОВАНО
+            self.get_string('clear_all_completed').format(app_name=current_app, count=removed_count)
         )
 
     def get_string(self, key: str) -> str:

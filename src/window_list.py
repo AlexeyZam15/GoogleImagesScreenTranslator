@@ -126,7 +126,7 @@ class WindowListManager:
         return self._window_app_map.get(selection[0])
 
     def remove_overlays_for_selected(self):
-        """Удаляет оверлеи для выбранного приложения (по имени, а не по HWND)"""
+        """Удаляет оверлеи для выбранного приложения (массово, быстро)"""
         self.logger.info("[WINDOW_LIST] === remove_overlays_for_selected НАЧАЛО ===")
 
         selection = self.window_listbox.curselection()
@@ -152,24 +152,25 @@ class WindowListManager:
             self.refresh()
             return
 
-        self.logger.info(f"[WINDOW_LIST] Удаление {len(overlays_to_remove)} оверлеев для {app_name}")
+        self.logger.info(f"[WINDOW_LIST] Быстрое удаление {len(overlays_to_remove)} оверлеев для {app_name}")
 
-        # Отключаем сохранение состояния
-        if hasattr(self.app.overlay_manager, '_suppress_save'):
-            self.app.overlay_manager._suppress_save = True
+        # === ИСПОЛЬЗУЕМ МАССОВОЕ УДАЛЕНИЕ ===
+        if hasattr(self.app.overlay_manager, 'remove_all_overlays_for_app'):
+            self.app.overlay_manager.remove_all_overlays_for_app(app_name, force=True)
+        else:
+            # Fallback на поштучное удаление
+            if hasattr(self.app.overlay_manager, '_suppress_save'):
+                self.app.overlay_manager._suppress_save = True
 
-        # Удаляем все оверлеи с force=True
-        removed_count = 0
-        for overlay in overlays_to_remove[:]:
-            try:
-                self.app.overlay_manager.remove_overlay(overlay, force=True)
-                removed_count += 1
-            except Exception as e:
-                self.logger.error(f"[WINDOW_LIST] Ошибка удаления оверлея: {e}")
+            for overlay in overlays_to_remove[:]:
+                try:
+                    self.app.overlay_manager.remove_overlay(overlay, force=True)
+                except Exception as e:
+                    self.logger.error(f"[WINDOW_LIST] Ошибка удаления оверлея: {e}")
 
-        # Включаем сохранение
-        if hasattr(self.app.overlay_manager, '_suppress_save'):
-            self.app.overlay_manager._suppress_save = False
+            if hasattr(self.app.overlay_manager, '_suppress_save'):
+                self.app.overlay_manager._suppress_save = False
+                self.app.overlay_manager.save_overlay_state(immediate=True)
 
         # === УДАЛЯЕМ ВСЕ ЗАПИСИ ДЛЯ ЭТОГО ПРИЛОЖЕНИЯ ИЗ ФАЙЛА СОСТОЯНИЯ ===
         try:
@@ -191,16 +192,6 @@ class WindowListManager:
         except Exception as e:
             self.logger.warning(f"[WINDOW_LIST] Не удалось обновить файл состояния: {e}")
 
-        # Сохраняем состояние
-        if hasattr(self.app.overlay_manager, 'save_overlay_state'):
-            self.app.overlay_manager.save_overlay_state(immediate=True)
-            self.logger.info("[WINDOW_LIST] Состояние сохранено после удаления всех оверлеев")
-
-        # === ВАЖНО: НЕ ПЕРЕЗАПУСКАЕМ МОНИТОР ===
-        # Управление монитором полностью в руках app.py
-        # Монитор будет запущен только при добавлении нового шаблона через add_template()
-        self.logger.info("[WINDOW_LIST] Монитор не перезапускается (управление через app.py)")
-
-        self.logger.info(f"[WINDOW_LIST] Удалено {removed_count} оверлеев для {app_name}")
+        # Обновляем список окон
         self.refresh()
         self.logger.info("[WINDOW_LIST] === remove_overlays_for_selected ЗАВЕРШЕН ===")
