@@ -50,33 +50,73 @@ def cleanup_old_logs(log_dir, keep_count=5):
 
 
 def setup_logging():
-    """Настройка логирования"""
+    """Настройка логирования с выводом в консоль и файл"""
     try:
+        # Создаем папку для логов
         log_dir = Path.home() / "Documents" / "GoogleScreenTranslate" / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         log_file = log_dir / f"app_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.log"
 
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S',
-            handlers=[
-                logging.FileHandler(log_file, encoding='utf-8'),
-                logging.StreamHandler(sys.stdout)
-            ]
+        # Настраиваем корневой логгер
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.INFO)
+
+        # Удаляем все существующие обработчики (чтобы избежать дублирования)
+        for handler in root_logger.handlers[:]:
+            root_logger.removeHandler(handler)
+
+        # Формат для логов
+        formatter = logging.Formatter(
+            '%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
         )
+
+        # 1. Обработчик для вывода в терминал (консоль)
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(logging.INFO)
+        console_handler.setFormatter(formatter)
+        root_logger.addHandler(console_handler)
+
+        # 2. Обработчик для записи в файл
+        file_handler = logging.FileHandler(log_file, encoding='utf-8')
+        file_handler.setLevel(logging.INFO)
+        file_handler.setFormatter(formatter)
+        root_logger.addHandler(file_handler)
+
+        # Отключаем излишние логи от сторонних библиотек
         logging.getLogger("playwright").setLevel(logging.WARNING)
         logging.getLogger("PIL").setLevel(logging.WARNING)
+        logging.getLogger("urllib3").setLevel(logging.WARNING)
+        logging.getLogger("asyncio").setLevel(logging.WARNING)
 
-        logging.info("=" * 70)
-        logging.info(f"Запуск GoogleScreenTranslate")
-        logging.info(f"Лог файл: {log_file}")
-        logging.info("=" * 70)
+        # Принудительная синхронизация вывода (для Windows)
+        try:
+            sys.stdout.reconfigure(line_buffering=True)
+        except:
+            pass
 
+        # Тестовое сообщение для проверки
+        logger = logging.getLogger(__name__)
+        logger.info("=" * 70)
+        logger.info(f"Запуск GoogleScreenTranslate")
+        logger.info(f"Лог файл: {log_file}")
+        logger.info("=" * 70)
+
+        # Очистка старых логов (оставляем последние 5)
         cleanup_old_logs(log_dir, keep_count=5)
+
+        # Дополнительный вывод в консоль (гарантированно)
+        print(f"\n✅ Логирование запущено")
+        print(f"📁 Лог файл: {log_file}")
+        print("=" * 70 + "\n")
+
         return log_file
+
     except Exception as e:
-        print(f"Ошибка настройки логирования: {e}")
+        # Если не удалось настроить логирование - выводим ошибку в консоль
+        print(f"❌ Ошибка настройки логирования: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
@@ -89,8 +129,13 @@ class ScreenshotTranslatorApp:
         return self.ui.root
 
     def __init__(self):
-        setup_logging()
+        # Настройка логирования с принудительным выводом в консоль
+        self.log_file = setup_logging()
         self.logger = logging.getLogger(__name__)
+
+        # Принудительный сброс логов после инициализации
+        self._force_log_flush()
+
         self.settings = Settings()
         self.temp_dir = ensure_app_temp_dir()
 
@@ -162,6 +207,23 @@ class ScreenshotTranslatorApp:
 
         # Запуск инициализации
         self.ui.root.after(100, self._init_translator_step)
+
+        # Принудительный сброс логов после завершения инициализации
+        self._force_log_flush()
+        self.logger.info("✅ Приложение инициализировано успешно")
+        self._force_log_flush()
+
+    def _force_log_flush(self):
+        """Принудительно сбрасывает буферы логов в консоль"""
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+            for handler in logging.root.handlers:
+                if hasattr(handler, 'flush'):
+                    handler.flush()
+        except Exception as e:
+            # Не используем self.logger здесь, чтобы избежать рекурсии
+            print(f"Ошибка при сбросе буферов: {e}")
 
     def _restart_translator(self):
         """Перезапускает переводчик с сохранением текущих настроек"""
