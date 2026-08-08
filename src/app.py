@@ -246,6 +246,7 @@ class ScreenshotTranslatorApp:
 
         self.ready = False
         self.initializing = True
+        # Статус "starting browser" — ОСТАВЛЯЕМ
         self.ui.update_status("● " + self.ui.get_string('starting_browser'), '#ff9800')
 
         cmd_id = self.browser_worker.restart_browser(show_browser, target_lang, self._on_init_complete)
@@ -989,7 +990,8 @@ class ScreenshotTranslatorApp:
                 self.logger.warning(f"[F3_HOLD] Ошибка переключения полноэкранного режима: {e}")
 
         self.translating = True
-        self.ui.update_status("● " + self.ui.get_string('translating'), '#ff9800')
+        # Статус "translating" — УБИРАЕМ
+        self.logger.info("[F3_HOLD] Запуск перевода с OCR...")
 
         # Показываем индикатор
         self._show_translation_overlay()
@@ -1001,7 +1003,8 @@ class ScreenshotTranslatorApp:
             try:
                 img = self.screenshot.capture_active_window()
                 if not img:
-                    self.ui.update_status("● " + self.ui.get_string('capture_error'), '#f44336')
+                    # Ошибка захвата — только лог
+                    self.logger.error("[F3_HOLD] Ошибка захвата окна")
                     self.translating = False
                     self.set_actions_blocked(False)
                     self._hide_translation_overlay()
@@ -1021,15 +1024,14 @@ class ScreenshotTranslatorApp:
                 self._pending_region_path = None
                 self._is_temporary_translation = False
 
-                # Передаем screenshot_path и window_rect в колбэк
                 cmd_id = self.browser_worker.translate_image(
                     screenshot_path,
                     out_dir,
                     lambda result, error: self._on_ocr_translate_finished(
                         result, error,
-                        screenshot_path,  # <-- передаем путь к скриншоту
-                        window_rect,  # <-- передаем rect окна
-                        current_hwnd  # <-- передаем HWND
+                        screenshot_path,
+                        window_rect,
+                        current_hwnd
                     )
                 )
                 self._pending_command_ids[cmd_id] = 'translate_ocr'
@@ -1039,7 +1041,6 @@ class ScreenshotTranslatorApp:
                 self.translating = False
                 self.set_actions_blocked(False)
                 self._hide_translation_overlay()
-                self.ui.update_status("● " + self.ui.get_string('error'), '#f44336')
 
         threading.Thread(target=capture_and_translate_task, daemon=True).start()
 
@@ -1132,14 +1133,14 @@ class ScreenshotTranslatorApp:
     def _handle_ocr_error(self, error):
         """Обрабатывает ошибку OCR."""
         self.logger.error(f"[F3_HOLD] Ошибка перевода: {error}")
-        self.ui.update_status("● " + self.ui.get_string('translate_error'), '#f44336')
+        # Статус ошибки убран
         self.set_actions_blocked(False)
         self._hide_translation_overlay()
 
     def _handle_ocr_no_result(self):
         """Обрабатывает случай отсутствия результата."""
         self.logger.error("[F3_HOLD] Результат перевода не найден")
-        self.ui.update_status("● " + self.ui.get_string('translate_error'), '#f44336')
+        # Статус ошибки убран
         self.set_actions_blocked(False)
         self._hide_translation_overlay()
 
@@ -1147,7 +1148,7 @@ class ScreenshotTranslatorApp:
         """Обрабатывает случай, когда OCR не готов."""
         self.logger.error("[F3_HOLD] OCR не инициализирован")
         self.show_notification("❌ OCR не готов")
-        self.ui.update_status("● OCR не готов", '#f44336')
+        # Статус ошибки убран
         self.set_actions_blocked(False)
         self._hide_translation_overlay()
 
@@ -1220,7 +1221,7 @@ class ScreenshotTranslatorApp:
         """Обрабатывает случай, когда текст не обнаружен."""
         self.logger.info("[F3_HOLD] Текст не обнаружен")
         self.show_notification("ℹ️ Текст не обнаружен")
-        self.ui.update_status("● " + self.ui.get_string('ready'), '#4CAF50')
+        # Статус убран
         self.set_actions_blocked(False)
         self._hide_translation_overlay()
 
@@ -1450,14 +1451,14 @@ class ScreenshotTranslatorApp:
 
         if created_count > 0:
             self.show_notification(f"✅ {created_count} оверлеев создано ({skipped_count} пропущено)")
-            self.ui.update_status(f"● {created_count} оверлеев создано", '#4CAF50')
+            # Статус убран
         else:
             if skipped_count > 0:
                 self.show_notification(f"ℹ️ Все {skipped_count} зон уже заняты оверлеями")
-                self.ui.update_status("● Все зоны уже заняты", '#ff9800')
+                # Статус убран
             else:
                 self.show_notification("⚠️ Не удалось создать оверлеи")
-                self.ui.update_status("● " + self.ui.get_string('error'), '#f44336')
+                # Статус убран
 
     def _handle_ocr_exception(self, e):
         """Обрабатывает исключение в OCR."""
@@ -1724,7 +1725,7 @@ class ScreenshotTranslatorApp:
         if error:
             self.logger.error(f"Ошибка инициализации: {error}")
             self.initializing = False
-            self.ui.update_status("● Ошибка: " + str(error)[:50], '#f44336')
+            # Статус ошибки убран — только лог
             self.ui.root.after(self._init_retry_delay, self._init_translator_step)
             return
 
@@ -1770,7 +1771,7 @@ class ScreenshotTranslatorApp:
 
         self.ui.set_settings_menu_enabled(True)
 
-        # Обновляем статус на "Готов"
+        # Обновляем статус на "Готов" — ЭТО ОСТАВЛЯЕМ
         ready_text = self.ui.get_string('ready')
         self.logger.info(f"[STATUS] Обновление статуса на: {ready_text}")
         self.ui.update_status(f"● {ready_text} ({engine_name})", '#4CAF50')
@@ -1888,15 +1889,17 @@ class ScreenshotTranslatorApp:
             self.screenshot._is_fullscreen = self.screenshot.is_window_fullscreen(current_hwnd)
 
         self.translating = True
-        self.ui.update_status("● " + self.ui.get_string('translating'), '#ff9800')
-        self.show_notification(self.get_string('notification_capturing'))  # <-- ЛОКАЛИЗОВАНО
+        # Убираем статус "translating" — только лог
+        self.logger.info("[F2] Захват скриншота...")
+        self.show_notification(self.get_string('notification_capturing'))
 
         def capture_task():
             try:
                 from PIL import Image
                 img = self.screenshot.capture_active_window()
                 if not img:
-                    self.ui.update_status("● " + self.ui.get_string('capture_error'), '#f44336')
+                    # Ошибка захвата — только лог
+                    self.logger.error("[F2] Ошибка захвата окна")
                     self.translating = False
                     self.set_actions_blocked(False)
                     return
@@ -1934,20 +1937,20 @@ class ScreenshotTranslatorApp:
                 self._pending_area_rect = None
                 self.is_processing_queue = False
                 self.set_actions_blocked(False)
-                self._hide_translation_overlay()  # <-- СКРЫВАЕМ ПРИ ОТМЕНЕ
+                self._hide_translation_overlay()
                 self._process_next_in_queue()
                 return
 
             if error:
                 self.logger.error(f"Ошибка перевода: {error}")
-                self._on_translate_error(error)
-                self._hide_translation_overlay()  # <-- СКРЫВАЕМ ПРИ ОШИБКЕ
+                # Ошибка перевода — только лог
+                self._hide_translation_overlay()
                 return
 
             is_temporary = getattr(self, '_is_temporary_translation', False)
             self._is_temporary_translation = False
 
-            overlay_created = False  # <-- ФЛАГ СОЗДАНИЯ ОВЕРЛЕЯ
+            overlay_created = False
 
             if result and self.overlay_manager:
                 self.logger.info(f"Результат перевода получен: {result}")
@@ -1974,7 +1977,7 @@ class ScreenshotTranslatorApp:
                         self.logger.info(
                             f"[DEBUG] {'Временный' if is_temporary else 'Постоянный'} шаблон #{pair_index} добавлен в монитор, время жизни: {lifetime_seconds}с"
                         )
-                        overlay_created = True  # <-- ШАБЛОН ДОБАВЛЕН, ОВЕРЛЕЙ БУДЕТ СОЗДАН МОНИТОРОМ
+                        overlay_created = True
                     else:
                         self.logger.warning("[DEBUG] Не удалось добавить шаблон в монитор")
                 else:
@@ -2006,16 +2009,15 @@ class ScreenshotTranslatorApp:
                             if not overlay.visible:
                                 overlay.show()
                             self.ui.root.after(100, self.window_list.refresh)
-                            overlay_created = True  # <-- ОВЕРЛЕЙ СОЗДАН
+                            overlay_created = True
 
                     self._pending_region_path = None
 
             else:
                 self.logger.warning("Результат перевода пустой")
-                self.ui.update_status("● " + self.ui.get_string('translate_error'), '#f44336')
+                # Ошибка перевода — только лог
                 self.show_notification("Ошибка перевода")
 
-            # <-- СКРЫВАЕМ ИНДИКАТОР ТОЛЬКО ПОСЛЕ СОЗДАНИЯ ОВЕРЛЕЯ
             if overlay_created:
                 self.logger.info("[DEBUG] Оверлей создан, скрываем индикатор")
                 self._hide_translation_overlay()
@@ -2027,9 +2029,9 @@ class ScreenshotTranslatorApp:
             self.logger.error(f"Ошибка показа результата: {e}")
             import traceback
             traceback.print_exc()
-            self.ui.update_status("● " + self.ui.get_string('error'), '#f44336')
+            # Ошибка — только лог
             self.show_notification("Ошибка при обработке перевода")
-            self._hide_translation_overlay()  # <-- СКРЫВАЕМ ПРИ ИСКЛЮЧЕНИИ
+            self._hide_translation_overlay()
 
         finally:
             self.translating = False
@@ -2092,7 +2094,7 @@ class ScreenshotTranslatorApp:
     def _on_translate_error(self, error_msg):
         self.logger.error(f"Ошибка перевода: {error_msg}")
         self._translation_in_progress = False
-        self.ui.update_status("● " + self.ui.get_string('error'), '#f44336')
+        # Статус ошибки убран
         self.translating = False
         self.set_actions_blocked(False)
         self._hide_translation_overlay()
@@ -2123,7 +2125,8 @@ class ScreenshotTranslatorApp:
 
             current_hwnd = win32gui.GetForegroundWindow()
             if not current_hwnd:
-                self.ui.update_status("● " + self.ui.get_string('capture_error'), '#f44336')
+                # Ошибка захвата — только лог
+                self.logger.error("[F3] Не удалось получить активное окно")
                 self._capture_mode = False
                 self.set_actions_blocked(False)
                 self.ui.root.deiconify()
@@ -2134,27 +2137,25 @@ class ScreenshotTranslatorApp:
             self.screenshot._is_fullscreen = self.screenshot.is_window_fullscreen(current_hwnd)
             self._area_is_fullscreen = self.screenshot._is_fullscreen
 
-            # === ПЕРЕКЛЮЧАЕМ ОКНО В ОКОННЫЙ ПОЛНОЭКРАННЫЙ РЕЖИМ ===
             if self._area_is_fullscreen:
                 self.logger.info("[F3] Переключение окна в оконный полноэкранный режим")
 
-                # Сначала отправляем Alt+Enter, чтобы игра переключилась в оконный режим
                 try:
                     import keyboard
                     keyboard.press_and_release('alt+enter')
                     self.logger.info("[F3] Alt+Enter отправлен")
-                    time.sleep(0.5)  # Даём игре время переключиться
+                    time.sleep(0.5)
                 except Exception as e:
                     self.logger.warning(f"[F3] Не удалось отправить Alt+Enter: {e}")
 
-                # Теперь применяем стили для удаления рамки
                 make_windowed_fullscreen(current_hwnd)
                 time.sleep(0.3)
                 self.logger.info("[F3] Окно переключено в оконный полноэкранный режим")
 
             img = ImageGrab.grab()
             if not img:
-                self.ui.update_status("● " + self.ui.get_string('capture_error'), '#f44336')
+                # Ошибка захвата — только лог
+                self.logger.error("[F3] Ошибка захвата экрана")
                 self._capture_mode = False
                 self.set_actions_blocked(False)
                 self.ui.root.deiconify()
@@ -2166,7 +2167,7 @@ class ScreenshotTranslatorApp:
             self._show_continuous_area_selection_window(screenshot_path)
         except Exception as e:
             self.logger.error(f"Ошибка захвата области: {e}")
-            self.ui.update_status("● " + self.ui.get_string('capture_error'), '#f44336')
+            # Ошибка — только лог
             self._capture_mode = False
             self.set_actions_blocked(False)
             self.ui.root.deiconify()
@@ -2329,12 +2330,14 @@ class ScreenshotTranslatorApp:
 
         self._init_attempts += 1
         if self._init_attempts > self._max_init_attempts:
-            self.ui.update_status("● Ошибка инициализации", '#f44336')
+            # Ошибка инициализации — убираем из статуса, только лог
+            self.logger.error("[APP] Превышено количество попыток инициализации")
             self._init_attempts = 0
             self.ui.root.after(5000, self._init_translator_step)
             return
 
         self.initializing = True
+        # Статус "starting browser" — ОСТАВЛЯЕМ
         self.ui.update_status("● " + self.ui.get_string('starting_browser'), '#ff9800')
 
         show_browser = self.settings.get_show_browser()
@@ -2482,14 +2485,14 @@ class ScreenshotTranslatorApp:
             if self._last_engine != new_engine:
                 self._last_engine = new_engine
                 self.logger.info(
-                    f"[SETTINGS] Движок изменен: {self._last_engine} -> {new_engine}, перезапускаем браузер")
+                    f"[SETTINGS] Движок изменен: {self._last_engine} -> {new_engine}, перезапускаем браузер"
+                )
                 if self.ready:
                     self._restart_translator()
                 else:
                     self.logger.info("[SETTINGS] Браузер не готов, перезапуск отложен")
 
-        # === НОВЫЙ КОД: ОБНОВЛЕНИЕ СТАТУСА ПРИ СМЕНЕ ЯЗЫКА ===
-        # Обновляем статус, если приложение готово
+        # Обновляем статус, если приложение готово — ТОЛЬКО ДЛЯ БРАУЗЕРА
         if self.ready:
             engine = self.settings.get_translator_engine()
             engine_name = "Google Translate" if engine == "google" else "Яндекс.Переводчик (OCR)"
