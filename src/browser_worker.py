@@ -253,16 +253,53 @@ class BrowserWorker:
         self.logger.info("BrowserWorker запущен")
 
     def stop(self):
-        """Останавливает рабочий поток"""
+        """Останавливает рабочий поток с таймаутом и принудительным завершением"""
+        import time
+        import threading
+
+        self.logger.info("[BROWSER_WORKER] Остановка...")
+
+        # 1. Устанавливаем флаг остановки
         self._running = False
+
+        # 2. Отправляем сигнал в очередь
         if self._command_queue:
             try:
                 self._command_queue.put_nowait(None)
-            except:
-                pass
+                self.logger.info("[BROWSER_WORKER] Сигнал остановки отправлен в очередь")
+            except Exception as e:
+                self.logger.warning(f"[BROWSER_WORKER] Ошибка отправки сигнала: {e}")
+
+        # 3. Закрываем браузер (это может занять время)
+        if hasattr(self, 'translator') and self.translator:
+            try:
+                self.logger.info("[BROWSER_WORKER] Закрытие браузера...")
+                # Устанавливаем флаг отмены, чтобы прервать текущие операции
+                try:
+                    self.translator._cancel_flag = True
+                except:
+                    pass
+
+                # Закрываем с таймаутом
+                close_start = time.time()
+                self.translator.close_browser()
+                close_elapsed = time.time() - close_start
+                self.logger.info(f"[BROWSER_WORKER] Браузер закрыт за {close_elapsed:.2f}с")
+            except Exception as e:
+                self.logger.warning(f"[BROWSER_WORKER] Ошибка закрытия браузера: {e}")
+            self.translator = None
+
+        # 4. Ждем завершения потока с таймаутом
         if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=2.0)
-        self.logger.info("BrowserWorker остановлен")
+            self.logger.info("[BROWSER_WORKER] Ожидание завершения потока...")
+            self._thread.join(timeout=3.0)
+
+            if self._thread.is_alive():
+                self.logger.warning("[BROWSER_WORKER] Поток не завершился, принудительное завершение")
+                # Помечаем поток как демонический, чтобы он не блокировал выход
+                self._thread.daemon = True
+
+        self.logger.info("[BROWSER_WORKER] Остановлен")
 
     def _execute_command(self, cmd_type: str, *args, **kwargs):
         """Выполняет команду в рабочем потоке"""

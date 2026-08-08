@@ -472,13 +472,21 @@ class OverlayManager:
             return "Неизвестно"
 
     def close_all(self):
-        """Закрывает все оверлеи."""
-        self.logger.info(f"Закрытие всех оверлеев. Количество: {len(self.overlays)}")
+        """Закрывает все оверлеи с таймаутом."""
+        import time
 
+        self.logger.info(f"[OVERLAY_MANAGER] Закрытие всех оверлеев. Количество: {len(self.overlays)}")
+
+        # Отключаем ESC хук
         self._disable_esc_hook()
 
-        for overlay in self.overlays[:]:
+        # Закрываем все оверлеи
+        count = len(self.overlays)
+        for i, overlay in enumerate(self.overlays[:]):
             try:
+                self.logger.info(f"[OVERLAY_MANAGER] Закрытие оверлея {i + 1}/{count}")
+
+                # Сбрасываем ссылку в мониторе
                 if hasattr(self, 'parent') and self.parent and hasattr(self.parent, 'translation_monitor'):
                     monitor = self.parent.translation_monitor
                     if monitor:
@@ -486,24 +494,29 @@ class OverlayManager:
                             if template.get('overlay') is overlay:
                                 template['overlay'] = None
                                 self.logger.info(
-                                    f"[MONITOR] Ссылка на оверлей сброшена для шаблона #{template.get('pair_index')}")
+                                    f"[MONITOR] Ссылка на оверлей сброшена для шаблона #{template.get('pair_index')}"
+                                )
 
-                self.remove_overlay(overlay)
+                # Закрываем оверлей
+                overlay.close()
+
             except Exception as e:
-                self.logger.error(f"Ошибка при закрытии оверлея: {e}")
+                self.logger.error(f"[OVERLAY_MANAGER] Ошибка при закрытии оверлея: {e}")
 
+        # Очищаем списки
         self.overlays.clear()
         self.overlays_by_app_name.clear()
 
+        # Удаляем файл состояния
         try:
             state_file = self._get_overlay_state_file()
             if state_file.exists():
                 state_file.unlink()
-                self.logger.info("[STATE] Файл состояния удален")
+                self.logger.info("[OVERLAY_MANAGER] Файл состояния удален")
         except Exception as e:
-            self.logger.warning(f"[STATE] Не удалось удалить файл состояния: {e}")
+            self.logger.warning(f"[OVERLAY_MANAGER] Не удалось удалить файл состояния: {e}")
 
-        self.logger.info("Все оверлеи закрыты.")
+        self.logger.info("[OVERLAY_MANAGER] Все оверлеи закрыты.")
 
     def set_dragging(self, dragging: bool):
         """Устанавливает глобальный флаг перетаскивания для всех оверлеев."""

@@ -1518,19 +1518,21 @@ class OverlayWindow:
                 pass
 
     def close(self):
-        """Закрывает оверлей."""
-        self.logger.info("close() вызван")
+        """Закрывает оверлей с быстрой очисткой."""
+        import time
 
-        # === УСТАНАВЛИВАЕМ ФЛАГ ЗАКРЫТИЯ ===
+        self.logger.info("[OVERLAY] close() вызван")
+
+        # Устанавливаем флаг закрытия
         self._closing = True
-        self.logger.info("[DEBUG] _closing установлен в True")
 
         # Останавливаем временный таймер
         self._stop_temp_timer()
-        # _hide_temporary_indicator() - удалён
 
+        # Скрываем рамку
         self._hide_edit_frame()
 
+        # Сбрасываем ссылку на оверлей в мониторе
         if hasattr(self, '_overlay_manager') and self._overlay_manager:
             parent = self._overlay_manager.parent
             if parent and hasattr(parent, 'translation_monitor') and parent.translation_monitor:
@@ -1542,18 +1544,21 @@ class OverlayWindow:
                         )
                         break
 
+        # Очищаем Canvas
         try:
             if self.canvas and self.canvas.winfo_exists():
                 self.canvas.delete("all")
                 self.canvas.update_idletasks()
-                self.logger.info("[DEBUG] Canvas очищен при закрытии оверлея")
+                self.logger.info("[OVERLAY] Canvas очищен")
         except Exception as e:
-            self.logger.warning(f"[DEBUG] Не удалось очистить Canvas при закрытии: {e}")
+            self.logger.warning(f"[OVERLAY] Не удалось очистить Canvas: {e}")
 
+        # Останавливаем мониторы
         self._stop_visibility_monitor()
         self._disable_esc_hook()
         self._context_menu_visible = False
 
+        # Сохраняем координаты для перерисовки
         rect = None
         try:
             if self.root and self.root.winfo_exists():
@@ -1562,27 +1567,18 @@ class OverlayWindow:
                 w = self.root.winfo_width()
                 h = self.root.winfo_height()
                 rect = (x, y, x + w, y + h)
-                self.logger.info(f"[DEBUG] Координаты оверлея перед закрытием: {rect}")
         except:
             pass
 
-        if self._drag_stop_timer:
-            try:
-                self.root.after_cancel(self._drag_stop_timer)
-            except:
-                pass
-            self._drag_stop_timer = None
-
+        # Скрываем окно
         try:
             if self.root and self.root.winfo_exists():
                 self.root.withdraw()
                 self.root.update_idletasks()
-                self.logger.info("[DEBUG] Окно скрыто через withdraw")
-                import time
-                time.sleep(0.02)
         except Exception as e:
-            self.logger.warning(f"[DEBUG] Не удалось скрыть окно: {e}")
+            self.logger.warning(f"[OVERLAY] Не удалось скрыть окно: {e}")
 
+        # Очищаем память
         try:
             self._images.clear()
             self.tk_image = None
@@ -1590,11 +1586,15 @@ class OverlayWindow:
             self._last_window_rect = None
             self._saved_position = None
             self._is_fullscreen_target = False
-            self.root.destroy()
-            self.logger.info("Оверлей закрыт")
-        except:
-            pass
 
+            # Быстрое уничтожение окна
+            if self.root and self.root.winfo_exists():
+                self.root.destroy()
+            self.logger.info("[OVERLAY] Оверлей закрыт")
+        except Exception as e:
+            self.logger.warning(f"[OVERLAY] Не удалось уничтожить окно: {e}")
+
+        # Перерисовываем область
         if rect:
             try:
                 import win32gui
@@ -1610,7 +1610,7 @@ class OverlayWindow:
                         win32con.RDW_INVALIDATE | win32con.RDW_UPDATENOW | win32con.RDW_ALLCHILDREN | win32con.RDW_FRAME | win32con.RDW_ERASE
                     )
             except Exception as e:
-                self.logger.warning(f"[DEBUG] Не удалось перерисовать область: {e}")
+                self.logger.warning(f"[OVERLAY] Не удалось перерисовать область: {e}")
 
     def _is_system_window(self, active_hwnd: int) -> bool:
         """Проверяет, является ли окно системным (не нашим)."""

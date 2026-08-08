@@ -2584,17 +2584,121 @@ class ScreenshotTranslatorApp:
         help_window.focus_force()
 
     def on_close(self):
-        """Закрытие приложения"""
-        self._hide_translation_overlay()
+        """Закрытие приложения с таймаутами и принудительным завершением"""
+        import time
+        import threading
+        import os
+
+        self.logger.info("=" * 60)
+        self.logger.info("🛑 НАЧАЛО ЗАКРЫТИЯ ПРИЛОЖЕНИЯ")
+        self.logger.info("=" * 60)
+
+        # 1. Устанавливаем глобальный флаг закрытия
+        self._closing = True
+
+        # 2. Скрываем индикатор
+        try:
+            self._hide_translation_overlay()
+        except:
+            pass
+
+        # 3. Отключаем горячие клавиши
         try:
             import keyboard
             keyboard.unhook_all()
-        except:
-            pass
-        if hasattr(self, 'settings'):
-            self.settings.save()
-        if hasattr(self, 'browser_worker'):
-            self.browser_worker.stop()
-        if self.overlay_manager:
-            self.overlay_manager.close_all()
-        self.ui.root.destroy()
+            self.logger.info("[CLOSE] Горячие клавиши отключены")
+        except Exception as e:
+            self.logger.warning(f"[CLOSE] Ошибка отключения клавиш: {e}")
+
+        # 4. Сохраняем настройки
+        try:
+            if hasattr(self, 'settings'):
+                self.settings.save()
+                self.logger.info("[CLOSE] Настройки сохранены")
+        except Exception as e:
+            self.logger.warning(f"[CLOSE] Ошибка сохранения настроек: {e}")
+
+        # 5. Останавливаем TranslationMonitor (с таймаутом)
+        if hasattr(self, 'translation_monitor') and self.translation_monitor:
+            try:
+                self.logger.info("[CLOSE] Остановка TranslationMonitor...")
+                self.translation_monitor.stop()
+                self.logger.info("[CLOSE] TranslationMonitor остановлен")
+            except Exception as e:
+                self.logger.warning(f"[CLOSE] Ошибка остановки TranslationMonitor: {e}")
+
+        # 6. Останавливаем BrowserWorker (с таймаутом)
+        if hasattr(self, 'browser_worker') and self.browser_worker:
+            try:
+                self.logger.info("[CLOSE] Остановка BrowserWorker...")
+                self.browser_worker.stop()
+                self.logger.info("[CLOSE] BrowserWorker остановлен")
+            except Exception as e:
+                self.logger.warning(f"[CLOSE] Ошибка остановки BrowserWorker: {e}")
+
+        # 7. Закрываем оверлеи (с таймаутом)
+        if hasattr(self, 'overlay_manager') and self.overlay_manager:
+            try:
+                self.logger.info("[CLOSE] Закрытие оверлеев...")
+                self.overlay_manager.close_all()
+                self.logger.info("[CLOSE] Оверлеи закрыты")
+            except Exception as e:
+                self.logger.warning(f"[CLOSE] Ошибка закрытия оверлеев: {e}")
+
+        # 8. Освобождаем DXcam
+        if hasattr(self, 'screenshot') and self.screenshot:
+            try:
+                self.logger.info("[CLOSE] Освобождение DXcam...")
+                self.screenshot.release_camera()
+                self.logger.info("[CLOSE] DXcam освобожден")
+            except Exception as e:
+                self.logger.warning(f"[CLOSE] Ошибка освобождения DXcam: {e}")
+
+        # 9. Ждем завершения всех потоков (максимум 2 секунды)
+        self.logger.info("[CLOSE] Ожидание завершения потоков...")
+        time.sleep(0.5)
+
+        # 10. Принудительно завершаем оставшиеся потоки
+        try:
+            import threading
+            active_threads = threading.enumerate()
+            self.logger.info(f"[CLOSE] Активных потоков: {len(active_threads)}")
+
+            # Завершаем только демонические потоки (они не блокируют выход)
+            for thread in active_threads:
+                if thread is threading.main_thread():
+                    continue
+                if thread.daemon:
+                    self.logger.info(f"[CLOSE] Демонический поток: {thread.name}")
+                else:
+                    self.logger.warning(f"[CLOSE] НЕ-демонический поток: {thread.name}")
+        except Exception as e:
+            self.logger.warning(f"[CLOSE] Ошибка при проверке потоков: {e}")
+
+        # 11. Закрываем главное окно
+        try:
+            self.logger.info("[CLOSE] Закрытие главного окна...")
+            if self.ui and self.ui.root:
+                self.ui.root.destroy()
+            self.logger.info("[CLOSE] Главное окно закрыто")
+        except Exception as e:
+            self.logger.error(f"[CLOSE] Ошибка закрытия главного окна: {e}")
+
+        self.logger.info("=" * 60)
+        self.logger.info("✅ ЗАКРЫТИЕ ЗАВЕРШЕНО")
+        self.logger.info("=" * 60)
+
+        # 12. Принудительное завершение, если приложение все еще висит
+        # Это гарантирует, что процесс завершится даже если что-то пошло не так
+        def force_exit():
+            time.sleep(2.0)  # Даем время на нормальное закрытие
+            self.logger.warning("[CLOSE] Принудительное завершение процесса...")
+            try:
+                os._exit(0)  # Принудительное завершение без cleanup
+            except:
+                pass
+
+        # Запускаем поток для принудительного завершения
+        import threading
+        force_thread = threading.Thread(target=force_exit, daemon=True)
+        force_thread.start()

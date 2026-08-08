@@ -702,50 +702,62 @@ class GoogleTranslateDebug:
     def close_browser(self):
         """Закрывает браузер и все вкладки, удаляет папку профиля"""
         import shutil
+        import time
 
         # Сохраняем путь к папке профиля до закрытия контекста
         profile_dir = getattr(self, '_profile_dir', None)
 
+        # 1. Устанавливаем флаг отмены для прерывания операций
+        self._cancel_flag = True
+
+        self.logger.info("[BROWSER] Закрытие браузера...")
+
         try:
+            # 2. Закрываем страницы
             if self._context:
                 try:
                     pages = self._context.pages
                     if pages:
-                        self.logger.info(f"Закрытие {len(pages)} вкладок...")
+                        self.logger.info(f"[BROWSER] Закрытие {len(pages)} вкладок...")
                         for page in pages:
                             try:
                                 page.close()
                             except:
                                 pass
-                        self.logger.info("Все вкладки закрыты")
+                        self.logger.info("[BROWSER] Все вкладки закрыты")
                 except Exception as e:
-                    self.logger.error(f"Ошибка при закрытии вкладок: {e}")
+                    self.logger.error(f"[BROWSER] Ошибка при закрытии вкладок: {e}")
+
+                # 3. Закрываем контекст
                 try:
                     self._context.close()
-                    self.logger.info("Контекст закрыт")
+                    self.logger.info("[BROWSER] Контекст закрыт")
                 except Exception as e:
-                    self.logger.error(f"Ошибка при закрытии контекста: {e}")
+                    self.logger.error(f"[BROWSER] Ошибка при закрытии контекста: {e}")
                 self._context = None
                 self._page = None
 
+            # 4. Останавливаем Playwright
             if self._pw:
                 try:
                     self._pw.stop()
-                    self.logger.info("Playwright остановлен")
+                    self.logger.info("[BROWSER] Playwright остановлен")
                 except Exception as e:
-                    self.logger.error(f"Ошибка при остановке Playwright: {e}")
+                    self.logger.error(f"[BROWSER] Ошибка при остановке Playwright: {e}")
                 self._pw = None
 
-            # Удаляем папку профиля после закрытия
+            # 5. Удаляем папку профиля после закрытия
             if profile_dir and profile_dir.exists():
                 try:
                     shutil.rmtree(profile_dir, ignore_errors=True)
-                    self.logger.info(f"🧹 Папка профиля удалена: {profile_dir}")
+                    self.logger.info(f"[BROWSER] 🧹 Папка профиля удалена: {profile_dir}")
                 except Exception as e:
-                    self.logger.warning(f"Не удалось удалить папку профиля: {e}")
+                    self.logger.warning(f"[BROWSER] Не удалось удалить папку профиля: {e}")
 
         except Exception as e:
-            self.logger.error(f"Ошибка при закрытии браузера: {e}")
+            self.logger.error(f"[BROWSER] Ошибка при закрытии браузера: {e}")
+
+        self.logger.info("[BROWSER] Браузер закрыт")
 
     def update_target_language(self, target_lang: str):
         """Обновляет целевой язык перевода"""
@@ -1359,6 +1371,13 @@ class YandexOcrTranslator:
     def close_browser(self):
         """Закрывает браузер"""
         import shutil
+        import time
+
+        # Устанавливаем флаг отмены
+        self._cancel_flag = True
+
+        self.logger.info("[BROWSER] Закрытие Яндекс браузера...")
+
         try:
             if self._context:
                 try:
@@ -1387,10 +1406,10 @@ class YandexOcrTranslator:
             if self._profile_dir and self._profile_dir.exists():
                 try:
                     shutil.rmtree(self._profile_dir, ignore_errors=True)
-                    self.logger.info(f"🧹 Папка профиля удалена: {self._profile_dir}")
+                    self.logger.info(f"[BROWSER] 🧹 Папка профиля удалена: {self._profile_dir}")
                 except:
                     pass
 
-            self.logger.info("Браузер закрыт")
+            self.logger.info("[BROWSER] Яндекс браузер закрыт")
         except Exception as e:
-            self.logger.error(f"Ошибка при закрытии браузера: {e}")
+            self.logger.error(f"[BROWSER] Ошибка при закрытии Яндекс браузера: {e}")

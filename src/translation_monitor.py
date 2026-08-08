@@ -99,7 +99,7 @@ class TranslationMonitor:
         self.logger.info("TranslationMonitor инициализирован")
 
     def _monitor_loop(self):
-        """Основной цикл мониторинга — оптимизированная версия с уменьшенным разрешением"""
+        """Основной цикл мониторинга — оптимизированная версия с проверкой закрытия"""
         import win32gui
         from src.window_utils import get_process_name_by_hwnd
 
@@ -111,10 +111,14 @@ class TranslationMonitor:
         debug_counter = 0
 
         # Размер уменьшенного изображения для поиска (чем меньше, тем быстрее)
-        SEARCH_SCALE = 0.5  # 50% от оригинального размера
+        SEARCH_SCALE = 0.5
 
         while self.monitoring:
             try:
+                # === ПРОВЕРКА ЗАКРЫТИЯ ===
+                if not self.monitoring:
+                    break
+
                 current_time = time.time()
                 elapsed = current_time - last_time
 
@@ -125,7 +129,6 @@ class TranslationMonitor:
                 last_time = current_time
                 iteration_count += 1
 
-                # Логируем реже — раз в 100 итераций
                 if iteration_count % 100 == 0:
                     self.logger.info(f"[MONITOR] Итерация #{iteration_count}, шаблонов: {len(self.templates)}")
 
@@ -149,7 +152,7 @@ class TranslationMonitor:
                     continue
 
                 debug_counter += 1
-                if debug_counter % 100 == 0:  # Логируем реже
+                if debug_counter % 100 == 0:
                     active_app_name = get_process_name_by_hwnd(active_hwnd)
                     self.logger.info(
                         f"[MONITOR_DEBUG] Активное окно: HWND={active_hwnd}, App='{active_app_name}', "
@@ -170,14 +173,13 @@ class TranslationMonitor:
                         current_time - self._frame_cache_time > self._frame_cache_ttl):
                     image = self._capture_window(active_hwnd)
                     if image is not None:
-                        # Уменьшаем изображение для поиска (ускоряет matchTemplate)
                         h, w = image.shape[:2]
                         new_w = int(w * SEARCH_SCALE)
                         new_h = int(h * SEARCH_SCALE)
                         resized = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
                         self._frame_cache = resized
-                        self._frame_cache_original_size = (w, h)  # сохраняем оригинальный размер
+                        self._frame_cache_original_size = (w, h)
                         self._frame_cache_scale = SEARCH_SCALE
                         self._frame_cache_hwnd = active_hwnd
                         self._frame_cache_time = current_time
@@ -197,7 +199,6 @@ class TranslationMonitor:
                     time.sleep(0.02)
                     continue
 
-                # Получаем размеры уменьшенного изображения
                 img_h, img_w = resized.shape[:2]
 
                 # Фильтруем шаблоны для активного приложения
@@ -211,7 +212,6 @@ class TranslationMonitor:
                     elif not target_app_name or target_app_name == "Неизвестно":
                         active_templates.append(template_data)
 
-                # Если нет активных шаблонов для этого приложения, пропускаем
                 if not active_templates:
                     if debug_counter % 50 == 0:
                         self.logger.info(
@@ -223,25 +223,25 @@ class TranslationMonitor:
 
                 # === ОБРАБОТКА ШАБЛОНОВ ===
                 for template_data in active_templates:
-                    # Проверяем enabled
+                    # === ПРОВЕРКА ЗАКРЫТИЯ ===
+                    if not self.monitoring:
+                        break
+
                     if not template_data.get('enabled', True):
                         continue
 
                     pair_index = template_data.get('pair_index', 0)
                     overlay = template_data.get('overlay')
 
-                    # Если оверлей уже виден и найден недавно — пропускаем поиск
                     if pair_index in last_found_time:
                         time_since_found = current_time - last_found_time[pair_index]
                         if template_data.get('found', False) and overlay and overlay.visible and time_since_found < 1.0:
                             continue
 
-                    # Проверяем валидность шаблона
                     template = template_data.get('template')
                     if template is None:
                         continue
 
-                    # Уменьшаем шаблон под размер поискового изображения
                     t_h, t_w = template.shape[:2]
                     scaled_t_w = int(t_w * SEARCH_SCALE)
                     scaled_t_h = int(t_h * SEARCH_SCALE)
@@ -249,7 +249,6 @@ class TranslationMonitor:
                     if scaled_t_h > img_h or scaled_t_w > img_w:
                         continue
 
-                    # Уменьшаем шаблон один раз и кэшируем
                     if 'template_scaled' not in template_data or template_data.get('template_scale') != SEARCH_SCALE:
                         template_data['template_scaled'] = cv2.resize(template, (scaled_t_w, scaled_t_h),
                                                                       interpolation=cv2.INTER_AREA)
@@ -257,7 +256,6 @@ class TranslationMonitor:
 
                     scaled_template = template_data['template_scaled']
 
-                    # Поиск по уменьшенному изображению
                     try:
                         result = cv2.matchTemplate(resized, scaled_template, cv2.TM_CCOEFF_NORMED)
                         _, max_val, _, max_loc = cv2.minMaxLoc(result)
@@ -265,7 +263,6 @@ class TranslationMonitor:
                         self.logger.warning(f"[MONITOR] Ошибка matchTemplate для шаблона #{pair_index}: {e}")
                         continue
 
-                    # Восстанавливаем координаты в оригинальном масштабе
                     scaled_x = max_loc[0]
                     scaled_y = max_loc[1]
                     original_x = int(scaled_x / SEARCH_SCALE)
@@ -289,7 +286,7 @@ class TranslationMonitor:
                             if overlay and overlay.visible and not self.overlay_manager.is_dragging():
                                 self._hide_overlay_in_main_thread(overlay, pair_index)
 
-                    time.sleep(0.01)  # небольшая пауза между шаблонами
+                    time.sleep(0.01)
 
             except Exception as e:
                 self.logger.error(f"[MONITOR] Ошибка: {e}")
@@ -573,7 +570,22 @@ class TranslationMonitor:
 
     def stop(self):
         """Останавливает мониторинг."""
+        self.logger.info("[MONITOR] Остановка мониторинга...")
         self.monitoring = False
+
+        # Даем потоку время на завершение
+        import time
+        time.sleep(0.1)
+
+        # Сбрасываем кэш, чтобы освободить память
+        self._frame_cache = None
+        self._frame_cache_hwnd = None
+        self._frame_cache_time = 0
+
+        # Очищаем ссылки на оверлеи
+        for template_data in self.templates:
+            template_data['overlay'] = None
+
         self.logger.info("[MONITOR] Мониторинг остановлен")
 
     def is_running(self) -> bool:
