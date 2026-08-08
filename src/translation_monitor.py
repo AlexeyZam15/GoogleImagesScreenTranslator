@@ -113,12 +113,10 @@ class TranslationMonitor:
         last_found_time = {}
         debug_counter = 0
 
-        # Размер уменьшенного изображения для поиска (чем меньше, тем быстрее)
         SEARCH_SCALE = 0.5
 
         while self.monitoring:
             try:
-                # === ПРОВЕРКА ЗАКРЫТИЯ ===
                 if not self.monitoring:
                     break
 
@@ -139,12 +137,10 @@ class TranslationMonitor:
                     time.sleep(0.05)
                     continue
 
-                # Проверка: идет ли перетаскивание оверлея
                 if self.overlay_manager and self.overlay_manager.is_dragging():
                     time.sleep(0.02)
                     continue
 
-                # Получаем активное окно
                 try:
                     active_hwnd = win32gui.GetForegroundWindow()
                     if not active_hwnd:
@@ -164,21 +160,18 @@ class TranslationMonitor:
 
                 active_app_name = self._get_cached_app_name(active_hwnd)
 
-                # === ПРОВЕРКА: ИЗМЕНИЛОСЬ ЛИ АКТИВНОЕ ОКНО ===
                 if self._last_active_hwnd != active_hwnd:
                     self._first_scan_after_switch = True
                     self._last_active_hwnd = active_hwnd
-                    self.logger.info(f"[MONITOR] Переключение на окно: {active_app_name} (HWND={active_hwnd})")
+                    # УБРАНО: self.logger.info(f"[MONITOR] Переключение на окно: {active_app_name} (HWND={active_hwnd})")
 
                 self._last_active_app_name = active_app_name
 
-                # Проверка: является ли активное окно окном выделения
                 if hasattr(self, 'parent') and self.parent:
                     if hasattr(self.parent, '_capture_mode') and self.parent._capture_mode:
                         time.sleep(0.02)
                         continue
 
-                # === ФИЛЬТРАЦИЯ ШАБЛОНОВ ===
                 active_templates = []
                 inactive_templates = []
 
@@ -193,47 +186,30 @@ class TranslationMonitor:
                         else:
                             inactive_templates.append(template_data)
                     else:
-                        # Шаблоны без указанного приложения — обрабатываем как активные (для совместимости)
                         active_templates.append(template_data)
 
-                # === ПЕРВОЕ СКАНИРОВАНИЕ ПОСЛЕ ПЕРЕКЛЮЧЕНИЯ ОКНА ===
+                # === ПЕРВОЕ СКАНИРОВАНИЕ ПОСЛЕ ПЕРЕКЛЮЧЕНИЯ ОКНА (УПРОЩЕННО) ===
+                # УДАЛЕН ВЕСЬ БЛОК СО СПАМНЫМИ СООБЩЕНИЯМИ:
+                # - разделители =====
+                # - 🔍 ПЕРВОЕ СКАНИРОВАНИЕ для ...
+                # - 📋 ПРОПУЩЕННЫЕ ШАБЛОНЫ (для других приложений)
+                # - ⏭️ Шаблон #... — пропущен (для ...)
+                # - ⚠️ Нет активных шаблонов для ...
+
                 if self._first_scan_after_switch:
-                    self.logger.info("=" * 70)
                     total_templates = len(self.templates)
                     active_count = len(active_templates)
-                    inactive_count = len(inactive_templates)
 
-                    self.logger.info(
-                        f"[MONITOR] 🔍 ПЕРВОЕ СКАНИРОВАНИЕ для {active_app_name} "
-                        f"(всего: {total_templates}, активных: {active_count}, пропущено: {inactive_count})"
-                    )
-
-                    # === ЛОГИРОВАНИЕ НЕАКТИВНЫХ ШАБЛОНОВ ===
-                    if inactive_templates:
-                        self.logger.info(f"[MONITOR] 📋 ПРОПУЩЕННЫЕ ШАБЛОНЫ (для других приложений):")
-                        for template_data in inactive_templates:
-                            pair_index = template_data.get('pair_index', 0)
-                            target_app = template_data.get('target_app_name', 'Неизвестно')
-                            template_text = template_data.get('template_text', f"Шаблон #{pair_index}")
-                            self.logger.info(
-                                f"[MONITOR]   ⏭️ Шаблон #{pair_index} ('{template_text[:30]}') — "
-                                f"пропущен (для {target_app})"
-                            )
-
-                    # Если нет активных шаблонов — выводим сообщение
                     if not active_templates:
-                        self.logger.info(
-                            f"[MONITOR] ⚠️ Нет активных шаблонов для {active_app_name}"
-                        )
-                        self.logger.info("=" * 70)
                         self._first_scan_after_switch = False
                         time.sleep(0.02)
                         continue
 
-                    self.logger.info(f"[MONITOR] 🔎 АКТИВНЫЕ ШАБЛОНЫ для {active_app_name}:")
-                    self.logger.info("-" * 70)
+                    # Только краткое сообщение
+                    self.logger.info(
+                        f"[MONITOR] Сканирование для {active_app_name} (активных: {active_count}/{total_templates})"
+                    )
 
-                # Если нет активных шаблонов, пропускаем
                 if not active_templates:
                     if debug_counter % 50 == 0:
                         self.logger.info(
@@ -243,7 +219,6 @@ class TranslationMonitor:
                     time.sleep(0.02)
                     continue
 
-                # Получаем скриншот с уменьшением
                 if (self._frame_cache_hwnd != active_hwnd or
                         current_time - self._frame_cache_time > self._frame_cache_ttl):
                     image = self._capture_window(active_hwnd)
@@ -276,9 +251,7 @@ class TranslationMonitor:
 
                 img_h, img_w = resized.shape[:2]
 
-                # === ОБРАБОТКА АКТИВНЫХ ШАБЛОНОВ ===
                 for template_data in active_templates:
-                    # === ПРОВЕРКА ЗАКРЫТИЯ ===
                     if not self.monitoring:
                         break
 
@@ -296,11 +269,6 @@ class TranslationMonitor:
 
                     template = template_data.get('template')
                     if template is None:
-                        if self._first_scan_after_switch:
-                            self.logger.info(
-                                f"[MONITOR] ❌ Шаблон #{pair_index} ('{template_text[:30]}') — "
-                                f"НЕ ЗАГРУЖЕН (ошибка шаблона)"
-                            )
                         continue
 
                     t_h, t_w = template.shape[:2]
@@ -308,11 +276,6 @@ class TranslationMonitor:
                     scaled_t_h = int(t_h * SEARCH_SCALE)
 
                     if scaled_t_h > img_h or scaled_t_w > img_w:
-                        if self._first_scan_after_switch:
-                            self.logger.info(
-                                f"[MONITOR] ❌ Шаблон #{pair_index} ('{template_text[:30]}') — "
-                                f"слишком большой для окна ({scaled_t_w}x{scaled_t_h} > {img_w}x{img_h})"
-                            )
                         continue
 
                     if 'template_scaled' not in template_data or template_data.get('template_scale') != SEARCH_SCALE:
@@ -336,18 +299,13 @@ class TranslationMonitor:
                     original_w = int(scaled_t_w / SEARCH_SCALE)
                     original_h = int(scaled_t_h / SEARCH_SCALE)
 
-                    # === ЛОГИРОВАНИЕ ДЛЯ ПЕРВОГО СКАНИРОВАНИЯ ===
+                    # === ЛОГИРОВАНИЕ ДЛЯ ПЕРВОГО СКАНИРОВАНИЯ (УПРОЩЕННО) ===
                     if self._first_scan_after_switch:
                         if max_val >= self.confidence_threshold:
                             self.logger.info(
-                                f"[MONITOR] ✅ Шаблон #{pair_index} ('{template_text[:30]}') — "
-                                f"НАЙДЕН с точностью {max_val:.3f} (порог: {self.confidence_threshold:.2f})"
+                                f"[MONITOR] ✅ Шаблон #{pair_index} найден (точность {max_val:.3f})"
                             )
-                        else:
-                            self.logger.info(
-                                f"[MONITOR] ❌ Шаблон #{pair_index} ('{template_text[:30]}') — "
-                                f"НЕ НАЙДЕН (макс. точность: {max_val:.3f}, порог: {self.confidence_threshold:.2f})"
-                            )
+                        # УБРАНО: сообщение для ненайденных шаблонов
 
                     if max_val >= self.confidence_threshold:
                         if not template_data.get('found', False):
@@ -367,16 +325,13 @@ class TranslationMonitor:
 
                     time.sleep(0.01)
 
-                # === ЗАВЕРШЕНИЕ ПЕРВОГО СКАНИРОВАНИЯ ===
+                # === ЗАВЕРШЕНИЕ ПЕРВОГО СКАНИРОВАНИЯ (УПРОЩЕННО) ===
                 if self._first_scan_after_switch:
                     found_count = sum(1 for t in active_templates if t.get('found', False))
                     total_count = len(active_templates)
-                    self.logger.info("=" * 70)
                     self.logger.info(
-                        f"[MONITOR] 📊 ПЕРВОЕ СКАНИРОВАНИЕ ЗАВЕРШЕНО: "
-                        f"найдено {found_count}/{total_count} шаблонов"
+                        f"[MONITOR] Сканирование завершено: найдено {found_count}/{total_count}"
                     )
-                    self.logger.info("=" * 70)
                     self._first_scan_after_switch = False
 
             except Exception as e:
