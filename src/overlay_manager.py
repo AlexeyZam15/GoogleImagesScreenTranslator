@@ -714,7 +714,8 @@ class OverlayManager:
                         self.logger.info(f"[STATE] Найдено окно для {app_name}: HWND={target_hwnd_to_use}")
                     else:
                         self.logger.info(
-                            f"[STATE] Окно для {app_name} не найдено, оверлей будет скрыт до появления окна")
+                            f"[STATE] Окно для {app_name} не найдено, оверлей будет скрыт до появления окна"
+                        )
 
                 # Всегда скрываем при восстановлении
                 show_immediately = False
@@ -739,11 +740,9 @@ class OverlayManager:
                 )
 
                 if overlay:
-                    # === ИСПРАВЛЕНИЕ: для автозамены НЕ показываем оверлей до нахождения шаблона ===
                     if is_auto_replace:
-                        # Оверлей ждёт нахождения шаблона
-                        overlay._is_visible_by_user = False  # Ждём нахождения шаблона
-                        overlay._hidden_by_user = False  # Не скрыт пользователем
+                        overlay._is_visible_by_user = False
+                        overlay._hidden_by_user = False
                         overlay._is_auto_replace = True
                         self.logger.info(f"[STATE] Оверлей для автозамены восстановлен (ждёт шаблон)")
                     else:
@@ -756,8 +755,9 @@ class OverlayManager:
                     if overlay not in self.overlays:
                         self.overlays.append(overlay)
 
-                    # Для автозамены: сохраняем шаблон ТОЛЬКО если окно существует
-                    if is_auto_replace and template_id and window_exists:
+                    # === ИСПРАВЛЕНИЕ: ВСЕГДА добавляем шаблон в монитор, даже если окно не найдено ===
+                    # Шаблон будет искать, как только окно появится
+                    if is_auto_replace and template_id:
                         templates_to_restore.append({
                             'template_id': template_id,
                             'overlay': overlay,
@@ -772,11 +772,9 @@ class OverlayManager:
                             'region_path_str': region_path_str,
                             'template_base64': template_base64,
                             'translated_path': image_path,
-                            'window_rect': window_rect
+                            'window_rect': window_rect,
+                            'window_exists': window_exists  # <-- НОВЫЙ ФЛАГ
                         })
-                    elif is_auto_replace and template_id and not window_exists:
-                        self.logger.info(
-                            f"[STATE] Шаблон {template_id[:8]} не восстановлен (окно {app_name} не найдено)")
 
             except Exception as e:
                 self.logger.error(f"[STATE] Ошибка восстановления оверлея {key}: {e}")
@@ -785,17 +783,19 @@ class OverlayManager:
 
         self.logger.info(f"[STATE] Создано {restored_count} оверлеев (все скрыты)")
 
-        # === ПРОХОД 2: Восстанавливаем шаблоны в мониторе ===
+        # === ПРОХОД 2: Восстанавливаем шаблоны в мониторе (ВСЕГДА) ===
         if parent_app and hasattr(parent_app, 'translation_monitor'):
             monitor = parent_app.translation_monitor
             if monitor and templates_to_restore:
                 self.logger.info(f"[STATE] Восстановление {len(templates_to_restore)} шаблонов в мониторе...")
+
+                restored_templates_count = 0
                 for template_info in templates_to_restore:
                     try:
                         template_id = template_info['template_id']
                         overlay = template_info['overlay']
-                        target_hwnd = template_info['target_hwnd']
                         app_name = template_info['app_name']
+                        window_exists = template_info.get('window_exists', False)
 
                         # Проверяем, есть ли уже такой шаблон в мониторе
                         template_exists = False
@@ -846,6 +846,7 @@ class OverlayManager:
                                     target_app_name=app_name
                                 )
                                 if pair_index >= 0:
+                                    restored_templates_count += 1
                                     for template in monitor.templates:
                                         if template.get('hash') == file_hash:
                                             template['overlay'] = overlay
@@ -856,11 +857,21 @@ class OverlayManager:
                                             template['offset_initialized'] = True
                                             template['overlay_width'] = template_info['saved_w']
                                             template['overlay_height'] = template_info['saved_h']
-                                            # === ИСПРАВЛЕНИЕ: НЕ сбрасываем _is_visible_by_user, он уже False ===
-                                            # Оверлей покажется только когда монитор найдёт шаблон
                                             break
+
+                                            # Если окно не существовало при восстановлении, но появилось позже
+                                            if not window_exists:
+                                                self.logger.info(
+                                                    f"[STATE] Шаблон {template_id[:8]} добавлен в монитор (окно {app_name} появится позже)"
+                                                )
+                                            else:
+                                                self.logger.info(
+                                                    f"[STATE] Шаблон {template_id[:8]} восстановлен для {app_name}"
+                                                )
                     except Exception as e:
                         self.logger.error(f"[STATE] Ошибка восстановления шаблона: {e}")
+
+                self.logger.info(f"[STATE] Восстановлено {restored_templates_count} шаблонов в мониторе")
 
                 if parent_app.settings.get_auto_replace_translated() and monitor.templates:
                     if not monitor.is_running():
