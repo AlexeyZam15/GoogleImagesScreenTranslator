@@ -769,9 +769,15 @@ class SettingsWindow:
                 )
             self.app.logger.info(f"Режим редактирования из настроек: {edit_mode}")
 
-        # Переустанавливаем горячие клавиши
-        if hasattr(self, 'app') and hasattr(self.app, 'setup_hotkeys'):
+        # ============================================================
+        # ИЗМЕНЕНИЕ: Переустанавливаем горячие клавиши через HotkeyManager
+        # ============================================================
+        if hasattr(self, 'app') and hasattr(self.app, 'hotkeys'):
+            self.app.hotkeys.setup()
+            logger.info("[SETTINGS] Горячие клавиши переустановлены через HotkeyManager")
+        elif hasattr(self, 'app') and hasattr(self.app, 'setup_hotkeys'):
             self.app.setup_hotkeys()
+            logger.warning("[SETTINGS] Используется устаревший setup_hotkeys")
 
         if hasattr(self, 'app') and hasattr(self.app, 'update_hotkey_buttons'):
             self.app.update_hotkey_buttons()

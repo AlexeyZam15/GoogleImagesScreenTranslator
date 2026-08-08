@@ -226,14 +226,70 @@ class ScreenshotTranslatorApp:
             print(f"Ошибка при сбросе буферов: {e}")
 
     def _restart_translator(self):
-        """Перезапускает переводчик с сохранением текущих настроек"""
+        """Перезапускает переводчик с сохранением состояния оверлеев"""
         self.logger.info("[APP] === _restart_translator НАЧАЛО ===")
+        self.logger.info("[APP] Выполняется сохранение состояния и перезапуск...")
 
         if not self.browser_worker:
             self.logger.warning("[APP] browser_worker не инициализирован, пропускаем")
             return
 
-        # Проверяем, изменился ли движок
+        # ============================================================
+        # 1. СОХРАНЯЕМ СОСТОЯНИЕ ОВЕРЛЕЕВ ПЕРЕД ОЧИСТКОЙ
+        # ============================================================
+        if hasattr(self, 'overlay_manager') and self.overlay_manager:
+            try:
+                # Принудительно сохраняем состояние в файл
+                self.overlay_manager.save_overlay_state(immediate=True)
+                self.logger.info("[APP] Состояние оверлеев сохранено перед перезапуском")
+            except Exception as e:
+                self.logger.warning(f"[APP] Ошибка сохранения состояния: {e}")
+
+        # ============================================================
+        # 2. ОЧИСТКА КОМПОНЕНТОВ (БЕЗ УДАЛЕНИЯ ФАЙЛА СОСТОЯНИЯ)
+        # ============================================================
+
+        # 2.1 Останавливаем и очищаем TranslationMonitor
+        if hasattr(self, 'translation_monitor') and self.translation_monitor:
+            try:
+                self.translation_monitor.stop()
+                self.translation_monitor.templates.clear()
+                self.logger.info("[APP] TranslationMonitor остановлен и очищен")
+            except Exception as e:
+                self.logger.warning(f"[APP] Ошибка очистки TranslationMonitor: {e}")
+            self.translation_monitor = None
+
+        # 2.2 Закрываем все оверлеи (но не удаляем файл состояния)
+        if hasattr(self, 'overlay_manager') and self.overlay_manager:
+            try:
+                count = len(self.overlay_manager.overlays)
+                self.overlay_manager.close_all()
+                self.logger.info(f"[APP] Закрыто {count} оверлеев (состояние сохранено)")
+            except Exception as e:
+                self.logger.warning(f"[APP] Ошибка закрытия оверлеев: {e}")
+            self.overlay_manager = None
+
+        # 2.3 Очищаем список окон
+        if hasattr(self, 'window_list'):
+            try:
+                self.window_list.window_listbox.delete(0, 'end')
+                self.window_list._window_hwnd_map.clear()
+                self.window_list._window_app_map.clear()
+                self.logger.info("[APP] Список окон очищен")
+            except Exception as e:
+                self.logger.warning(f"[APP] Ошибка очистки списка окон: {e}")
+
+        # 2.4 Сбрасываем флаги инициализации
+        self.ready = False
+        self.initializing = True
+        self._init_done = False
+        self._init_attempts = 0
+        self.logger.info("[APP] Флаги инициализации сброшены")
+
+        # ============================================================
+        # 3. ПРОВЕРЯЕМ ДВИЖОК И ПЕРЕЗАПУСКАЕМ БРАУЗЕР
+        # ============================================================
+
         engine = self.settings.get_translator_engine()
         if not hasattr(self, '_last_engine'):
             self._last_engine = engine
@@ -244,15 +300,15 @@ class ScreenshotTranslatorApp:
         show_browser = self.settings.get_show_browser()
         target_lang = self.settings.get_target_language()
 
-        self.ready = False
-        self.initializing = True
-        # Статус "starting browser" — ОСТАВЛЯЕМ
+        # Статус "starting browser"
         self.ui.update_status("● " + self.ui.get_string('starting_browser'), '#ff9800')
 
+        # Отправляем команду перезапуска
         cmd_id = self.browser_worker.restart_browser(show_browser, target_lang, self._on_init_complete)
         self._pending_command_ids[cmd_id] = 'restart'
 
         self.logger.info(f"[APP] Команда перезапуска отправлена (id={cmd_id})")
+        self.logger.info("[APP] === _restart_translator ЗАВЕРШЕН ===")
 
     def _create_selection_window(self, screenshot_path):
         """
@@ -1721,7 +1777,7 @@ class ScreenshotTranslatorApp:
             self.logger.info(f"[STATE] Состояние очищено для {app_name}")
 
     def _on_init_complete(self, result, error):
-        """Завершение инициализации"""
+        """Завершение инициализации (восстанавливает оверлеи из сохранённого состояния)"""
         if error:
             self.logger.error(f"Ошибка инициализации: {error}")
             self.initializing = False
@@ -1740,25 +1796,36 @@ class ScreenshotTranslatorApp:
         engine_name = "Google Translate" if self._last_engine == "google" else "Яндекс.Переводчик (OCR)"
         self.logger.info(f"[APP] Используется движок: {engine_name}")
 
-        # Показываем уведомление о готовности
-        self.show_notification(f"✅ {self.ui.get_string('ready_notification')} ({engine_name})", 2000)
+        # ============================================================
+        # Переустанавливаем горячие клавиши после инициализации
+        # ============================================================
+        if hasattr(self, 'hotkeys'):
+            self.hotkeys.setup()
+            self.logger.info("[APP] Горячие клавиши переустановлены после инициализации браузера")
 
+        # ============================================================
+        # Создаём компоненты заново (как при первом запуске)
+        # ============================================================
+
+        # Создаём OverlayManager, если его нет
         if not self.overlay_manager:
             self.overlay_manager = OverlayManager(self)
+            self.logger.info("[APP] OverlayManager создан")
 
+        # Создаём TranslationMonitor, если его нет
         if not self.translation_monitor:
             self.translation_monitor = TranslationMonitor(self, self.overlay_manager, self.settings)
-            self.logger.info("TranslationMonitor создан")
+            self.logger.info("[APP] TranslationMonitor создан")
 
-            if self.settings.get_auto_replace_translated():
-                self.logger.info("Автозамена включена, монитор будет запущен при добавлении шаблонов")
-
+        # ============================================================
+        # ВОССТАНАВЛИВАЕМ ОВЕРЛЕИ ИЗ СОХРАНЁННОГО СОСТОЯНИЯ
+        # ============================================================
         restored_count = 0
         if self.overlay_manager:
             try:
                 restored_count = self.overlay_manager.restore_overlays_from_state(self)
                 if restored_count > 0:
-                    self.logger.info(f"[STATE] Восстановлено {restored_count} оверлеев")
+                    self.logger.info(f"[STATE] Восстановлено {restored_count} оверлеев из сохранённого состояния")
                     self.ui.root.after(500, self.window_list.refresh)
                 else:
                     self.logger.info("[STATE] Нет сохранённых оверлеев для восстановления")
@@ -1771,7 +1838,7 @@ class ScreenshotTranslatorApp:
 
         self.ui.set_settings_menu_enabled(True)
 
-        # Обновляем статус на "Готов" — ЭТО ОСТАВЛЯЕМ
+        # Обновляем статус на "Готов"
         ready_text = self.ui.get_string('ready')
         self.logger.info(f"[STATUS] Обновление статуса на: {ready_text}")
         self.ui.update_status(f"● {ready_text} ({engine_name})", '#4CAF50')
@@ -1779,6 +1846,9 @@ class ScreenshotTranslatorApp:
 
         self.window_list.refresh()
         self.logger.info("Инициализация полностью завершена, статус: Готов")
+
+        # Показываем уведомление о готовности
+        self.show_notification(f"✅ {self.ui.get_string('ready_notification')} ({engine_name})", 2000)
 
     def _on_window_switch(self, new_hwnd):
         """Обработчик переключения окон - показывает/скрывает оверлеи при переключении"""
@@ -2222,44 +2292,17 @@ class ScreenshotTranslatorApp:
             self.logger.warning("[HOTKEYS] HotkeyManager не инициализирован")
 
     def setup_hotkeys(self):
-        """Настройка глобальных горячих клавиш"""
-        self.logger.info("[HOTKEYS] Настройка горячих клавиш (упрощенная версия)")
-        try:
-            import keyboard
-            keyboard.unhook_all()
-            self.logger.info("[HOTKEYS] Старые хуки отключены")
-
-            hotkeys = self.settings.get_all_hotkeys()
-            self.logger.info(f"[HOTKEYS] Загружены настройки: {hotkeys}")
-
-            # Обработчики для одиночных клавиш
-            def make_handler(action):
-                def handler(e):
-                    self.logger.info(f"[HOTKEYS] Нажата клавиша: {action}")
-                    if action == 'toggle_overlay':
-                        self.toggle_overlay()
-                    elif action == 'screenshot':
-                        self.process()
-                    elif action == 'area':
-                        self.capture_area()
-                    elif action == 'area_temporary':
-                        self.capture_area_temporary()
-                    elif action == 'clear_all':
-                        self.clear_all_overlays()
-                    elif action == 'edit_mode':
-                        self.toggle_edit_mode()
-                    elif action == 'auto_replace':
-                        self.toggle_auto_replace_mode()
-                    return True
-
-                return handler
-
-            for action, hotkey in hotkeys.items():
-                keyboard.on_press_key(hotkey, make_handler(action), suppress=True)
-                self.logger.info(f"[HOTKEYS] Зарегистрирована клавиша {hotkey} -> {action}")
-
-        except Exception as e:
-            self.logger.error(f"[HOTKEYS] Ошибка регистрации горячих клавиш: {e}")
+        """
+        Настройка глобальных горячих клавиш.
+        Использует HotkeyManager для единообразной регистрации всех хоткеев.
+        """
+        self.logger.info("[HOTKEYS] Настройка горячих клавиш через HotkeyManager")
+        if hasattr(self, 'hotkeys'):
+            self.hotkeys.setup()
+        else:
+            self.logger.warning("[HOTKEYS] HotkeyManager не инициализирован, создаём...")
+            self.hotkeys = HotkeyManager(self)
+            self.hotkeys.setup()
 
     def _on_overlay_removed(self, target_hwnd):
         """Вызывается при удалении оверлея"""
@@ -2601,6 +2644,7 @@ class ScreenshotTranslatorApp:
         import time
         import threading
         import os
+        from pathlib import Path
 
         self.logger.info("=" * 60)
         self.logger.info("🛑 НАЧАЛО ЗАКРЫТИЯ ПРИЛОЖЕНИЯ")
@@ -2609,13 +2653,21 @@ class ScreenshotTranslatorApp:
         # 1. Устанавливаем глобальный флаг закрытия
         self._closing = True
 
-        # 2. Скрываем индикатор
+        # 2. Сохраняем состояние оверлеев перед закрытием
+        if hasattr(self, 'overlay_manager') and self.overlay_manager:
+            try:
+                self.overlay_manager.save_overlay_state(immediate=True)
+                self.logger.info("[CLOSE] Состояние оверлеев сохранено")
+            except Exception as e:
+                self.logger.warning(f"[CLOSE] Ошибка сохранения состояния: {e}")
+
+        # 3. Скрываем индикатор
         try:
             self._hide_translation_overlay()
         except:
             pass
 
-        # 3. Отключаем горячие клавиши
+        # 4. Отключаем горячие клавиши
         try:
             import keyboard
             keyboard.unhook_all()
@@ -2623,7 +2675,7 @@ class ScreenshotTranslatorApp:
         except Exception as e:
             self.logger.warning(f"[CLOSE] Ошибка отключения клавиш: {e}")
 
-        # 4. Сохраняем настройки
+        # 5. Сохраняем настройки
         try:
             if hasattr(self, 'settings'):
                 self.settings.save()
@@ -2631,7 +2683,7 @@ class ScreenshotTranslatorApp:
         except Exception as e:
             self.logger.warning(f"[CLOSE] Ошибка сохранения настроек: {e}")
 
-        # 5. Останавливаем TranslationMonitor (с таймаутом)
+        # 6. Останавливаем TranslationMonitor
         if hasattr(self, 'translation_monitor') and self.translation_monitor:
             try:
                 self.logger.info("[CLOSE] Остановка TranslationMonitor...")
@@ -2640,7 +2692,7 @@ class ScreenshotTranslatorApp:
             except Exception as e:
                 self.logger.warning(f"[CLOSE] Ошибка остановки TranslationMonitor: {e}")
 
-        # 6. Останавливаем BrowserWorker (с таймаутом)
+        # 7. Останавливаем BrowserWorker
         if hasattr(self, 'browser_worker') and self.browser_worker:
             try:
                 self.logger.info("[CLOSE] Остановка BrowserWorker...")
@@ -2649,7 +2701,7 @@ class ScreenshotTranslatorApp:
             except Exception as e:
                 self.logger.warning(f"[CLOSE] Ошибка остановки BrowserWorker: {e}")
 
-        # 7. Закрываем оверлеи (с таймаутом)
+        # 8. Закрываем оверлеи
         if hasattr(self, 'overlay_manager') and self.overlay_manager:
             try:
                 self.logger.info("[CLOSE] Закрытие оверлеев...")
@@ -2658,7 +2710,7 @@ class ScreenshotTranslatorApp:
             except Exception as e:
                 self.logger.warning(f"[CLOSE] Ошибка закрытия оверлеев: {e}")
 
-        # 8. Освобождаем DXcam
+        # 9. Освобождаем DXcam
         if hasattr(self, 'screenshot') and self.screenshot:
             try:
                 self.logger.info("[CLOSE] Освобождение DXcam...")
@@ -2667,26 +2719,9 @@ class ScreenshotTranslatorApp:
             except Exception as e:
                 self.logger.warning(f"[CLOSE] Ошибка освобождения DXcam: {e}")
 
-        # 9. Ждем завершения всех потоков (максимум 2 секунды)
+        # 10. Ждем завершения всех потоков
         self.logger.info("[CLOSE] Ожидание завершения потоков...")
         time.sleep(0.5)
-
-        # 10. Принудительно завершаем оставшиеся потоки
-        try:
-            import threading
-            active_threads = threading.enumerate()
-            self.logger.info(f"[CLOSE] Активных потоков: {len(active_threads)}")
-
-            # Завершаем только демонические потоки (они не блокируют выход)
-            for thread in active_threads:
-                if thread is threading.main_thread():
-                    continue
-                if thread.daemon:
-                    self.logger.info(f"[CLOSE] Демонический поток: {thread.name}")
-                else:
-                    self.logger.warning(f"[CLOSE] НЕ-демонический поток: {thread.name}")
-        except Exception as e:
-            self.logger.warning(f"[CLOSE] Ошибка при проверке потоков: {e}")
 
         # 11. Закрываем главное окно
         try:
@@ -2701,17 +2736,14 @@ class ScreenshotTranslatorApp:
         self.logger.info("✅ ЗАКРЫТИЕ ЗАВЕРШЕНО")
         self.logger.info("=" * 60)
 
-        # 12. Принудительное завершение, если приложение все еще висит
-        # Это гарантирует, что процесс завершится даже если что-то пошло не так
+        # 12. Принудительное завершение
         def force_exit():
-            time.sleep(2.0)  # Даем время на нормальное закрытие
+            time.sleep(2.0)
             self.logger.warning("[CLOSE] Принудительное завершение процесса...")
             try:
-                os._exit(0)  # Принудительное завершение без cleanup
+                os._exit(0)
             except:
                 pass
 
-        # Запускаем поток для принудительного завершения
-        import threading
         force_thread = threading.Thread(target=force_exit, daemon=True)
         force_thread.start()

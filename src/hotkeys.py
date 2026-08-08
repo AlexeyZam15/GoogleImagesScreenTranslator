@@ -18,7 +18,8 @@ class HotkeyManager:
         'app', 'logger', 'settings', '_key_last_time', '_debounce_ms',
         '_hotkey_hook_active', '_hotkeys_blocked', '_hotkey_actions',
         '_action_queue', '_processing_queue',
-        '_f3_down_time', '_f3_timer', '_f3_hold_triggered'
+        '_f3_down_time', '_f3_timer', '_f3_hold_triggered',
+        '_f5_down_time', '_f5_timer', '_f5_hold_triggered'
     )
 
     def __init__(self, app):
@@ -39,6 +40,30 @@ class HotkeyManager:
         self._f3_timer = None
         self._f3_hold_triggered = False
 
+        self._f5_down_time = 0
+        self._f5_timer = None
+        self._f5_hold_triggered = False
+
+    def _on_f5_down(self, event):
+        """Обработчик нажатия F5"""
+        if self._hotkeys_blocked:
+            return
+        self.logger.info("[HOTKEYS] F5 нажата (down)")
+        self._f5_down_time = time.time()
+        self._f5_hold_triggered = False
+
+    def _on_f5_up(self, event):
+        """Обработчик отпускания F5"""
+        if self._hotkeys_blocked:
+            return
+        self.logger.info("[HOTKEYS] F5 отпущена (up)")
+        if not self._f5_hold_triggered and self._f5_down_time > 0:
+            elapsed_ms = (time.time() - self._f5_down_time) * 1000
+            if elapsed_ms > 50:
+                self.logger.info("[HOTKEYS] Короткое нажатие F5 -> edit_mode")
+                self._queue_action('edit_mode')
+            self._f5_down_time = 0
+
     def setup(self):
         """Настраивает горячие клавиши"""
         self.logger.info("=" * 60)
@@ -46,15 +71,21 @@ class HotkeyManager:
         self.logger.info("=" * 60)
 
         try:
+            # ============================================================
+            # Полностью очищаем все старые хуки
+            # ============================================================
             keyboard.unhook_all()
-            self.logger.info("[HOTKEYS] Старые хуки отключены")
+            self.logger.info("[HOTKEYS] Все старые хуки отключены")
 
             self._hotkey_actions = self.settings.get_all_hotkeys()
 
-            # Регистрируем все клавиши через on_press_key с suppress=True
+            # Список действий, которые обрабатываются отдельно (сложные/длительное зажатие)
+            special_actions = ['area', 'fullscreen_ocr', 'edit_mode']
+
+            # Регистрируем обычные клавиши
             for action, hotkey in self._hotkey_actions.items():
-                if action == 'area':
-                    continue
+                if action in special_actions:
+                    continue  # Эти обрабатываются отдельно
                 if hotkey:
                     try:
                         keyboard.on_press_key(hotkey, lambda e, a=action: self._queue_action(a), suppress=True)
@@ -62,14 +93,27 @@ class HotkeyManager:
                     except Exception as e:
                         self.logger.warning(f"[HOTKEYS] Не удалось зарегистрировать {hotkey}: {e}")
 
+            # ============================================================
             # Регистрируем F3 отдельно для обработки длительного зажатия
+            # ============================================================
             try:
-                keyboard.unhook_key('f3')
+                # НЕ вызываем keyboard.unhook_key('f3') — это вызывает ошибку!
                 keyboard.on_press_key('f3', self._on_f3_down, suppress=True)
                 keyboard.on_release_key('f3', self._on_f3_up, suppress=True)
                 self.logger.info("[HOTKEYS] Зарегистрировано: F3 (с поддержкой длительного зажатия, блокировка)")
             except Exception as e:
                 self.logger.warning(f"[HOTKEYS] Не удалось зарегистрировать F3: {e}")
+
+            # ============================================================
+            # Регистрируем F5 отдельно (аналогично F3)
+            # ============================================================
+            try:
+                # НЕ вызываем keyboard.unhook_key('f5') — это вызывает ошибку!
+                keyboard.on_press_key('f5', self._on_f5_down, suppress=True)
+                keyboard.on_release_key('f5', self._on_f5_up, suppress=True)
+                self.logger.info("[HOTKEYS] Зарегистрировано: F5 (блокировка)")
+            except Exception as e:
+                self.logger.warning(f"[HOTKEYS] Не удалось зарегистрировать F5: {e}")
 
             self._hotkey_hook_active = True
             self.logger.info("[HOTKEYS] Горячие клавиши зарегистрированы (все с блокировкой)")

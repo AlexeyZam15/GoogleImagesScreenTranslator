@@ -507,14 +507,12 @@ class OverlayManager:
         self.overlays.clear()
         self.overlays_by_app_name.clear()
 
-        # Удаляем файл состояния
-        try:
-            state_file = self._get_overlay_state_file()
-            if state_file.exists():
-                state_file.unlink()
-                self.logger.info("[OVERLAY_MANAGER] Файл состояния удален")
-        except Exception as e:
-            self.logger.warning(f"[OVERLAY_MANAGER] Не удалось удалить файл состояния: {e}")
+        # ============================================================
+        # ИЗМЕНЕНИЕ: НЕ УДАЛЯЕМ ФАЙЛ СОСТОЯНИЯ
+        # Файл состояния должен сохраняться для восстановления после перезапуска
+        # ============================================================
+        # Убираем удаление файла состояния, чтобы оверлеи могли быть восстановлены
+        # self.logger.info("[OVERLAY_MANAGER] Файл состояния сохранён для восстановления")
 
         self.logger.info("[OVERLAY_MANAGER] Все оверлеи закрыты.")
 
