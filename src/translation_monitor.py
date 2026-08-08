@@ -99,7 +99,7 @@ class TranslationMonitor:
         self.logger.info("TranslationMonitor инициализирован")
 
     def _monitor_loop(self):
-        """Основной цикл мониторинга — оптимизированная версия с проверкой закрытия"""
+        """Основной цикл мониторинга — оптимизированная версия с проверкой активного окна"""
         import win32gui
         from src.window_utils import get_process_name_by_hwnd
 
@@ -168,6 +168,31 @@ class TranslationMonitor:
                         time.sleep(0.02)
                         continue
 
+                # === УЛУЧШЕННАЯ ФИЛЬТРАЦИЯ ШАБЛОНОВ ===
+                # Фильтруем шаблоны для активного приложения
+                active_templates = []
+                for template_data in self.templates:
+                    if not template_data.get('enabled', True):
+                        continue
+                    target_app_name = template_data.get('target_app_name')
+
+                    # Если целевое приложение указано — проверяем совпадение
+                    if target_app_name and target_app_name != "Неизвестно":
+                        if target_app_name == active_app_name:
+                            active_templates.append(template_data)
+                    # Если целевое приложение не указано — НЕ обрабатываем (чтобы не показывать оверлеи везде)
+                    # Это ИСПРАВЛЕНИЕ: ранее такие шаблоны обрабатывались для всех окон
+
+                # Если нет активных шаблонов для этого приложения, пропускаем
+                if not active_templates:
+                    if debug_counter % 50 == 0:
+                        self.logger.info(
+                            f"[MONITOR_DEBUG] Нет активных шаблонов для {active_app_name}. "
+                            f"Всего шаблонов: {len(self.templates)}"
+                        )
+                    time.sleep(0.02)
+                    continue
+
                 # Получаем скриншот с уменьшением
                 if (self._frame_cache_hwnd != active_hwnd or
                         current_time - self._frame_cache_time > self._frame_cache_ttl):
@@ -200,26 +225,6 @@ class TranslationMonitor:
                     continue
 
                 img_h, img_w = resized.shape[:2]
-
-                # Фильтруем шаблоны для активного приложения
-                active_templates = []
-                for template_data in self.templates:
-                    if not template_data.get('enabled', True):
-                        continue
-                    target_app_name = template_data.get('target_app_name')
-                    if target_app_name and target_app_name == active_app_name:
-                        active_templates.append(template_data)
-                    elif not target_app_name or target_app_name == "Неизвестно":
-                        active_templates.append(template_data)
-
-                if not active_templates:
-                    if debug_counter % 50 == 0:
-                        self.logger.info(
-                            f"[MONITOR_DEBUG] Нет активных шаблонов для {active_app_name}. "
-                            f"Всего шаблонов: {len(self.templates)}"
-                        )
-                    time.sleep(0.02)
-                    continue
 
                 # === ОБРАБОТКА ШАБЛОНОВ ===
                 for template_data in active_templates:
@@ -671,7 +676,7 @@ class TranslationMonitor:
 
     def _update_overlay_gui(self, template_data: Dict, x: int, y: int, w: int, h: int, translated_path: Path,
                             template_id: str):
-        """Обновляет или создает оверлей в главном потоке (оптимизированная версия)."""
+        """Обновляет или создает оверлей в главном потоке с проверкой активного окна."""
 
         try:
             if not self.monitoring:
@@ -683,6 +688,28 @@ class TranslationMonitor:
             is_found = template_data.get('found', False)
             is_temporary = template_data.get('is_temporary', False)
             lifetime_seconds = template_data.get('lifetime_seconds', 180)
+
+            # === НОВАЯ ПРОВЕРКА: активное окно должно соответствовать целевому приложению ===
+            try:
+                import win32gui
+                from src.window_utils import get_process_name_by_hwnd
+
+                active_hwnd = win32gui.GetForegroundWindow()
+                if active_hwnd:
+                    active_app_name = get_process_name_by_hwnd(active_hwnd)
+
+                    # Если целевое приложение указано и не совпадает с активным — скрываем оверлей
+                    if target_app_name and target_app_name != "Неизвестно":
+                        if active_app_name != target_app_name:
+                            self.logger.info(
+                                f"[MONITOR] Шаблон #{pair_index} для {target_app_name}, "
+                                f"но активное окно {active_app_name} — скрываем оверлей"
+                            )
+                            if overlay and overlay.visible:
+                                self._hide_overlay_in_main_thread(overlay, pair_index)
+                            return
+            except Exception as e:
+                self.logger.warning(f"[MONITOR] Ошибка проверки активного окна: {e}")
 
             if not template_id:
                 template_id = template_data.get('hash')
@@ -734,7 +761,6 @@ class TranslationMonitor:
                         if hasattr(overlay, '_closing') and overlay._closing:
                             return
 
-                        # === ОСНОВНОЕ ИСПРАВЛЕНИЕ ===
                         # Обновляем позицию только если она изменилась
                         position_changed = (last_template_pos is None or last_template_pos != current_template_pos)
 
@@ -750,13 +776,10 @@ class TranslationMonitor:
                         overlay._hidden_by_user = False
                         overlay._hidden_by_mouse = False
 
-                        # === ГЛАВНОЕ: НЕ ВЫЗЫВАЕМ show() ЕСЛИ ОВЕРЛЕЙ УЖЕ ВИДЕН ===
                         if not overlay.visible:
                             overlay.show()
                             self.logger.info(f"[MONITOR] Показан оверлей #{pair_index}")
                         else:
-                            # Оверлей уже виден — просто поднимаем его, если нужно
-                            # Но только если не было обновления позиции (чтобы не дергать окно)
                             if position_changed:
                                 overlay.root.lift()
 

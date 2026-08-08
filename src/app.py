@@ -1822,7 +1822,8 @@ class ScreenshotTranslatorApp:
         except:
             active_app_name = None
 
-        # Скрываем все оверлеи для других приложений
+        # === ПРИНУДИТЕЛЬНО СКРЫВАЕМ ВСЕ ОВЕРЛЕИ ДЛЯ ДРУГИХ ПРИЛОЖЕНИЙ ===
+        # Это гарантирует, что оверлеи не будут висеть при переключении
         for app_name, overlays in list(self.overlay_manager.overlays_by_app_name.items()):
             if app_name != active_app_name:
                 for overlay in overlays:
@@ -1833,12 +1834,24 @@ class ScreenshotTranslatorApp:
                     except Exception as e:
                         self.logger.warning(f"[WINDOW] Ошибка скрытия оверлея: {e}")
 
-        # === ИСПРАВЛЕНИЕ: НЕ ПОКАЗЫВАЕМ ОВЕРЛЕИ ПРИ ПЕРЕКЛЮЧЕНИИ ===
-        # Оверлеи будут показаны только монитором при нахождении шаблона
-        # Удалена вся логика показа оверлеев
+        # === ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: скрываем все оверлеи, чьи шаблоны не для этого приложения ===
+        if hasattr(self, 'translation_monitor') and self.translation_monitor:
+            monitor = self.translation_monitor
+            for template_data in monitor.templates:
+                target_app = template_data.get('target_app_name')
+                overlay = template_data.get('overlay')
+                if overlay and overlay.visible:
+                    if target_app and target_app != "Неизвестно" and target_app != active_app_name:
+                        try:
+                            overlay.hide(by_user=False)
+                            self.logger.info(
+                                f"[WINDOW] Скрыт оверлей для {target_app} (не соответствует активному {active_app_name})")
+                        except Exception as e:
+                            self.logger.warning(f"[WINDOW] Ошибка скрытия оверлея: {e}")
 
         self.logger.info(
-            f"[WINDOW] Переключение на {active_app_name}, оверлеи будут показаны монитором при нахождении шаблонов")
+            f"[WINDOW] Переключение на {active_app_name}, оверлеи будут показаны монитором при нахождении шаблонов"
+        )
 
     def toggle_edit_mode(self):
         """Переключает режим редактирования"""
