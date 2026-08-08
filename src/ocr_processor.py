@@ -266,7 +266,7 @@ class OCRProcessor:
         return merged
 
     def process_image(self, image_path: Path, max_size: int = 600, save_debug: bool = False, debug_dir: Path = None,
-                      debug_prefix: str = None, gap_coefficient: float = 0.5, max_gap: float = 50) -> Tuple[
+                      debug_prefix: str = None, gap_coefficient: float = 0.3, max_gap: float = 50) -> Tuple[
         List, float]:
         """
         Обработка изображения через OCR
