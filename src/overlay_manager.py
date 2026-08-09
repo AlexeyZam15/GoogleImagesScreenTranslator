@@ -24,7 +24,6 @@ class OverlayManager:
         '_context_menu', '_context_menu_overlay', '_restoring', '_suppress_save',
         '_save_timer', '_save_pending', '_last_save_time', '_save_batch',
         '_save_delay',
-        '_f1_state'  # <-- ДОБАВЛЯЕМ
     )
 
     def __init__(self, parent):
@@ -51,7 +50,6 @@ class OverlayManager:
         # ============================================================
         # НОВЫЙ АТРИБУТ: запоминаем состояние оверлеев при F1
         # ============================================================
-        self._f1_state = {}
 
         self._create_context_menu()
 
@@ -64,6 +62,34 @@ class OverlayManager:
         #     self.logger.info("[OVERLAY_MANAGER] Глобальный обработчик ESC добавлен к главному окну")
 
         self.logger.info("OverlayManager инициализирован")
+
+    def _remove_from_f1_state(self, overlay):
+        """
+        Удаляет оверлей из F1 состояния (сбрасывает флаги видимости).
+        Этот метод вызывается при удалении оверлея.
+        """
+        try:
+            # Сбрасываем флаги видимости, чтобы оверлей не пытался восстановиться
+            if hasattr(overlay, '_is_visible_by_user'):
+                overlay._is_visible_by_user = False
+            if hasattr(overlay, '_hidden_by_user'):
+                overlay._hidden_by_user = False
+            if hasattr(overlay, '_hidden_by_mouse'):
+                overlay._hidden_by_mouse = False
+
+            # Если у оверлея есть template_id, удаляем его из состояния в мониторе
+            if hasattr(overlay, '_template_id') and overlay._template_id:
+                if hasattr(self.parent, 'translation_monitor') and self.parent.translation_monitor:
+                    monitor = self.parent.translation_monitor
+                    for template_data in monitor.templates[:]:
+                        if template_data.get('hash') == overlay._template_id:
+                            monitor.templates.remove(template_data)
+                            self.logger.info(f"[STATE] Шаблон {overlay._template_id[:8]} удалён из монитора")
+                            break
+
+            self.logger.info(f"[OVERLAY_MANAGER] Оверлей удалён из F1 состояния")
+        except Exception as e:
+            self.logger.warning(f"[OVERLAY_MANAGER] Ошибка удаления из F1 состояния: {e}")
 
     def _hide_overlay_under_cursor(self):
         """Скрывает оверлей через контекстное меню."""
@@ -138,20 +164,21 @@ class OverlayManager:
 
     def reset_f1_state(self):
         """
-        Сбрасывает сохранённое состояние F1.
+        Сбрасывает флаги скрытия у всех оверлеев.
         Используется при изменении настроек автоскрытия.
         """
-        self.logger.info("[F1] Сброс сохранённого состояния F1")
+        self.logger.info("[APP] Сброс состояния F1")
 
-        # 1. Очищаем сохранённое состояние
-        self._f1_state.clear()
-        self.logger.info("[F1] Состояние F1 сброшено")
+        if not hasattr(self, 'overlay_manager') or not self.overlay_manager:
+            self.logger.warning("[APP] overlay_manager не инициализирован")
+            return
 
-        # 2. Сбрасываем флаги скрытия у всех оверлеев, НО НЕ ПОКАЗЫВАЕМ ИХ
         restored_count = 0
-        for overlay in self.overlays:
+        for overlay in self.overlay_manager.overlays:
             try:
-                if overlay is None or not overlay.root or not overlay.root.winfo_exists():
+                if overlay is None:
+                    continue
+                if not overlay.root or not overlay.root.winfo_exists():
                     continue
 
                 # Сбрасываем флаги скрытия
@@ -159,49 +186,17 @@ class OverlayManager:
                 overlay._hidden_by_user = False
                 overlay._hidden_by_mouse = False
 
-                # НЕ ПОКАЗЫВАЕМ ОВЕРЛЕЙ!
-                # Они будут показаны только при переключении на целевое окно
-                # через _on_window_switch в app.py
-
                 restored_count += 1
-                self.logger.info(f"[F1] Сброшены флаги для оверлея {overlay._app_name} (НЕ ПОКАЗАН)")
+                self.logger.info(f"[F1] Сброшены флаги для оверлея {overlay._app_name}")
 
             except Exception as e:
                 self.logger.warning(f"[F1] Ошибка сброса состояния оверлея: {e}")
 
-        self.logger.info(f"[F1] Сброшены флаги для {restored_count} оверлеев (без показа)")
+        self.logger.info(f"[F1] Сброшены флаги для {restored_count} оверлеев")
 
-        # 3. Сохраняем состояние после сброса
-        self.save_overlay_state(immediate=True)
+        # Сохраняем состояние
+        self.overlay_manager.save_overlay_state(immediate=True)
         self.logger.info("[F1] Состояние сохранено после сброса")
-
-    def _remove_from_f1_state(self, overlay: OverlayWindow):
-        """
-        Удаляет оверлей из сохранённого F1 состояния.
-
-        Args:
-            overlay: Оверлей для удаления из состояния
-        """
-        if not self._f1_state:
-            return
-
-        overlay_id = self._get_overlay_id(overlay)
-
-        if overlay_id in self._f1_state:
-            del self._f1_state[overlay_id]
-            self.logger.info(f"[F1] Оверлей {overlay_id[:8]} удалён из F1 состояния")
-        else:
-            # Пробуем найти по альтернативному ключу
-            for key in list(self._f1_state.keys()):
-                if key.startswith(overlay._app_name or "Неизвестно"):
-                    if overlay._template_id and overlay._template_id in key:
-                        del self._f1_state[key]
-                        self.logger.info(f"[F1] Оверлей {key[:8]} удалён из F1 состояния (по template_id)")
-                        return
-                    if overlay._last_image_path and Path(overlay._last_image_path).stem in key:
-                        del self._f1_state[key]
-                        self.logger.info(f"[F1] Оверлей {key[:8]} удалён из F1 состояния (по image_path)")
-                        return
 
     def _save_state_after_removal(self):
         """Сохраняет состояние после удаления оверлея."""
@@ -266,7 +261,7 @@ class OverlayManager:
         # ============================================================
         # 1. УДАЛЯЕМ ИЗ F1 СОСТОЯНИЯ
         # ============================================================
-        self._remove_from_f1_state(overlay)
+        self._remove_from_f1_state(overlay)  # <-- ТЕПЕРЬ ЭТОТ МЕТОД СУЩЕСТВУЕТ
 
         # 2. Удаляем из словаря по имени приложения
         self._remove_from_app_dict(overlay, app_name)
@@ -288,10 +283,6 @@ class OverlayManager:
     def remove_all_overlays_for_app(self, app_name: str, force: bool = False):
         """
         Быстрое массовое удаление всех оверлеев для указанного приложения.
-
-        Args:
-            app_name: Имя приложения
-            force: Принудительное удаление
         """
         self.logger.info(f"[OVERLAY_MANAGER] === БЫСТРОЕ УДАЛЕНИЕ ВСЕХ ОВЕРЛЕЕВ ДЛЯ {app_name} ===")
 
@@ -320,11 +311,9 @@ class OverlayManager:
                         monitor.templates.remove(template_data)
                         self.logger.info(f"[MONITOR] Удалён шаблон #{template_data.get('pair_index')}")
 
-            # ============================================================
-            # 2. УДАЛЯЕМ ВСЕ ОВЕРЛЕИ ИЗ F1 СОСТОЯНИЯ
-            # ============================================================
-            for overlay in overlays:
-                self._remove_from_f1_state(overlay)
+            # 2. УДАЛЯЕМ ЭТУ СТРОКУ — она больше не нужна:
+            # for overlay in overlays:
+            #     self._remove_from_f1_state(overlay)  # <-- УДАЛИТЬ
 
             # 3. Закрываем ВСЕ оверлеи за один проход
             for overlay in overlays[:]:
@@ -383,86 +372,6 @@ class OverlayManager:
 
         except Exception as e:
             self.logger.warning(f"[STATE] Не удалось обновить файл состояния: {e}")
-
-    def save_f1_state(self):
-        """
-        Сохраняет текущее состояние ВСЕХ оверлеев для F1.
-        Запоминает, какие оверлеи видимы, а какие скрыты.
-        """
-        self.logger.info("[F1] Сохраняем состояние всех оверлеев")
-        self._f1_state.clear()
-
-        for overlay in self.overlays:
-            try:
-                if overlay is None or not overlay.root or not overlay.root.winfo_exists():
-                    continue
-
-                # Создаём уникальный ID для оверлея
-                overlay_id = self._get_overlay_id(overlay)
-
-                self._f1_state[overlay_id] = {
-                    'visible': overlay.visible,
-                    'hidden_by_user': overlay._hidden_by_user,
-                    'is_visible_by_user': overlay._is_visible_by_user,
-                    'edit_mode_enabled': overlay._edit_mode_enabled,
-                    'auto_hide_enabled': overlay.auto_hide_enabled,
-                    'last_image_path': overlay._last_image_path,
-                    'last_window_rect': overlay._last_window_rect,
-                    'app_name': overlay._app_name,
-                    'target_hwnd': overlay._target_hwnd
-                }
-                self.logger.info(f"[F1] Сохранено состояние оверлея {overlay_id[:8]}: visible={overlay.visible}")
-            except Exception as e:
-                self.logger.warning(f"[F1] Ошибка сохранения состояния оверлея: {e}")
-
-        self.logger.info(f"[F1] Сохранено состояние {len(self._f1_state)} оверлеев")
-
-    def restore_f1_state(self):
-        """
-        Восстанавливает состояние оверлеев из сохранённого F1 состояния.
-        Показывает/скрывает оверлеи в соответствии с сохранённым состоянием.
-        """
-        self.logger.info("[F1] Восстанавливаем состояние всех оверлеев")
-
-        if not self._f1_state:
-            self.logger.info("[F1] Нет сохранённого состояния")
-            return
-
-        restored_count = 0
-        for overlay in self.overlays:
-            try:
-                if overlay is None or not overlay.root or not overlay.root.winfo_exists():
-                    continue
-
-                overlay_id = self._get_overlay_id(overlay)
-
-                if overlay_id in self._f1_state:
-                    state = self._f1_state[overlay_id]
-
-                    # Восстанавливаем состояние
-                    overlay._hidden_by_user = state['hidden_by_user']
-                    overlay._is_visible_by_user = state['is_visible_by_user']
-
-                    if state['visible']:
-                        # Оверлей должен быть видим
-                        if not overlay.visible:
-                            overlay.show()
-                            self.logger.info(f"[F1] Показан оверлей {overlay_id[:8]}")
-                    else:
-                        # Оверлей должен быть скрыт
-                        if overlay.visible:
-                            overlay.hide(by_user=state['hidden_by_user'])
-                            self.logger.info(f"[F1] Скрыт оверлей {overlay_id[:8]}")
-
-                    restored_count += 1
-
-            except Exception as e:
-                self.logger.warning(f"[F1] Ошибка восстановления оверлея: {e}")
-
-        self.logger.info(f"[F1] Восстановлено состояние {restored_count} оверлеев")
-
-        # Сохраняем состояние в файл
-        self.save_overlay_state()
 
     def _get_overlay_id(self, overlay):
         """
@@ -848,10 +757,6 @@ class OverlayManager:
     def close_all(self):
         """Закрывает все оверлеи."""
         self.logger.info(f"[OVERLAY_MANAGER] Закрытие всех оверлеев. Количество: {len(self.overlays)}")
-
-        # Очищаем F1 состояние
-        self._f1_state.clear()
-        self.logger.info("[OVERLAY_MANAGER] F1 состояние очищено")
 
         # Отключаем ESC обработчик
         if hasattr(self.parent, 'root') and self.parent.root:
