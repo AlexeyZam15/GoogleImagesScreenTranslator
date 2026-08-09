@@ -52,8 +52,9 @@ class OverlayWindow:
         '_title_bar_visible', '_title_bar_hide_timer',
         '_title_bar_hide_delay_ms', '_mouse_over_title_bar',
         '_image_offset_y', '_saved_window_height', '_saved_window_y',
-        # === НОВЫЙ АТРИБУТ ===
-        '_closing'
+        '_closing',
+        '_save_timer', '_last_frame_update',
+        '_is_f2_overlay'  # <-- ФЛАГ ДЛЯ F2-ОВЕРЛЕЯ
     )
 
     def __init__(self, parent=None, app_title="Перевод скриншотов", auto_hide_enabled=True):
@@ -103,13 +104,18 @@ class OverlayWindow:
         self._user_moved = False
         self._created_at_startup = False
 
+        # ============================================================
+        # ФЛАГ: идентифицирует F2-оверлей (добавлен)
+        # ============================================================
+        self._is_f2_overlay = False
+
         # Временный режим
         self._is_temporary = False
         self._temp_timer = None
         self._temp_created_at = 0
         self._temp_lifetime = 180
 
-        # Рамка
+        # Рамка редактирования
         self._edit_frame = None
         self._edit_frame_visible = False
 
@@ -117,12 +123,14 @@ class OverlayWindow:
         self._offset_x = 0
         self._offset_y = 0
 
-        # === НОВЫЙ АТРИБУТ: флаг закрытия ===
+        # Флаг закрытия
         self._closing = False
 
-        # --- ИНИЦИАЛИЗИРУЕМ НЕДОСТАЮЩИЕ АТРИБУТЫ ---
+        # Атрибуты для перетаскивания
         self._drag_start_x = 0
         self._drag_start_y = 0
+
+        # Атрибуты для заголовка (если используется)
         self._title_bar_visible = False
         self._title_bar_hide_timer = None
         self._title_bar_hide_delay_ms = 2000
@@ -130,6 +138,10 @@ class OverlayWindow:
         self._image_offset_y = 0
         self._saved_window_height = 0
         self._saved_window_y = 0
+
+        # Таймер сохранения (для оптимизации)
+        self._save_timer = None
+        self._last_frame_update = 0
 
         # Создаем окно
         self.root = tk.Toplevel(parent) if parent else tk.Toplevel()
@@ -158,6 +170,13 @@ class OverlayWindow:
         self.root.bind('<Leave>', self._on_mouse_leave)
 
         self.logger.info("OverlayWindow инициализирован")
+
+    def _delayed_save_state(self):
+        """Отложенное сохранение состояния после перетаскивания."""
+        self._save_timer = None
+        if hasattr(self, '_overlay_manager') and self._overlay_manager:
+            self._overlay_manager.save_overlay_state()
+            self.logger.info("[DEBUG] _delayed_save_state: состояние сохранено")
 
     def can_be_shown_by_monitor(self) -> bool:
         """
@@ -325,16 +344,21 @@ class OverlayWindow:
             self.logger.warning(f"[DEBUG] Ошибка скрытия рамки: {e}")
 
     def _update_edit_frame_position(self):
-        """Обновляет размеры рамки при изменении размера оверлея."""
+        """Обновляет размеры рамки при изменении размера оверлея (оптимизированно)."""
         if not self._edit_frame_visible or not self._edit_frame:
             return
+
+        # Используем дебаунс, чтобы не обновлять рамку слишком часто
+        current_time = time.time()
+        if hasattr(self, '_last_frame_update') and current_time - self._last_frame_update < 0.05:
+            return
+        self._last_frame_update = current_time
 
         try:
             width = self.root.winfo_width()
             height = self.root.winfo_height()
             self.canvas.coords(self._edit_frame, 0, 0, width, height)
             self.canvas.tag_raise('edit_frame')
-            # Проверяем существование атрибута перед использованием
             if hasattr(self, '_title_bar_visible') and self._title_bar_visible:
                 self.canvas.tag_raise('title_bar')
         except Exception as e:
@@ -345,25 +369,20 @@ class OverlayWindow:
         if self._is_dragging:
             return
 
-        # === НОВАЯ ПРОВЕРКА: если оверлей не должен быть виден — игнорируем ===
-        if not self._is_visible_by_user:
-            self.logger.info(f"[DEBUG] _on_mouse_enter: _is_visible_by_user=False, игнорируем")
+        # === В РЕЖИМЕ РЕДАКТИРОВАНИЯ НЕ СКРЫВАЕМ ===
+        if self._edit_mode_enabled:
+            self.logger.info(f"[DEBUG] _on_mouse_enter: режим редактирования, оверлей не скрываем")
             return
 
         if self._suppress_enter_events:
             self._suppress_enter_events = False
             return
 
-        # Защита от множественных вызовов
         if self._mouse_over:
             return
 
         self._mouse_over = True
         self.logger.info(f"[DEBUG] _on_mouse_enter: mouse_over=True, edit_mode={self._edit_mode_enabled}")
-
-        if self._edit_mode_enabled:
-            self.logger.info("[DEBUG] _on_mouse_enter: режим редактирования, оверлей не скрываем")
-            return
 
         if self.visible and self._is_visible_by_user:
             self.logger.info("[DEBUG] _on_mouse_enter: скрываем оверлей (режим просмотра)")
@@ -544,6 +563,14 @@ class OverlayWindow:
             self.logger.info("[DEBUG] _start_drag - уже перетаскивается, пропускаем")
             return "break"
 
+        # Отменяем предыдущий таймер сохранения
+        if hasattr(self, '_save_timer') and self._save_timer:
+            try:
+                self.root.after_cancel(self._save_timer)
+                self._save_timer = None
+            except:
+                pass
+
         if self._drag_stop_timer:
             try:
                 self.root.after_cancel(self._drag_stop_timer)
@@ -566,14 +593,7 @@ class OverlayWindow:
         self._stop_visibility_monitor()
         self.logger.info("[DEBUG] _start_drag: монитор видимости отключен")
 
-        if hasattr(self, '_overlay_manager') and self._overlay_manager:
-            parent = self._overlay_manager.parent
-            if parent and hasattr(parent, 'translation_monitor'):
-                monitor = parent.translation_monitor
-                if monitor and monitor.is_running():
-                    monitor.stop()
-                    self.logger.info("[DEBUG] _start_drag: монитор автозамены приостановлен")
-
+        # Отключаем сохранение состояния во время перетаскивания
         if hasattr(self, '_overlay_manager') and self._overlay_manager:
             self._overlay_manager._suppress_save = True
             self.logger.info("[DEBUG] _start_drag: сохранение состояния отключено")
@@ -586,6 +606,7 @@ class OverlayWindow:
             return
 
         self.logger.info("[DEBUG] _stop_drag вызван")
+
         self._is_dragging = False
         self._drag_data["x"] = 0
         self._drag_data["y"] = 0
@@ -610,8 +631,17 @@ class OverlayWindow:
                     return
 
                 self._user_moved = True
-                # === СОХРАНЯЕМ ФИНАЛЬНУЮ ПОЗИЦИЮ В _saved_position ===
                 self._saved_position = (overlay_x, overlay_y)
+
+                # ============================================================
+                # ЗАПОМИНАЕМ ПЕРЕТАЩЕННЫЙ F2-ОВЕРЛЕЙ В APP
+                # ============================================================
+                if hasattr(self, '_is_f2_overlay') and self._is_f2_overlay:
+                    if hasattr(self, '_overlay_manager') and self._overlay_manager:
+                        parent = self._overlay_manager.parent
+                        if parent:
+                            parent._last_dragged_f2_overlay = self
+                            self.logger.info(f"[F4] Запомнен перетащенный F2-оверлей: {self._app_name}")
 
                 if self._template_id and hasattr(self, '_overlay_manager') and self._overlay_manager:
                     parent = self._overlay_manager.parent
@@ -630,7 +660,6 @@ class OverlayWindow:
                                         template_data['overlay_width'] = overlay_w
                                         template_data['overlay_height'] = overlay_h
                                         template_data['offset_initialized'] = True
-                                        # === ОБНОВЛЯЕМ _offset_x И _offset_y В ОВЕРЛЕЕ ===
                                         self._offset_x = new_offset_x
                                         self._offset_y = new_offset_y
                                         self.logger.info(
@@ -639,14 +668,10 @@ class OverlayWindow:
                                         )
                                     break
 
-                        self._overlay_manager._save_overlay_position(self._template_id, overlay_x, overlay_y)
-                        self.logger.info(
-                            f"[DEBUG] Сохранена позиция оверлея для шаблона {self._template_id[:8]}: ({overlay_x}, {overlay_y})")
-
-                elif self._last_image_path and hasattr(self, '_overlay_manager') and self._overlay_manager:
-                    overlay_id = str(self._last_image_path)
-                    self._overlay_manager._save_overlay_position(overlay_id, overlay_x, overlay_y)
-                    self.logger.info(f"[DEBUG] Сохранена позиция оверлея: {overlay_id} -> ({overlay_x}, {overlay_y})")
+                            self._overlay_manager._save_overlay_position(self._template_id, overlay_x, overlay_y)
+                            self.logger.info(
+                                f"[DEBUG] Сохранена позиция оверлея для шаблона {self._template_id[:8]}: ({overlay_x}, {overlay_y})"
+                            )
 
         except Exception as e:
             self.logger.warning(f"[DEBUG] Не удалось сохранить позицию оверлея: {e}")
@@ -655,7 +680,6 @@ class OverlayWindow:
             self._overlay_manager.set_dragging(False)
             self.logger.info("[DEBUG] Глобальный флаг перетаскивания сброшен")
 
-        # Обновляем рамку, если она видна
         if self._edit_frame_visible:
             self._update_edit_frame_position()
 
@@ -666,42 +690,43 @@ class OverlayWindow:
         if hasattr(self, '_overlay_manager') and self._overlay_manager:
             self._overlay_manager._suppress_save = False
             if self.root and self.root.winfo_exists():
-                self.root.after(500, self._overlay_manager.save_overlay_state)
+                if hasattr(self, '_save_timer') and self._save_timer:
+                    try:
+                        self.root.after_cancel(self._save_timer)
+                    except:
+                        pass
+                self._save_timer = self.root.after(500, self._delayed_save_state)
                 self.logger.info("[DEBUG] _stop_drag: сохранение состояния запланировано через 500мс")
 
-        if self.auto_hide_enabled and not self._edit_mode_enabled:
+        if self._edit_mode_enabled:
+            self.logger.info("[DEBUG] _stop_drag: режим редактирования, монитор не запускаем")
+            return
+
+        if self.auto_hide_enabled:
             self._start_visibility_monitor()
             self.logger.info("[DEBUG] _stop_drag: монитор видимости перезапущен")
-        elif self._edit_mode_enabled:
-            self.logger.info("[DEBUG] _stop_drag: режим редактирования, монитор не запускаем")
-
-        if hasattr(self, '_overlay_manager') and self._overlay_manager:
-            parent = self._overlay_manager.parent
-            if parent and hasattr(parent, 'translation_monitor'):
-                monitor = parent.translation_monitor
-                if monitor and monitor.templates:
-                    if self.root and self.root.winfo_exists():
-                        self.root.after(300, monitor.start)
-                        self.logger.info("[DEBUG] _stop_drag: монитор автозамены будет запущен через 300мс")
-
-        if self.root and self.root.winfo_exists():
-            if self._drag_stop_timer:
-                try:
-                    self.root.after_cancel(self._drag_stop_timer)
-                except:
-                    pass
-            self._drag_stop_timer = self.root.after(500, self._on_drag_stop_timeout)
 
     def _on_drag(self, event):
-        """Перемещает окно во время перетаскивания."""
-        if self._is_dragging and self.root.winfo_exists():
-            x = self.root.winfo_x() + (event.x - self._drag_data["x"])
-            y = self.root.winfo_y() + (event.y - self._drag_data["y"])
-            self.root.geometry(f"+{x}+{y}")
-            self._saved_position = (x, y)
+        """Перемещает окно во время перетаскивания с оптимизацией."""
+        if not self._is_dragging or not self.root or not self.root.winfo_exists():
+            return
 
-            if self._edit_frame_visible:
+        # Оптимизация: обновляем позицию напрямую, без лишних операций
+        x = self.root.winfo_x() + (event.x - self._drag_data["x"])
+        y = self.root.winfo_y() + (event.y - self._drag_data["y"])
+
+        # Применяем позицию сразу
+        self.root.geometry(f"+{x}+{y}")
+
+        # Сохраняем позицию без обновления рамки при каждом движении
+        self._saved_position = (x, y)
+
+        # Обновляем рамку только если она видна и прошло достаточно времени
+        if self._edit_frame_visible:
+            # Используем отложенное обновление рамки, чтобы не тормозить
+            if not hasattr(self, '_last_frame_update') or time.time() - self._last_frame_update > 0.05:
                 self._update_edit_frame_position()
+                self._last_frame_update = time.time()
 
     def _on_right_click(self, event):
         """Обработчик правой кнопки мыши - показывает контекстное меню через менеджер."""

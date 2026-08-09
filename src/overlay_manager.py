@@ -23,14 +23,14 @@ class OverlayManager:
         '_show_all_sync_pending', '_show_all_sync_timer', '_esc_hook_active',
         '_context_menu', '_context_menu_overlay', '_restoring', '_suppress_save',
         '_save_timer', '_save_pending', '_last_save_time', '_save_batch',
-        '_save_delay'
+        '_save_delay',
+        '_f1_state'  # <-- ДОБАВЛЯЕМ
     )
 
     def __init__(self, parent):
         self.logger = logging.getLogger(__name__)
         self.parent = parent
-        # --- ИЗМЕНЕНИЕ: используем имя приложения как ключ ---
-        self.overlays_by_app_name = {}  # app_name -> list of overlays
+        self.overlays_by_app_name = {}
         self.overlays = []
         self._is_dragging_any = False
         self._show_all_sync_pending = False
@@ -48,12 +48,132 @@ class OverlayManager:
         self._save_batch = []
         self._save_delay = 1000
 
+        # ============================================================
+        # НОВЫЙ АТРИБУТ: запоминаем состояние оверлеев при F1
+        # ============================================================
+        self._f1_state = {}  # overlay_id -> {visible: bool, hidden_by_user: bool}
+
         self._create_context_menu()
         self.logger.info("OverlayManager инициализирован")
+
+    def _remove_from_f1_state(self, overlay: OverlayWindow):
+        """
+        Удаляет оверлей из сохранённого F1 состояния.
+
+        Args:
+            overlay: Оверлей для удаления из состояния
+        """
+        if not self._f1_state:
+            return
+
+        overlay_id = self._get_overlay_id(overlay)
+
+        if overlay_id in self._f1_state:
+            del self._f1_state[overlay_id]
+            self.logger.info(f"[F1] Оверлей {overlay_id[:8]} удалён из F1 состояния")
+        else:
+            # Пробуем найти по альтернативному ключу
+            for key in list(self._f1_state.keys()):
+                if key.startswith(overlay._app_name or "Неизвестно"):
+                    if overlay._template_id and overlay._template_id in key:
+                        del self._f1_state[key]
+                        self.logger.info(f"[F1] Оверлей {key[:8]} удалён из F1 состояния (по template_id)")
+                        return
+                    if overlay._last_image_path and Path(overlay._last_image_path).stem in key:
+                        del self._f1_state[key]
+                        self.logger.info(f"[F1] Оверлей {key[:8]} удалён из F1 состояния (по image_path)")
+                        return
+
+    def _save_state_after_removal(self):
+        """Сохраняет состояние после удаления оверлея."""
+        if not self._suppress_save:
+            self.save_overlay_state(immediate=True)
+            self.logger.info("[OVERLAY_MANAGER] Состояние сохранено после удаления")
+
+    def _remove_from_app_dict(self, overlay: OverlayWindow, app_name: str):
+        """Удаляет оверлей из словаря по имени приложения."""
+        if app_name in self.overlays_by_app_name:
+            if overlay in self.overlays_by_app_name[app_name]:
+                self.overlays_by_app_name[app_name].remove(overlay)
+                self.logger.info(f"[OVERLAY_MANAGER] Оверлей удалён из словаря {app_name}")
+            if not self.overlays_by_app_name[app_name]:
+                del self.overlays_by_app_name[app_name]
+                self.logger.info(f"[OVERLAY_MANAGER] Словарь для {app_name} очищен")
+
+    def _remove_from_overlays_list(self, overlay: OverlayWindow):
+        """Удаляет оверлей из общего списка."""
+        if overlay in self.overlays:
+            self.overlays.remove(overlay)
+            self.logger.info(f"[OVERLAY_MANAGER] Оверлей удалён из общего списка, осталось {len(self.overlays)}")
+
+    def _close_overlay(self, overlay: OverlayWindow):
+        """Закрывает оверлей и освобождает ресурсы."""
+        try:
+            overlay._closing = True
+            overlay._hide_edit_frame()
+            overlay._stop_temp_timer()
+            overlay._stop_visibility_monitor()
+            overlay._disable_esc_hook()
+            overlay._context_menu_visible = False
+
+            if overlay.root and overlay.root.winfo_exists():
+                overlay.root.destroy()
+
+            self.logger.info(f"[OVERLAY_MANAGER] Оверлей закрыт")
+        except Exception as e:
+            self.logger.warning(f"[OVERLAY_MANAGER] Ошибка закрытия оверлея: {e}")
+
+
+    def remove_overlay(self, overlay: OverlayWindow, force: bool = False):
+        """
+        Удаляет оверлей из всех списков и очищает состояние окна.
+
+        Args:
+            overlay: Оверлей для удаления
+            force: Принудительное удаление (игнорирует проверки)
+        """
+        self.logger.info(f"[OVERLAY_MANAGER] === remove_overlay НАЧАЛО ===")
+        self.logger.info(f"[OVERLAY_MANAGER] overlay={overlay}")
+        self.logger.info(f"[OVERLAY_MANAGER] force={force}")
+
+        if overlay not in self.overlays:
+            self.logger.warning("[OVERLAY_MANAGER] Оверлей уже удалён из списка, пропускаем")
+            return
+
+        target_hwnd = overlay.get_target_hwnd()
+        app_name = overlay._app_name
+
+        self.logger.info(f"[OVERLAY_MANAGER] target_hwnd={target_hwnd}, app_name={app_name}")
+
+        # ============================================================
+        # 1. УДАЛЯЕМ ИЗ F1 СОСТОЯНИЯ
+        # ============================================================
+        self._remove_from_f1_state(overlay)
+
+        # 2. Удаляем из словаря по имени приложения
+        self._remove_from_app_dict(overlay, app_name)
+
+        # 3. Удаляем из общего списка
+        self._remove_from_overlays_list(overlay)
+
+        # 4. Закрываем оверлей
+        self._close_overlay(overlay)
+
+        # 5. Сохраняем состояние ТОЛЬКО если не запрещено
+        if not self._suppress_save:
+            self._save_state_after_removal()
+        else:
+            self.logger.info("[OVERLAY_MANAGER] Сохранение состояния пропущено (_suppress_save=True)")
+
+        self.logger.info("[OVERLAY_MANAGER] === remove_overlay ЗАВЕРШЕН ===")
 
     def remove_all_overlays_for_app(self, app_name: str, force: bool = False):
         """
         Быстрое массовое удаление всех оверлеев для указанного приложения.
+
+        Args:
+            app_name: Имя приложения
+            force: Принудительное удаление
         """
         self.logger.info(f"[OVERLAY_MANAGER] === БЫСТРОЕ УДАЛЕНИЕ ВСЕХ ОВЕРЛЕЕВ ДЛЯ {app_name} ===")
 
@@ -69,7 +189,7 @@ class OverlayManager:
         self._suppress_save = True
 
         try:
-            # 1. Удаляем шаблоны из монитора (БЕЗ закрытия оверлеев)
+            # 1. Удаляем все шаблоны из монитора для этого приложения
             if hasattr(self.parent, 'translation_monitor') and self.parent.translation_monitor:
                 monitor = self.parent.translation_monitor
                 templates_to_remove = []
@@ -78,16 +198,17 @@ class OverlayManager:
                         templates_to_remove.append(template_data)
 
                 for template_data in templates_to_remove:
-                    # Удаляем шаблон из списка, но НЕ закрываем оверлей
                     if template_data in monitor.templates:
-                        # Сохраняем ссылку на оверлей
-                        overlay = template_data.get('overlay')
-                        # Удаляем из списка
                         monitor.templates.remove(template_data)
                         self.logger.info(f"[MONITOR] Удалён шаблон #{template_data.get('pair_index')}")
-                        # НЕ вызываем overlay.close() здесь!
 
-            # 2. Закрываем ВСЕ оверлеи за один проход (быстро)
+            # ============================================================
+            # 2. УДАЛЯЕМ ВСЕ ОВЕРЛЕИ ИЗ F1 СОСТОЯНИЯ
+            # ============================================================
+            for overlay in overlays:
+                self._remove_from_f1_state(overlay)
+
+            # 3. Закрываем ВСЕ оверлеи за один проход
             for overlay in overlays[:]:
                 try:
                     overlay._closing = True
@@ -96,16 +217,15 @@ class OverlayManager:
                 except Exception as e:
                     self.logger.warning(f"[OVERLAY] Ошибка закрытия оверлея: {e}")
 
-            # 3. Очищаем все списки
+            # 4. Очищаем все списки
             self.overlays = [ov for ov in self.overlays if ov not in overlays]
             if app_name in self.overlays_by_app_name:
                 del self.overlays_by_app_name[app_name]
 
-            # 4. Очищаем состояние окна
-            if hasattr(self.parent, '_clear_window_state'):
-                self.parent._clear_window_state(app_name)
+            # 5. Удаляем состояние из файла
+            self._remove_state_from_file(app_name)
 
-            # 5. Уведомляем родителя
+            # 6. Уведомляем родителя
             if hasattr(self.parent, '_on_overlay_removed'):
                 try:
                     self.parent._on_overlay_removed(app_name)
@@ -117,6 +237,129 @@ class OverlayManager:
         finally:
             self._suppress_save = old_suppress
             self.save_overlay_state(immediate=True)
+
+    def _remove_state_from_file(self, app_name: str):
+        """
+        Удаляет состояние для приложения из файла overlay_state.json.
+        """
+        try:
+            import json
+            from pathlib import Path
+
+            state_file = self._get_overlay_state_file()
+            if not state_file.exists():
+                return
+
+            with open(state_file, 'r', encoding='utf-8') as f:
+                states = json.load(f)
+
+            keys_to_remove = [key for key in states.keys() if key.startswith(f"{app_name}_")]
+            for key in keys_to_remove:
+                del states[key]
+                self.logger.info(f"[STATE] Удалена запись состояния: {key}")
+
+            with open(state_file, 'w', encoding='utf-8') as f:
+                json.dump(states, f, indent=4, ensure_ascii=False)
+
+            self.logger.info(f"[STATE] Состояние для {app_name} удалено из файла")
+
+        except Exception as e:
+            self.logger.warning(f"[STATE] Не удалось обновить файл состояния: {e}")
+
+    def save_f1_state(self):
+        """
+        Сохраняет текущее состояние ВСЕХ оверлеев для F1.
+        Запоминает, какие оверлеи видимы, а какие скрыты.
+        """
+        self.logger.info("[F1] Сохраняем состояние всех оверлеев")
+        self._f1_state.clear()
+
+        for overlay in self.overlays:
+            try:
+                if overlay is None or not overlay.root or not overlay.root.winfo_exists():
+                    continue
+
+                # Создаём уникальный ID для оверлея
+                overlay_id = self._get_overlay_id(overlay)
+
+                self._f1_state[overlay_id] = {
+                    'visible': overlay.visible,
+                    'hidden_by_user': overlay._hidden_by_user,
+                    'is_visible_by_user': overlay._is_visible_by_user,
+                    'edit_mode_enabled': overlay._edit_mode_enabled,
+                    'auto_hide_enabled': overlay.auto_hide_enabled,
+                    'last_image_path': overlay._last_image_path,
+                    'last_window_rect': overlay._last_window_rect,
+                    'app_name': overlay._app_name,
+                    'target_hwnd': overlay._target_hwnd
+                }
+                self.logger.info(f"[F1] Сохранено состояние оверлея {overlay_id[:8]}: visible={overlay.visible}")
+            except Exception as e:
+                self.logger.warning(f"[F1] Ошибка сохранения состояния оверлея: {e}")
+
+        self.logger.info(f"[F1] Сохранено состояние {len(self._f1_state)} оверлеев")
+
+    def restore_f1_state(self):
+        """
+        Восстанавливает состояние оверлеев из сохранённого F1 состояния.
+        Показывает/скрывает оверлеи в соответствии с сохранённым состоянием.
+        """
+        self.logger.info("[F1] Восстанавливаем состояние всех оверлеев")
+
+        if not self._f1_state:
+            self.logger.info("[F1] Нет сохранённого состояния")
+            return
+
+        restored_count = 0
+        for overlay in self.overlays:
+            try:
+                if overlay is None or not overlay.root or not overlay.root.winfo_exists():
+                    continue
+
+                overlay_id = self._get_overlay_id(overlay)
+
+                if overlay_id in self._f1_state:
+                    state = self._f1_state[overlay_id]
+
+                    # Восстанавливаем состояние
+                    overlay._hidden_by_user = state['hidden_by_user']
+                    overlay._is_visible_by_user = state['is_visible_by_user']
+
+                    if state['visible']:
+                        # Оверлей должен быть видим
+                        if not overlay.visible:
+                            overlay.show()
+                            self.logger.info(f"[F1] Показан оверлей {overlay_id[:8]}")
+                    else:
+                        # Оверлей должен быть скрыт
+                        if overlay.visible:
+                            overlay.hide(by_user=state['hidden_by_user'])
+                            self.logger.info(f"[F1] Скрыт оверлей {overlay_id[:8]}")
+
+                    restored_count += 1
+
+            except Exception as e:
+                self.logger.warning(f"[F1] Ошибка восстановления оверлея: {e}")
+
+        self.logger.info(f"[F1] Восстановлено состояние {restored_count} оверлеев")
+
+        # Сохраняем состояние в файл
+        self.save_overlay_state()
+
+    def _get_overlay_id(self, overlay):
+        """
+        Создаёт уникальный ID для оверлея.
+        Используем комбинацию: app_name + template_id или app_name + image_path
+        """
+        app_name = overlay._app_name or "Неизвестно"
+
+        if overlay._template_id:
+            return f"{app_name}_{overlay._template_id}"
+
+        if overlay._last_image_path:
+            return f"{app_name}_{Path(overlay._last_image_path).stem}"
+
+        return f"{app_name}_{id(overlay)}"
 
     def toggle_overlays_for_app(self, app_name: str) -> bool:
         """
@@ -225,31 +468,9 @@ class OverlayManager:
                                   is_temporary: bool = False,
                                   lifetime_seconds: int = 180,
                                   region_path: Path = None,
-                                  app_name: str = None) -> Optional[OverlayWindow]:
-        """
-        ЕДИНСТВЕННЫЙ метод для создания оверлея.
+                                  app_name: str = None,
+                                  force_edit_mode: bool = False) -> Optional[OverlayWindow]:
 
-        Args:
-            image_path: Путь к переведённому изображению
-            window_rect: Прямоугольник окна (x1, y1, x2, y2)
-            target_hwnd: HWND целевого окна
-            is_auto_replace: Флаг автозамены
-            is_window_screenshot: Флаг скриншота окна
-            template_id: ID шаблона (hash)
-            show_immediately: Показывать ли сразу
-            saved_x, saved_y, saved_w, saved_h: Сохранённая позиция (устарело, используется offset_x/offset_y)
-            is_startup: Флаг запуска при старте
-            offset_x, offset_y: Смещение относительно шаблона
-            is_temporary: Временный ли оверлей
-            lifetime_seconds: Время жизни временного оверлея
-            region_path: Путь к файлу шаблона (для автозамены)
-            app_name: Имя приложения (если не указано - будет получено по HWND)
-
-        Returns:
-            OverlayWindow или None
-        """
-
-        # Если app_name не передан - получаем по HWND
         if app_name is None and target_hwnd:
             try:
                 app_name = get_process_name_by_hwnd(target_hwnd)
@@ -259,7 +480,6 @@ class OverlayManager:
         elif app_name is None:
             app_name = "Неизвестно"
 
-        # Вычисляем финальную позицию
         rx1, ry1, rx2, ry2 = window_rect
         template_x = rx1
         template_y = ry1
@@ -292,7 +512,6 @@ class OverlayManager:
             final_h = template_h
             self.logger.info(f"[STATE] Используем позицию из window_rect: ({template_x}, {template_y})")
 
-        # Создаем оверлей
         overlay = self.create_overlay(
             image_path=image_path,
             window_rect=window_rect,
@@ -323,14 +542,32 @@ class OverlayManager:
             overlay._hidden_by_user = False
             overlay._image_loaded = True
 
-            # Сохраняем смещение в оверлее
             setattr(overlay, '_offset_x', offset_x)
             setattr(overlay, '_offset_y', offset_y)
 
-            # Сохраняем путь к шаблону (для автозамены)
             if region_path is not None:
                 setattr(overlay, '_region_path', region_path)
                 self.logger.info(f"[OVERLAY] Сохранён путь к шаблону: {region_path}")
+
+            # ============================================================
+            # F2-оверлей: включаем режим редактирования, НО сохраняем автоскрытие
+            # И ДОБАВЛЯЕМ ФЛАГ _is_f2_overlay
+            # ============================================================
+            if force_edit_mode:
+                self.logger.info(f"[OVERLAY] Принудительно включаем режим редактирования для F2-оверлея")
+
+                overlay._edit_mode_enabled = True
+                overlay._show_edit_frame()
+                overlay._is_f2_overlay = True  # <-- НОВЫЙ ФЛАГ
+
+                overlay._hidden_by_user = False
+                overlay._hidden_by_mouse = False
+                overlay._is_visible_by_user = True
+
+                if not overlay.visible:
+                    overlay.show()
+
+                self.logger.info(f"[OVERLAY] Режим редактирования включен для F2-оверлея (автоскрытие сохранено)")
 
             if show_immediately:
                 overlay.visible = True
@@ -347,7 +584,6 @@ class OverlayManager:
                 except Exception as e:
                     self.logger.warning(f"[OVERLAY] Не удалось скрыть оверлей: {e}")
 
-            # Добавляем в словарь по имени приложения
             if app_name not in self.overlays_by_app_name:
                 self.overlays_by_app_name[app_name] = []
             if overlay not in self.overlays_by_app_name[app_name]:
@@ -355,7 +591,26 @@ class OverlayManager:
             if overlay not in self.overlays:
                 self.overlays.append(overlay)
 
-        return overlay
+            self.logger.info(f"[DEBUG] Оверлей добавлен в списки, всего оверлеев: {len(self.overlays)}")
+            self.logger.info(f"[DEBUG] overlays_by_app_name: {list(self.overlays_by_app_name.keys())}")
+
+            if not self._restoring:
+                self.save_overlay_state()
+                self.logger.info("[DEBUG] Состояние сохранено")
+            else:
+                self.logger.info("[DEBUG] Пропускаем сохранение состояния (идет восстановление)")
+
+            if self.parent and hasattr(self.parent, '_on_overlay_created'):
+                try:
+                    self.parent._on_overlay_created(target_hwnd)
+                    self.logger.info("[DEBUG] Родитель уведомлен о создании оверлея")
+                except Exception as e:
+                    self.logger.warning(f"[OVERLAY] Ошибка уведомления о создании оверлея: {e}")
+
+            self.logger.info(f"[DEBUG] === create_overlay ЗАВЕРШЕН ===")
+            return overlay
+
+        return None
 
     def create_overlay(self, image_path: Path, window_rect: tuple,
                        target_hwnd: int = None, is_fullscreen: bool = None,
@@ -395,8 +650,16 @@ class OverlayManager:
             app_name = "Неизвестно"
 
         self.logger.info("[DEBUG] Создаем OverlayWindow")
+
+        # Получаем корневое окно из parent
+        root_window = None
+        if self.parent and hasattr(self.parent, 'root'):
+            root_window = self.parent.root
+        elif self.parent:
+            root_window = self.parent
+
         new_overlay = OverlayWindow(
-            parent=self.parent.root,
+            parent=root_window,
             app_title=self.parent.app_title if hasattr(self.parent, 'app_title') else "Перевод скриншотов",
             auto_hide_enabled=auto_hide_enabled
         )
@@ -409,7 +672,7 @@ class OverlayManager:
         new_overlay._overlay_manager = self
         new_overlay._template_id = template_id
         new_overlay._target_hwnd = target_hwnd
-        new_overlay._app_name = app_name  # <-- СОХРАНЯЕМ ИМЯ
+        new_overlay._app_name = app_name
 
         self.logger.info("[DEBUG] Устанавливаем _is_auto_replace")
         new_overlay._is_auto_replace = is_auto_replace
@@ -432,7 +695,7 @@ class OverlayManager:
         self._enable_esc_hook()
         self.logger.info("[DEBUG] ESC хук включен")
 
-        # --- ИЗМЕНЕНИЕ: добавляем в словарь по имени приложения ---
+        # Добавляем в словарь по имени приложения
         if app_name not in self.overlays_by_app_name:
             self.overlays_by_app_name[app_name] = []
         if new_overlay not in self.overlays_by_app_name[app_name]:
@@ -477,44 +740,16 @@ class OverlayManager:
 
         self.logger.info(f"[OVERLAY_MANAGER] Закрытие всех оверлеев. Количество: {len(self.overlays)}")
 
+        # ============================================================
+        # ОЧИЩАЕМ F1 СОСТОЯНИЕ
+        # ============================================================
+        self._f1_state.clear()
+        self.logger.info("[OVERLAY_MANAGER] F1 состояние очищено")
+
         # Отключаем ESC хук
         self._disable_esc_hook()
 
-        # Закрываем все оверлеи
-        count = len(self.overlays)
-        for i, overlay in enumerate(self.overlays[:]):
-            try:
-                self.logger.info(f"[OVERLAY_MANAGER] Закрытие оверлея {i + 1}/{count}")
-
-                # Сбрасываем ссылку в мониторе
-                if hasattr(self, 'parent') and self.parent and hasattr(self.parent, 'translation_monitor'):
-                    monitor = self.parent.translation_monitor
-                    if monitor:
-                        for template in monitor.templates[:]:
-                            if template.get('overlay') is overlay:
-                                template['overlay'] = None
-                                self.logger.info(
-                                    f"[MONITOR] Ссылка на оверлей сброшена для шаблона #{template.get('pair_index')}"
-                                )
-
-                # Закрываем оверлей
-                overlay.close()
-
-            except Exception as e:
-                self.logger.error(f"[OVERLAY_MANAGER] Ошибка при закрытии оверлея: {e}")
-
-        # Очищаем списки
-        self.overlays.clear()
-        self.overlays_by_app_name.clear()
-
-        # ============================================================
-        # ИЗМЕНЕНИЕ: НЕ УДАЛЯЕМ ФАЙЛ СОСТОЯНИЯ
-        # Файл состояния должен сохраняться для восстановления после перезапуска
-        # ============================================================
-        # Убираем удаление файла состояния, чтобы оверлеи могли быть восстановлены
-        # self.logger.info("[OVERLAY_MANAGER] Файл состояния сохранён для восстановления")
-
-        self.logger.info("[OVERLAY_MANAGER] Все оверлеи закрыты.")
+        # ... остальной код close_all ...
 
     def set_dragging(self, dragging: bool):
         """Устанавливает глобальный флаг перетаскивания для всех оверлеев."""
@@ -524,100 +759,6 @@ class OverlayManager:
     def is_dragging(self) -> bool:
         """Возвращает состояние глобального флага перетаскивания."""
         return self._is_dragging_any
-
-    def remove_overlay(self, overlay: OverlayWindow, force: bool = False):
-        """Удаляет оверлей из всех списков и очищает состояние окна."""
-
-        self.logger.info(f"[OVERLAY_MANAGER] === remove_overlay НАЧАЛО ===")
-        self.logger.info(f"[OVERLAY_MANAGER] overlay={overlay}")
-        self.logger.info(f"[OVERLAY_MANAGER] force={force}")
-
-        if overlay not in self.overlays:
-            self.logger.warning("[OVERLAY_MANAGER] Оверлей уже удалён из списка, пропускаем")
-            return
-
-        target_hwnd = overlay.get_target_hwnd()
-        app_name = overlay._app_name
-
-        self.logger.info(f"[OVERLAY_MANAGER] target_hwnd={target_hwnd}, app_name={app_name}")
-
-        # 1. Удаляем шаблон из монитора (если есть template_id)
-        # ИСПРАВЛЕНИЕ: теперь удаляем шаблон ВСЕГДА при удалении оверлея
-        if hasattr(overlay, '_template_id') and overlay._template_id:
-            template_id = overlay._template_id
-            self.logger.info(f"[OVERLAY_MANAGER] Найден template_id: {template_id}")
-
-            if hasattr(self.parent, 'translation_monitor') and self.parent.translation_monitor:
-                monitor = self.parent.translation_monitor
-                self.logger.info("[OVERLAY_MANAGER] TranslationMonitor найден, ищем шаблон для удаления...")
-
-                template_to_remove = None
-                for template_data in monitor.templates:
-                    if template_data.get('hash') == template_id:
-                        template_to_remove = template_data
-                        self.logger.info(
-                            f"[OVERLAY_MANAGER] Найден шаблон #{template_data.get('pair_index')} для удаления"
-                        )
-                        break
-
-                if template_to_remove:
-                    pair_index = template_to_remove.get('pair_index')
-                    self.logger.info(f"[OVERLAY_MANAGER] Удаление шаблона #{pair_index} из монитора...")
-                    monitor.remove_template(pair_index)
-                    self.logger.info(f"[OVERLAY_MANAGER] Шаблон #{pair_index} удален из монитора")
-                else:
-                    self.logger.warning(f"[OVERLAY_MANAGER] Шаблон с hash {template_id[:8]} не найден в мониторе")
-
-        # 2. Удаляем оверлей из словаря по имени приложения
-        if app_name and app_name in self.overlays_by_app_name:
-            self.logger.info(
-                f"[OVERLAY_MANAGER] Найдено {len(self.overlays_by_app_name[app_name])} оверлеев для приложения {app_name}"
-            )
-            if overlay in self.overlays_by_app_name[app_name]:
-                self.overlays_by_app_name[app_name].remove(overlay)
-                self.logger.info("[OVERLAY_MANAGER] Оверлей удален из overlays_by_app_name")
-
-                if not self.overlays_by_app_name[app_name]:
-                    del self.overlays_by_app_name[app_name]
-                    self.logger.info("[OVERLAY_MANAGER] Список оверлеев для приложения пуст, удален")
-
-                    if self.parent and hasattr(self.parent, '_clear_window_state'):
-                        self.parent._clear_window_state(app_name)
-                        self.logger.info("[OVERLAY_MANAGER] Состояние окна очищено")
-
-                    if self.parent and hasattr(self.parent, '_on_overlay_removed'):
-                        try:
-                            self.parent._on_overlay_removed(app_name)
-                            self.logger.info("[OVERLAY_MANAGER] Родитель уведомлен об удалении")
-                        except Exception as e:
-                            self.logger.warning(f"[OVERLAY_MANAGER] Ошибка уведомления: {e}")
-
-        # 3. Удаляем из общего списка
-        if overlay in self.overlays:
-            self.overlays.remove(overlay)
-            self.logger.info("[OVERLAY_MANAGER] Оверлей удален из общего списка")
-        else:
-            self.logger.warning("[OVERLAY_MANAGER] Оверлей не найден в общем списке")
-
-        # 4. Закрываем оверлей
-        try:
-            self.logger.info("[OVERLAY_MANAGER] Вызов overlay.close()")
-            overlay.close()
-            self.logger.info("[OVERLAY_MANAGER] overlay.close() выполнен")
-        except Exception as e:
-            self.logger.error(f"[OVERLAY_MANAGER] Ошибка при закрытии оверлея: {e}")
-            import traceback
-            traceback.print_exc()
-
-        # 5. Сохраняем состояние (только если не force или не в режиме подавления)
-        if not self._suppress_save:
-            self.logger.info("[OVERLAY_MANAGER] Сохранение состояния...")
-            self.save_overlay_state()
-            self.logger.info("[OVERLAY_MANAGER] Состояние сохранено")
-        else:
-            self.logger.info("[OVERLAY_MANAGER] Сохранение состояния пропущено (_suppress_save=True)")
-
-        self.logger.info("[OVERLAY_MANAGER] === remove_overlay ЗАВЕРШЕН ===")
 
     def _get_overlay_state_file(self) -> Path:
         """Возвращает путь к файлу с сохранённым состоянием оверлеев."""
@@ -643,7 +784,20 @@ class OverlayManager:
             return {}
 
     def restore_overlays_from_state(self, parent_app):
-        """Быстрое восстановление оверлеев из сохранённого состояния (пакетное)."""
+        """
+        Быстрое восстановление оверлеев из сохранённого состояния (пакетное).
+
+        ВАЖНО: Оверлеи ВСЕГДА восстанавливаются скрытыми!
+        Они будут показаны только при:
+        1. Переключении на окно приложения (для F2-оверлеев)
+        2. Нахождении шаблона (для автозамены)
+
+        Args:
+            parent_app: Ссылка на главное приложение
+
+        Returns:
+            int: Количество восстановленных оверлеев
+        """
         from pathlib import Path
         import base64
         import tempfile
@@ -659,229 +813,388 @@ class OverlayManager:
             self._restoring = False
             return 0
 
+        # Проверяем настройку auto_hide_overlay
+        auto_hide_enabled = self._get_auto_hide_setting(parent_app)
+
         restored_count = 0
         templates_to_restore = []
-        all_overlays = []
 
-        # === ПРОХОД 1: Создаём все оверлеи (скрытыми) ===
+        # === ПРОХОД 1: Создаём все оверлеи (ВСЕГДА СКРЫТЫМИ) ===
         for key, state in states.items():
-            try:
-                if not state.get('image_path'):
-                    continue
+            overlay, is_f2_overlay = self._create_overlay_from_state(
+                key, state, parent_app, auto_hide_enabled
+            )
 
-                image_path = Path(state['image_path'])
-                if not image_path.exists():
-                    self.logger.warning(f"[STATE] Файл изображения не найден: {image_path}")
-                    continue
+            if overlay:
+                restored_count += 1
 
-                window_rect = state.get('window_rect')
-                if not window_rect:
-                    self.logger.warning(f"[STATE] Нет rect окна для оверлея: {key}")
-                    continue
+                # Добавляем в список оверлеев
+                if overlay not in self.overlays:
+                    self.overlays.append(overlay)
 
+                # Добавляем в словарь по имени приложения
                 app_name = state.get('app_name', 'Неизвестно')
-                target_hwnd = state.get('target_hwnd')
-                is_auto_replace = state.get('is_auto_replace', False)
-                is_window_screenshot = state.get('is_window_screenshot', False)
-                template_id = state.get('template_id')
-                region_path_str = state.get('region_path')
-                template_base64 = state.get('template_base64')
+                if app_name not in self.overlays_by_app_name:
+                    self.overlays_by_app_name[app_name] = []
+                if overlay not in self.overlays_by_app_name[app_name]:
+                    self.overlays_by_app_name[app_name].append(overlay)
 
-                saved_x = state.get('x', 0)
-                saved_y = state.get('y', 0)
-                saved_w = state.get('width', 300)
-                saved_h = state.get('height', 200)
-                offset_x = state.get('offset_x', 0)
-                offset_y = state.get('offset_y', 0)
-
-                if app_name == 'Неизвестно' and target_hwnd:
-                    try:
-                        from src.window_utils import get_process_name_by_hwnd
-                        app_name = get_process_name_by_hwnd(target_hwnd, default_name=app_name)
-                    except:
-                        pass
-
-                # === ПРОВЕРЯЕМ, СУЩЕСТВУЕТ ЛИ ОКНО ===
-                target_hwnd_to_use = None
-                window_exists = False
-
-                if app_name != 'Неизвестно':
-                    target_hwnd_to_use = self._find_window_by_app_name(app_name)
-                    if target_hwnd_to_use:
-                        window_exists = True
-                        self.logger.info(f"[STATE] Найдено окно для {app_name}: HWND={target_hwnd_to_use}")
-                    else:
-                        self.logger.info(
-                            f"[STATE] Окно для {app_name} не найдено, оверлей будет скрыт до появления окна"
-                        )
-
-                # Всегда скрываем при восстановлении
-                show_immediately = False
-
-                # Создаём оверлей (скрытый)
-                overlay = self._create_overlay_from_data(
-                    image_path=image_path,
-                    window_rect=window_rect,
-                    target_hwnd=target_hwnd_to_use or target_hwnd,
-                    is_auto_replace=is_auto_replace,
-                    is_window_screenshot=is_window_screenshot,
-                    template_id=template_id,
-                    show_immediately=False,
-                    saved_x=saved_x,
-                    saved_y=saved_y,
-                    saved_w=saved_w,
-                    saved_h=saved_h,
-                    is_startup=True,
-                    offset_x=offset_x,
-                    offset_y=offset_y,
-                    app_name=app_name
-                )
-
-                if overlay:
-                    if is_auto_replace:
-                        overlay._is_visible_by_user = False
-                        overlay._hidden_by_user = False
-                        overlay._is_auto_replace = True
-                        self.logger.info(f"[STATE] Оверлей для автозамены восстановлен (ждёт шаблон)")
-                    else:
-                        overlay._is_visible_by_user = True
-                        overlay._hidden_by_user = False
-
-                    restored_count += 1
-                    all_overlays.append(overlay)
-
-                    if overlay not in self.overlays:
-                        self.overlays.append(overlay)
-
-                    # === ИСПРАВЛЕНИЕ: ВСЕГДА добавляем шаблон в монитор, даже если окно не найдено ===
-                    # Шаблон будет искать, как только окно появится
-                    if is_auto_replace and template_id:
-                        templates_to_restore.append({
-                            'template_id': template_id,
-                            'overlay': overlay,
-                            'target_hwnd': target_hwnd_to_use or target_hwnd,
-                            'app_name': app_name,
-                            'saved_x': saved_x,
-                            'saved_y': saved_y,
-                            'saved_w': saved_w,
-                            'saved_h': saved_h,
-                            'offset_x': offset_x,
-                            'offset_y': offset_y,
-                            'region_path_str': region_path_str,
-                            'template_base64': template_base64,
-                            'translated_path': image_path,
-                            'window_rect': window_rect,
-                            'window_exists': window_exists  # <-- НОВЫЙ ФЛАГ
-                        })
-
-            except Exception as e:
-                self.logger.error(f"[STATE] Ошибка восстановления оверлея {key}: {e}")
+                # Если это автозамена - добавляем в список для восстановления шаблонов
+                if state.get('is_auto_replace', False) and state.get('template_id'):
+                    templates_to_restore.append({
+                        'template_id': state.get('template_id'),
+                        'overlay': overlay,
+                        'target_hwnd': state.get('target_hwnd'),
+                        'app_name': app_name,
+                        'saved_x': state.get('x', 0),
+                        'saved_y': state.get('y', 0),
+                        'saved_w': state.get('width', 300),
+                        'saved_h': state.get('height', 200),
+                        'offset_x': state.get('offset_x', 0),
+                        'offset_y': state.get('offset_y', 0),
+                        'region_path_str': state.get('region_path'),
+                        'template_base64': state.get('template_base64'),
+                        'translated_path': Path(state.get('image_path')),
+                        'window_rect': state.get('window_rect')
+                    })
 
         self._restoring = False
 
-        self.logger.info(f"[STATE] Создано {restored_count} оверлеев (все скрыты)")
+        self.logger.info(f"[STATE] Создано {restored_count} оверлеев (ВСЕ СКРЫТЫ)")
 
-        # === ПРОХОД 2: Восстанавливаем шаблоны в мониторе (ВСЕГДА) ===
+        # === ПРОХОД 2: Восстанавливаем шаблоны в мониторе (ТОЛЬКО ДЛЯ АВТОЗАМЕНЫ) ===
         if parent_app and hasattr(parent_app, 'translation_monitor'):
-            monitor = parent_app.translation_monitor
-            if monitor and templates_to_restore:
-                self.logger.info(f"[STATE] Восстановление {len(templates_to_restore)} шаблонов в мониторе...")
-
-                restored_templates_count = 0
-                for template_info in templates_to_restore:
-                    try:
-                        template_id = template_info['template_id']
-                        overlay = template_info['overlay']
-                        app_name = template_info['app_name']
-                        window_exists = template_info.get('window_exists', False)
-
-                        # Проверяем, есть ли уже такой шаблон в мониторе
-                        template_exists = False
-                        for template in monitor.templates:
-                            if template.get('hash') == template_id:
-                                template_exists = True
-                                template['overlay'] = overlay
-                                template['found'] = False
-                                template['target_app_name'] = app_name
-                                template['offset_x'] = template_info['offset_x']
-                                template['offset_y'] = template_info['offset_y']
-                                template['offset_initialized'] = True
-                                template['overlay_width'] = template_info['saved_w']
-                                template['overlay_height'] = template_info['saved_h']
-                                break
-
-                        if template_exists:
-                            continue
-
-                        # Восстанавливаем шаблон из файла или base64
-                        region_path = None
-                        if template_info.get('region_path_str'):
-                            region_path = Path(template_info['region_path_str'])
-                            if not region_path.exists():
-                                region_path = None
-
-                        if not region_path and template_info.get('template_base64'):
-                            try:
-                                import cv2
-                                import numpy as np
-                                img_data = base64.b64decode(template_info['template_base64'])
-                                nparr = np.frombuffer(img_data, np.uint8)
-                                template_img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                                if template_img is not None:
-                                    temp_dir = Path(tempfile.gettempdir()) / "screenshot_translator" / "templates"
-                                    temp_dir.mkdir(parents=True, exist_ok=True)
-                                    region_path = temp_dir / f"{template_id}.png"
-                                    cv2.imwrite(str(region_path), template_img)
-                            except Exception as e:
-                                self.logger.warning(f"[STATE] Ошибка восстановления из base64: {e}")
-
-                        if region_path and region_path.exists():
-                            translated_path = template_info.get('translated_path')
-                            if translated_path and Path(translated_path).exists():
-                                pair_index, file_hash = monitor.add_template(
-                                    region_image=region_path,
-                                    translated_image=translated_path,
-                                    target_app_name=app_name
-                                )
-                                if pair_index >= 0:
-                                    restored_templates_count += 1
-                                    for template in monitor.templates:
-                                        if template.get('hash') == file_hash:
-                                            template['overlay'] = overlay
-                                            template['found'] = False
-                                            template['target_app_name'] = app_name
-                                            template['offset_x'] = template_info['offset_x']
-                                            template['offset_y'] = template_info['offset_y']
-                                            template['offset_initialized'] = True
-                                            template['overlay_width'] = template_info['saved_w']
-                                            template['overlay_height'] = template_info['saved_h']
-                                            break
-
-                                            # Если окно не существовало при восстановлении, но появилось позже
-                                            if not window_exists:
-                                                self.logger.info(
-                                                    f"[STATE] Шаблон {template_id[:8]} добавлен в монитор (окно {app_name} появится позже)"
-                                                )
-                                            else:
-                                                self.logger.info(
-                                                    f"[STATE] Шаблон {template_id[:8]} восстановлен для {app_name}"
-                                                )
-                    except Exception as e:
-                        self.logger.error(f"[STATE] Ошибка восстановления шаблона: {e}")
-
-                self.logger.info(f"[STATE] Восстановлено {restored_templates_count} шаблонов в мониторе")
-
-                if parent_app.settings.get_auto_replace_translated() and monitor.templates:
-                    if not monitor.is_running():
-                        monitor.start()
-                        self.logger.info(f"[STATE] Монитор запущен с {len(monitor.templates)} шаблонами")
-
-        self.logger.info(f"[STATE] Восстановлено {restored_count} оверлеев")
+            self._restore_templates_in_monitor(parent_app, templates_to_restore)
 
         if parent_app and hasattr(parent_app, 'window_list'):
             parent_app.window_list.refresh()
 
+        self.logger.info(f"[STATE] Восстановлено {restored_count} оверлеев (все скрыты)")
         return restored_count
+
+    def _get_auto_hide_setting(self, parent_app):
+        """Получает настройку auto_hide_overlay."""
+        auto_hide_enabled = True
+        if parent_app and hasattr(parent_app, 'settings'):
+            auto_hide_enabled = parent_app.settings.get_auto_hide_overlay()
+        self.logger.info(f"[STATE] auto_hide_overlay = {auto_hide_enabled}")
+        return auto_hide_enabled
+
+    def _create_overlay_from_state(self, key, state, parent_app, auto_hide_enabled):
+        """
+        Создает оверлей из сохранённого состояния.
+
+        Args:
+            key: Ключ состояния
+            state: Данные состояния
+            parent_app: Ссылка на главное приложение
+            auto_hide_enabled: Настройка автоскрытия
+
+        Returns:
+            tuple: (overlay, is_f2_overlay)
+        """
+        from pathlib import Path
+
+        try:
+            if not state.get('image_path'):
+                return None, False
+
+            image_path = Path(state['image_path'])
+            if not image_path.exists():
+                self.logger.warning(f"[STATE] Файл изображения не найден: {image_path}")
+                return None, False
+
+            window_rect = state.get('window_rect')
+            if not window_rect:
+                self.logger.warning(f"[STATE] Нет rect окна для оверлея: {key}")
+                return None, False
+
+            app_name = state.get('app_name', 'Неизвестно')
+            target_hwnd = state.get('target_hwnd')
+            is_auto_replace = state.get('is_auto_replace', False)
+            is_window_screenshot = state.get('is_window_screenshot', False)
+            template_id = state.get('template_id')
+
+            saved_x = state.get('x', 0)
+            saved_y = state.get('y', 0)
+            saved_w = state.get('width', 300)
+            saved_h = state.get('height', 200)
+            offset_x = state.get('offset_x', 0)
+            offset_y = state.get('offset_y', 0)
+
+            # Определяем F2-оверлей
+            is_f2_overlay = is_window_screenshot and not is_auto_replace
+            self.logger.info(
+                f"[STATE] Оверлей {key}: is_window_screenshot={is_window_screenshot}, "
+                f"is_auto_replace={is_auto_replace}, is_f2_overlay={is_f2_overlay}"
+            )
+
+            # Получаем имя приложения по HWND если нужно
+            if app_name == 'Неизвестно' and target_hwnd:
+                try:
+                    from src.window_utils import get_process_name_by_hwnd
+                    app_name = get_process_name_by_hwnd(target_hwnd, default_name=app_name)
+                except:
+                    pass
+
+            # Находим окно по имени приложения
+            target_hwnd_to_use = self._find_window_by_app_name(app_name) if app_name != 'Неизвестно' else None
+
+            if target_hwnd_to_use:
+                self.logger.info(f"[STATE] Найдено окно для {app_name}: HWND={target_hwnd_to_use}")
+            else:
+                self.logger.info(f"[STATE] Окно для {app_name} не найдено, оверлей будет скрыт до появления окна")
+
+            # ============================================================
+            # ВАЖНО: НИКОГДА не показываем оверлей при восстановлении!
+            # Всегда show_immediately=False
+            # ============================================================
+            show_immediately = False
+
+            # Создаем оверлей
+            overlay = self._create_overlay_from_data(
+                image_path=image_path,
+                window_rect=window_rect,
+                target_hwnd=target_hwnd_to_use or target_hwnd,
+                is_auto_replace=is_auto_replace,
+                is_window_screenshot=is_window_screenshot,
+                template_id=template_id,
+                show_immediately=show_immediately,  # Всегда False
+                saved_x=saved_x,
+                saved_y=saved_y,
+                saved_w=saved_w,
+                saved_h=saved_h,
+                is_startup=True,
+                offset_x=offset_x,
+                offset_y=offset_y,
+                app_name=app_name,
+                force_edit_mode=is_f2_overlay
+            )
+
+            if overlay:
+                # Настраиваем оверлей, НО НЕ ПОКАЗЫВАЕМ
+                self._configure_restored_overlay(overlay, is_auto_replace, is_f2_overlay, auto_hide_enabled)
+
+                # Убеждаемся, что оверлей скрыт
+                if overlay.visible:
+                    try:
+                        overlay.root.withdraw()
+                        overlay.visible = False
+                        self.logger.info(f"[STATE] Оверлей принудительно скрыт (защита от авто-показа)")
+                    except Exception as e:
+                        self.logger.warning(f"[STATE] Ошибка принудительного скрытия: {e}")
+
+                return overlay, is_f2_overlay
+
+            return None, False
+
+        except Exception as e:
+            self.logger.error(f"[STATE] Ошибка восстановления оверлея {key}: {e}")
+            return None, False
+
+    def _should_show_immediately(self, is_f2_overlay, auto_hide_enabled):
+        """
+        Определяет, нужно ли показывать оверлей сразу при восстановлении.
+
+        ВНИМАНИЕ: НИКОГДА не показываем оверлеи автоматически при восстановлении!
+        Оверлеи должны показываться только при переключении на окно приложения.
+
+        Args:
+            is_f2_overlay: Флаг F2-оверлея
+            auto_hide_enabled: Настройка автоскрытия
+
+        Returns:
+            bool: Всегда False (никогда не показываем при восстановлении)
+        """
+        # НИКОГДА не показываем оверлеи при восстановлении
+        return False
+
+    def _configure_restored_overlay(self, overlay, is_auto_replace, is_f2_overlay, auto_hide_enabled):
+        """
+        Настраивает восстановленный оверлей (НЕ ПОКАЗЫВАЕТ ЕГО).
+
+        Args:
+            overlay: Объект оверлея
+            is_auto_replace: Флаг автозамены
+            is_f2_overlay: Флаг F2-оверлея
+            auto_hide_enabled: Настройка автоскрытия
+        """
+        if is_auto_replace:
+            overlay._is_visible_by_user = False
+            overlay._hidden_by_user = False
+            overlay._is_auto_replace = True
+            self.logger.info("[STATE] Оверлей для автозамены восстановлен (ждёт шаблон)")
+        else:
+            overlay._is_visible_by_user = True
+            overlay._hidden_by_user = False
+
+        if is_f2_overlay:
+            overlay._is_f2_overlay = True
+            self.logger.info("[STATE] F2-оверлей восстановлен с флагом _is_f2_overlay=True")
+
+        # Убеждаемся, что оверлей скрыт
+        if overlay.visible:
+            try:
+                overlay.root.withdraw()
+                overlay.visible = False
+                self.logger.info("[STATE] Оверлей скрыт (восстановление без показа)")
+            except Exception as e:
+                self.logger.warning(f"[STATE] Ошибка скрытия оверлея: {e}")
+
+    def _check_window_exists(self, app_name, target_hwnd):
+        """
+        Проверяет, существует ли окно по имени приложения.
+
+        Args:
+            app_name: Имя приложения
+            target_hwnd: HWND окна
+
+        Returns:
+            bool: True если окно найдено
+        """
+        if app_name != 'Неизвестно':
+            hwnd = self._find_window_by_app_name(app_name)
+            if hwnd:
+                return True
+        return False
+
+    def _restore_templates_in_monitor(self, parent_app, templates_to_restore):
+        """
+        Восстанавливает шаблоны в TranslationMonitor.
+
+        Args:
+            parent_app: Ссылка на главное приложение
+            templates_to_restore: Список данных шаблонов
+        """
+        from pathlib import Path
+        import base64
+        import tempfile
+
+        monitor = parent_app.translation_monitor
+        if not monitor or not templates_to_restore:
+            return
+
+        self.logger.info(f"[STATE] Восстановление {len(templates_to_restore)} шаблонов в мониторе...")
+
+        restored_templates_count = 0
+        for template_info in templates_to_restore:
+            try:
+                if self._restore_single_template(monitor, template_info):
+                    restored_templates_count += 1
+            except Exception as e:
+                self.logger.error(f"[STATE] Ошибка восстановления шаблона: {e}")
+
+        self.logger.info(f"[STATE] Восстановлено {restored_templates_count} шаблонов в мониторе")
+
+        # Запускаем монитор если нужно
+        if parent_app.settings.get_auto_replace_translated() and monitor.templates:
+            if not monitor.is_running():
+                monitor.start()
+                self.logger.info(f"[STATE] Монитор запущен с {len(monitor.templates)} шаблонами")
+
+    def _restore_single_template(self, monitor, template_info):
+        """
+        Восстанавливает один шаблон в мониторе.
+
+        Args:
+            monitor: TranslationMonitor
+            template_info: Данные шаблона
+
+        Returns:
+            bool: True если шаблон восстановлен
+        """
+        from pathlib import Path
+        import base64
+        import tempfile
+
+        template_id = template_info['template_id']
+        overlay = template_info['overlay']
+        app_name = template_info['app_name']
+
+        # Проверяем, есть ли уже такой шаблон в мониторе
+        for template in monitor.templates:
+            if template.get('hash') == template_id:
+                template['overlay'] = overlay
+                template['found'] = False
+                template['target_app_name'] = app_name
+                template['offset_x'] = template_info['offset_x']
+                template['offset_y'] = template_info['offset_y']
+                template['offset_initialized'] = True
+                template['overlay_width'] = template_info['saved_w']
+                template['overlay_height'] = template_info['saved_h']
+                self.logger.info(f"[STATE] Шаблон {template_id[:8]} уже существует в мониторе, обновлён")
+                return True
+
+        # Восстанавливаем шаблон из файла или base64
+        region_path = self._get_template_region_path(template_info)
+
+        if region_path and region_path.exists():
+            translated_path = template_info.get('translated_path')
+            if translated_path and Path(translated_path).exists():
+                pair_index, file_hash = monitor.add_template(
+                    region_image=region_path,
+                    translated_image=translated_path,
+                    target_app_name=app_name
+                )
+                if pair_index >= 0:
+                    # Обновляем данные шаблона
+                    for template in monitor.templates:
+                        if template.get('hash') == file_hash:
+                            template['overlay'] = overlay
+                            template['found'] = False
+                            template['target_app_name'] = app_name
+                            template['offset_x'] = template_info['offset_x']
+                            template['offset_y'] = template_info['offset_y']
+                            template['offset_initialized'] = True
+                            template['overlay_width'] = template_info['saved_w']
+                            template['overlay_height'] = template_info['saved_h']
+                            self.logger.info(
+                                f"[STATE] Шаблон {template_id[:8]} восстановлен для {app_name}"
+                            )
+                            return True
+
+        return False
+
+    def _get_template_region_path(self, template_info):
+        """
+        Получает путь к файлу шаблона из информации о шаблоне.
+
+        Args:
+            template_info: Данные шаблона
+
+        Returns:
+            Path: Путь к файлу шаблона или None
+        """
+        from pathlib import Path
+        import base64
+        import tempfile
+
+        region_path = None
+
+        # Пробуем получить из сохранённого пути
+        if template_info.get('region_path_str'):
+            region_path = Path(template_info['region_path_str'])
+            if not region_path.exists():
+                region_path = None
+
+        # Если нет - восстанавливаем из base64
+        if not region_path and template_info.get('template_base64'):
+            try:
+                import cv2
+                import numpy as np
+                img_data = base64.b64decode(template_info['template_base64'])
+                nparr = np.frombuffer(img_data, np.uint8)
+                template_img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                if template_img is not None:
+                    temp_dir = Path(tempfile.gettempdir()) / "screenshot_translator" / "templates"
+                    temp_dir.mkdir(parents=True, exist_ok=True)
+                    region_path = temp_dir / f"{template_info['template_id']}.png"
+                    cv2.imwrite(str(region_path), template_img)
+                    self.logger.info(f"[STATE] Шаблон восстановлен из base64: {region_path}")
+            except Exception as e:
+                self.logger.warning(f"[STATE] Ошибка восстановления из base64: {e}")
+
+        return region_path
 
     def save_overlay_state(self, immediate: bool = False):
         """
@@ -1146,28 +1459,67 @@ class OverlayManager:
             self.logger.warning("[DEBUG] Нет оверлея для удаления")
             return
 
+        # ============================================================
+        # ПРОВЕРЯЕМ: можно ли удалять этот оверлей
+        # ============================================================
+        is_f2_overlay = hasattr(overlay, '_is_f2_overlay') and overlay._is_f2_overlay
+        is_edit_mode = False
+        if hasattr(self.parent, 'is_edit_mode_enabled'):
+            is_edit_mode = self.parent.is_edit_mode_enabled()
+        elif hasattr(self.parent, '_edit_mode_enabled'):
+            is_edit_mode = self.parent._edit_mode_enabled
+
+        overlay_edit_mode = hasattr(overlay, '_edit_mode_enabled') and overlay._edit_mode_enabled
+
+        # F2-оверлеи можно удалять всегда
+        if not (is_f2_overlay or is_edit_mode or overlay_edit_mode):
+            self.logger.warning("[DEBUG] Удаление запрещено: не F2-оверлей и режим редактирования выключен")
+            if hasattr(self.parent, 'show_notification'):
+                self.parent.show_notification("⚠️ Включите режим редактирования (F5) для удаления")
+            return
+
         try:
             if overlay in self.overlays:
-                # ИСПРАВЛЕНИЕ: перед удалением убеждаемся, что шаблон будет удалён
-                # remove_overlay теперь удаляет шаблон автоматически
-                self.remove_overlay(overlay)
-                self.logger.info("[DEBUG] Оверлей удален")
-
-                # Дополнительно проверяем, что шаблон удалён из монитора
+                # ============================================================
+                # УДАЛЯЕМ ТОЛЬКО СВОЙ ШАБЛОН ИЗ МОНИТОРА (если есть)
+                # ============================================================
                 if hasattr(self.parent, 'translation_monitor') and self.parent.translation_monitor:
                     monitor = self.parent.translation_monitor
-                    if overlay._template_id:
-                        for template_data in monitor.templates[:]:
-                            if template_data.get('hash') == overlay._template_id:
-                                monitor.templates.remove(template_data)
-                                self.logger.info(
-                                    f"[DEBUG] Шаблон {overlay._template_id[:8]} удалён из монитора (дополнительная проверка)"
-                                )
+                    template_id = overlay._template_id
+
+                    if template_id:
+                        template_to_remove = None
+                        for template in monitor.templates:
+                            if template.get('hash') == template_id:
+                                template_to_remove = template
                                 break
+
+                        if template_to_remove:
+                            pair_index = template_to_remove.get('pair_index')
+                            self.logger.info(
+                                f"[MONITOR] Удаляем шаблон #{pair_index} для HWND={overlay._target_hwnd} "
+                                f"(hash={template_id[:8]})"
+                            )
+                            monitor.remove_template(pair_index)
+                        else:
+                            self.logger.info(
+                                f"[MONITOR] Шаблон с hash {template_id[:8] if template_id else 'None'} не найден, пропускаем"
+                            )
+
+                # Удаляем оверлей через основной метод
+                self.remove_overlay(overlay, force=True)
+                self.logger.info("[DEBUG] Оверлей удален")
+
+                # Показываем уведомление об успешном удалении
+                if hasattr(self.parent, 'show_notification'):
+                    app_name = overlay._app_name or "Неизвестно"
+                    self.parent.show_notification(f"🗑️ Оверлей для {app_name} удалён")
             else:
                 self.logger.warning("[DEBUG] Оверлей уже удален из списка")
         except Exception as e:
             self.logger.error(f"[DEBUG] Ошибка при удалении оверлея: {e}")
+            if hasattr(self.parent, 'show_notification'):
+                self.parent.show_notification(f"❌ Ошибка удаления: {str(e)[:30]}")
 
     def show_context_menu(self, overlay, x, y):
         """Показывает контекстное меню для указанного оверлея."""
@@ -1208,21 +1560,35 @@ class OverlayManager:
             )
             self._context_menu.add_separator()
 
-            # Пункт "Удалить" - доступен только в режиме редактирования
+            # ============================================================
+            # ПРОВЕРЯЕМ: можно ли удалять оверлей
+            # ============================================================
+            can_delete = False
+
+            # 1. Проверяем глобальный режим редактирования (F5)
             is_edit_mode = False
             if hasattr(self.parent, 'is_edit_mode_enabled'):
                 is_edit_mode = self.parent.is_edit_mode_enabled()
             elif hasattr(self.parent, '_edit_mode_enabled'):
                 is_edit_mode = self.parent._edit_mode_enabled
 
-            if is_edit_mode:
+            # 2. Проверяем, является ли оверлей F2-оверлеем
+            is_f2_overlay = hasattr(overlay, '_is_f2_overlay') and overlay._is_f2_overlay
+
+            # 3. Проверяем, включён ли режим редактирования у самого оверлея
+            overlay_edit_mode = hasattr(overlay, '_edit_mode_enabled') and overlay._edit_mode_enabled
+
+            # 4. F2-оверлеи можно удалять всегда
+            can_delete = is_f2_overlay or is_edit_mode or overlay_edit_mode
+
+            if can_delete:
                 self._context_menu.add_command(
                     label="🗑️ Удалить оверлей",
                     command=self._remove_overlay_under_cursor
                 )
             else:
                 self._context_menu.add_command(
-                    label="🗑️ Удалить оверлей",
+                    label="🗑️ Удалить оверлей (включите F5)",
                     state="disabled"
                 )
 
@@ -1431,9 +1797,19 @@ class OverlayManager:
         try:
             import tkinter as tk
             if hasattr(self.parent, 'root'):
-                self._context_menu = tk.Menu(self.parent.root, tearoff=0, bg='#2d2d2d', fg='white',
-                                             activebackground='#4CAF50', activeforeground='white')
-                self._context_menu.add_command(label="🗑️ Удалить", command=self._remove_overlay_under_cursor)
+                self._context_menu = tk.Menu(
+                    self.parent.root,
+                    tearoff=0,
+                    bg='#2d2d2d',
+                    fg='white',
+                    activebackground='#4CAF50',
+                    activeforeground='white'
+                )
+                # Добавляем пункты с проверкой на F2-оверлей в самом меню
+                self._context_menu.add_command(
+                    label="🗑️ Удалить",
+                    command=self._remove_overlay_under_cursor
+                )
                 self.logger.info("[DEBUG] Контекстное меню создано в OverlayManager")
             else:
                 self.logger.warning("[DEBUG] Не удалось создать контекстное меню: нет root")
