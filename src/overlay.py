@@ -409,11 +409,6 @@ class OverlayWindow:
             self._mouse_over = True
             return
 
-        # В режиме редактирования НЕ СКРЫВАЕМ оверлей
-        if self._edit_mode_enabled:
-            self.logger.debug("[DEBUG] _on_mouse_enter: режим редактирования, оверлей не скрываем")
-            return
-
         if self._suppress_enter_events:
             self._suppress_enter_events = False
             return
@@ -424,9 +419,11 @@ class OverlayWindow:
         self._mouse_over = True
         self.logger.debug(f"[DEBUG] _on_mouse_enter: mouse_over=True, edit_mode={self._edit_mode_enabled}")
 
-        # Обычные оверлеи СКРЫВАЕМ при наведении (только если не F2)
+        # ============================================================
+        # СКРЫВАЕМ ОВЕРЛЕЙ ПРИ НАВЕДЕНИИ МЫШИ
+        # ============================================================
         if self.visible and self._is_visible_by_user:
-            self.logger.debug("[DEBUG] _on_mouse_enter: скрываем оверлей (режим просмотра)")
+            self.logger.debug("[DEBUG] _on_mouse_enter: скрываем оверлей (наведение мыши)")
             self._hidden_by_mouse = True
             self._hide_internal()
             if not self._monitor_timer and self.auto_hide_enabled:
@@ -455,15 +452,14 @@ class OverlayWindow:
 
         self._hidden_by_mouse = False
 
-        # Обычные оверлеи - показываем в режиме редактирования
-        if self._edit_mode_enabled:
-            if self._last_image_path and self._last_window_rect:
-                if not self.visible and not self._hidden_by_mouse:
-                    self._show_internal()
-                    if self.auto_hide_enabled:
-                        self._start_visibility_monitor()
-        else:
-            self.logger.debug("[DEBUG] _on_mouse_leave: режим просмотра, не показываем оверлей автоматически")
+        # ============================================================
+        # ПОКАЗЫВАЕМ ОВЕРЛЕЙ ПРИ УХОДЕ МЫШИ
+        # ============================================================
+        if self._last_image_path and self._last_window_rect:
+            if not self.visible and not self._hidden_by_mouse:
+                self._show_internal()
+                if self.auto_hide_enabled:
+                    self._start_visibility_monitor()
 
     def hide(self, by_user: bool = True):
         """Скрывает оверлей."""
@@ -913,13 +909,14 @@ class OverlayWindow:
         self._updating_visibility = True
 
         try:
-            # F2-оверлеи НЕ ПОКАЗЫВАЕМ через монитор видимости
-            # Они должны показываться только при переключении на целевое окно
-            is_f2_overlay = hasattr(self, '_is_f2_overlay') and self._is_f2_overlay
-            if is_f2_overlay:
-                # F2-оверлей НЕ ПОКАЗЫВАЕМ автоматически
-                self._updating_visibility = False
-                return
+            # ============================================================
+            # ИЗМЕНЕНИЕ: УДАЛЯЕМ ПРОВЕРКУ НА F2
+            # Теперь ВСЕ оверлеи управляются через монитор видимости
+            # ============================================================
+            # is_f2_overlay = hasattr(self, '_is_f2_overlay') and self._is_f2_overlay
+            # if is_f2_overlay:
+            #     self._updating_visibility = False
+            #     return
 
             if not self._is_visible_by_user:
                 self._updating_visibility = False
@@ -943,7 +940,6 @@ class OverlayWindow:
             if time.time() < self._monitor_stable_time:
                 return
 
-            # В режиме редактирования НЕ СКРЫВАЕМ
             if self._edit_mode_enabled:
                 self._updating_visibility = False
                 return
@@ -979,7 +975,6 @@ class OverlayWindow:
                         self._hide_internal()
                     return
 
-                # Если активное окно соответствует целевому - показываем оверлей
                 if not self.visible and self._is_visible_by_user and not self._hidden_by_user:
                     self._show_internal(force=False)
 
@@ -1163,31 +1158,28 @@ class OverlayWindow:
         self.logger.info(
             f"[DEBUG][_start_visibility_monitor_delayed] НАЧАЛО: visible={self.visible}, _is_visible_by_user={self._is_visible_by_user}, _monitor_initialized={self._monitor_initialized}")
 
-        # УБИРАЕМ ПРОВЕРКУ not self.visible — монитор должен работать даже когда оверлей скрыт
         if not self._is_visible_by_user:
             self.logger.info(
                 "[DEBUG][_start_visibility_monitor_delayed] оверлей не должен быть виден, отменяем запуск монитора")
             return
 
-        # === ДЛЯ АВТОЗАМЕНЫ: НЕ ЗАПУСКАЕМ ВНУТРЕННИЙ МОНИТОР, ТАК КАК ОН УПРАВЛЯЕТСЯ TranslationMonitor ===
-        if self._is_auto_replace:
-            self.logger.info(
-                "[DEBUG][_start_visibility_monitor_delayed] автозамена, монитор управляется TranslationMonitor, пропускаем")
-            return
+        # ============================================================
+        # ИЗМЕНЕНИЕ: УДАЛЯЕМ ПРОВЕРКУ НА АВТОЗАМЕНУ
+        # Теперь ВСЕ оверлеи получают монитор видимости, включая F3
+        # ============================================================
+        # if self._is_auto_replace:
+        #     self.logger.info("автозамена, монитор управляется TranslationMonitor, пропускаем")
+        #     return
 
         self.logger.info("[DEBUG][_start_visibility_monitor_delayed] запускаем монитор")
 
-        # Увеличиваем задержку при запуске (при восстановлении из состояния)
-        # Проверяем, был ли оверлей создан при запуске программы
         is_startup = hasattr(self, '_created_at_startup') and self._created_at_startup
 
         if is_startup:
-            # При запуске программы даем больше времени на переключение окна
             self.logger.info("[DEBUG][_start_visibility_monitor_delayed] запуск при старте программы, задержка 3с")
             if self.root and self.root.winfo_exists():
                 self.root.after(3000, self._start_visibility_monitor)
         else:
-            # Обычная задержка
             self._start_visibility_monitor()
 
     def _start_visibility_monitor(self):
@@ -1195,12 +1187,14 @@ class OverlayWindow:
         if not self.auto_hide_enabled:
             return
 
-        # Для автозамены монитор управляется TranslationMonitor, не запускаем внутренний
-        if self._is_auto_replace:
-            self.logger.debug("[DEBUG] _start_visibility_monitor: автозамена, пропускаем")
-            return
+        # ============================================================
+        # ИЗМЕНЕНИЕ: УДАЛЯЕМ ПРОВЕРКУ НА АВТОЗАМЕНУ
+        # Теперь ВСЕ оверлеи получают монитор видимости
+        # ============================================================
+        # if self._is_auto_replace:
+        #     self.logger.debug("[DEBUG] _start_visibility_monitor: автозамена, пропускаем")
+        #     return
 
-        # Предотвращаем создание нескольких мониторов
         if hasattr(self, '_monitor_timer') and self._monitor_timer is not None:
             return
 
@@ -1210,7 +1204,6 @@ class OverlayWindow:
         try:
             import win32gui
 
-            # Если target_hwnd не задан, пытаемся найти по имени приложения
             if not self._target_hwnd and self._app_name and self._app_name != "Неизвестно":
                 self._update_target_hwnd()
 
@@ -1247,17 +1240,14 @@ class OverlayWindow:
                     self._stop_visibility_monitor()
                     return
 
-                # Сбрасываем флаг таймера перед вызовом
                 self._monitor_timer = None
 
-                # === НОВАЯ ЛОГИКА: периодически обновляем target_hwnd ===
                 if not self._target_hwnd or not win32gui.IsWindow(self._target_hwnd):
                     if self._update_target_hwnd():
                         self.logger.info(f"[MONITOR] Обновлен target_hwnd в мониторе: {self._target_hwnd}")
 
                 self._check_and_update_visibility()
 
-                # Перезапускаем таймер
                 if self._is_visible_by_user and self.root and self.root.winfo_exists():
                     self._monitor_timer = self.root.after(200, check_visibility)
 
@@ -1434,10 +1424,12 @@ class OverlayWindow:
                 self.logger.debug("[DEBUG] _hide_internal: F2-оверлей, не скрываем автоматически")
                 return
 
-            # НЕ СКРЫВАЕМ ОВЕРЛЕЙ, ЕСЛИ ПОЛЬЗОВАТЕЛЬ ХОЧЕТ ЕГО ВИДЕТЬ
-            if self._is_visible_by_user:
-                self.logger.debug("[DEBUG] _hide_internal: _is_visible_by_user=True, не скрываем")
-                return
+            # ============================================================
+            # УДАЛЯЕМ ЭТУ ПРОВЕРКУ! Она блокирует скрытие при наведении мыши
+            # ============================================================
+            # if self._is_visible_by_user:
+            #     self.logger.debug("[DEBUG] _hide_internal: _is_visible_by_user=True, не скрываем")
+            #     return
 
             # Проверяем, не активно ли окно выбора области
             try:
@@ -1458,7 +1450,6 @@ class OverlayWindow:
             self.visible = False
             try:
                 self.root.withdraw()
-                # УДАЛЕНО: self._disable_esc_hook()
             except Exception as e:
                 self.logger.error(f"[DEBUG][_hide_internal] ОШИБКА: {e}")
 
