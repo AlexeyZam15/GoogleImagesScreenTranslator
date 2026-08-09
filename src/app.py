@@ -211,9 +211,54 @@ class ScreenshotTranslatorApp:
         # Запуск инициализации
         self.ui.root.after(100, self._init_translator_step)
 
+        # ============================================================
+        # ГЛОБАЛЬНАЯ ПРИВЯЗКА ESC ДЛЯ СКРЫТИЯ F2-ОВЕРЛЕЕВ
+        # ============================================================
+        self.ui.root.bind('<Escape>', self._on_escape_global)
+        self.logger.info("[APP] Глобальная привязка ESC добавлена")
+
         self._force_log_flush()
         self.logger.info("✅ Приложение инициализировано успешно")
         self._force_log_flush()
+
+    def _on_escape_global(self, event):
+        """
+        Глобальный обработчик ESC на главном окне.
+        Скрывает все видимые F2-оверлеи.
+        """
+        self.logger.info("[APP][ESC] Глобальный ESC нажат")
+
+        # Проверяем, есть ли видимые F2-оверлеи
+        if not self.overlay_manager:
+            return "break"
+
+        hidden_count = 0
+        for overlay in self.overlay_manager.overlays:
+            try:
+                if overlay is None:
+                    continue
+                if not overlay.root or not overlay.root.winfo_exists():
+                    continue
+
+                # Проверяем, что это F2-оверлей
+                is_f2 = hasattr(overlay, '_is_f2_overlay') and overlay._is_f2_overlay
+                if not is_f2:
+                    continue
+
+                # Проверяем, виден ли оверлей
+                if overlay.visible:
+                    overlay.hide(by_user=True)
+                    hidden_count += 1
+                    self.logger.info(f"[APP][ESC] Скрыт F2-оверлей для {overlay._app_name}")
+            except Exception as e:
+                self.logger.warning(f"[APP][ESC] Ошибка скрытия оверлея: {e}")
+
+        if hidden_count > 0:
+            self.logger.info(f"[APP][ESC] Скрыто {hidden_count} F2-оверлеев")
+        else:
+            self.logger.info("[APP][ESC] Нет видимых F2-оверлеев для скрытия")
+
+        return "break"
 
     def reset_f1_state(self):
         """

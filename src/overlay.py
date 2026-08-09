@@ -105,7 +105,7 @@ class OverlayWindow:
         self._created_at_startup = False
 
         # ============================================================
-        # ФЛАГ: идентифицирует F2-оверлей (добавлен)
+        # ФЛАГ: идентифицирует F2-оверлей
         # ============================================================
         self._is_f2_overlay = False
 
@@ -169,7 +169,34 @@ class OverlayWindow:
         self.root.bind('<Enter>', self._on_mouse_enter)
         self.root.bind('<Leave>', self._on_mouse_leave)
 
+        # ============================================================
+        # ПРИВЯЗКА ESC ДЛЯ СКРЫТИЯ F2-ОВЕРЛЕЯ
+        # ============================================================
+        self.root.bind('<Escape>', self._on_escape_local)
+        self.canvas.bind('<Escape>', self._on_escape_local)
+
         self.logger.info("OverlayWindow инициализирован")
+
+    def _on_escape_local(self, event):
+        """
+        Локальный обработчик ESC для скрытия F2-оверлея.
+        Срабатывает, когда фокус находится на окне оверлея.
+        """
+        self.logger.info("[DEBUG][ESC] Локальный ESC нажат")
+
+        # Проверяем, является ли оверлей F2-оверлеем
+        is_f2_overlay = hasattr(self, '_is_f2_overlay') and self._is_f2_overlay
+
+        if is_f2_overlay:
+            self.logger.info("[DEBUG][ESC] F2-оверлей, скрываем")
+            self.hide(by_user=True)
+            return "break"
+
+        # Для обычных оверлеев - передаём в менеджер
+        if hasattr(self, '_overlay_manager') and self._overlay_manager:
+            return self._overlay_manager._global_esc_handler(event)
+
+        return "break"
 
     def _delayed_save_state(self):
         """Отложенное сохранение состояния после перетаскивания."""
@@ -369,9 +396,15 @@ class OverlayWindow:
         if self._is_dragging:
             return
 
-        # === В РЕЖИМЕ РЕДАКТИРОВАНИЯ НЕ СКРЫВАЕМ ===
+        # F2-оверлеи НЕ СКРЫВАЕМ при наведении
+        if hasattr(self, '_is_f2_overlay') and self._is_f2_overlay:
+            self.logger.debug("[DEBUG] _on_mouse_enter: F2-оверлей, не скрываем")
+            self._mouse_over = True
+            return
+
+        # В режиме редактирования НЕ СКРЫВАЕМ оверлей
         if self._edit_mode_enabled:
-            self.logger.info(f"[DEBUG] _on_mouse_enter: режим редактирования, оверлей не скрываем")
+            self.logger.debug("[DEBUG] _on_mouse_enter: режим редактирования, оверлей не скрываем")
             return
 
         if self._suppress_enter_events:
@@ -382,10 +415,11 @@ class OverlayWindow:
             return
 
         self._mouse_over = True
-        self.logger.info(f"[DEBUG] _on_mouse_enter: mouse_over=True, edit_mode={self._edit_mode_enabled}")
+        self.logger.debug(f"[DEBUG] _on_mouse_enter: mouse_over=True, edit_mode={self._edit_mode_enabled}")
 
+        # Обычные оверлеи СКРЫВАЕМ при наведении (только если не F2)
         if self.visible and self._is_visible_by_user:
-            self.logger.info("[DEBUG] _on_mouse_enter: скрываем оверлей (режим просмотра)")
+            self.logger.debug("[DEBUG] _on_mouse_enter: скрываем оверлей (режим просмотра)")
             self._hidden_by_mouse = True
             self._hide_internal()
             if not self._monitor_timer and self.auto_hide_enabled:
@@ -396,31 +430,33 @@ class OverlayWindow:
         if self._is_dragging:
             return
 
-        # === НОВАЯ ПРОВЕРКА: если оверлей не должен быть виден — игнорируем ===
-        if not self._is_visible_by_user:
-            self.logger.info(f"[DEBUG] _on_mouse_leave: _is_visible_by_user=False, игнорируем")
+        # F2-оверлеи не скрываются и не показываются автоматически
+        if hasattr(self, '_is_f2_overlay') and self._is_f2_overlay:
+            self.logger.debug("[DEBUG] _on_mouse_leave: F2-оверлей, игнорируем")
+            self._mouse_over = False
             return
 
-        # Защита от множественных вызовов
+        if not self._is_visible_by_user:
+            self.logger.debug(f"[DEBUG] _on_mouse_leave: _is_visible_by_user=False, игнорируем")
+            return
+
         if not self._mouse_over:
             return
 
         self._mouse_over = False
-        self.logger.info(f"[DEBUG] _on_mouse_leave: mouse_over=False, edit_mode={self._edit_mode_enabled}")
+        self.logger.debug(f"[DEBUG] _on_mouse_leave: mouse_over=False, edit_mode={self._edit_mode_enabled}")
 
         self._hidden_by_mouse = False
 
-        # === ИСПРАВЛЕНИЕ: в режиме просмотра НЕ показываем оверлей при выходе мыши ===
-        # Оверлей может быть показан только монитором или явным действием пользователя
-        if not self._edit_mode_enabled:
-            self.logger.info("[DEBUG] _on_mouse_leave: режим просмотра, не показываем оверлей автоматически")
-            return
-
-        if self._last_image_path and self._last_window_rect:
-            if not self.visible and not self._hidden_by_mouse:
-                self._show_internal()
-                if self.auto_hide_enabled:
-                    self._start_visibility_monitor()
+        # Обычные оверлеи - показываем в режиме редактирования
+        if self._edit_mode_enabled:
+            if self._last_image_path and self._last_window_rect:
+                if not self.visible and not self._hidden_by_mouse:
+                    self._show_internal()
+                    if self.auto_hide_enabled:
+                        self._start_visibility_monitor()
+        else:
+            self.logger.debug("[DEBUG] _on_mouse_leave: режим просмотра, не показываем оверлей автоматически")
 
     def hide(self, by_user: bool = True):
         """Скрывает оверлей."""
@@ -430,6 +466,14 @@ class OverlayWindow:
 
         # Скрываем рамку
         self._hide_edit_frame()
+
+        # Освобождаем захват фокуса
+        try:
+            if self.root and self.root.winfo_exists():
+                self.root.grab_release()
+                self.logger.info("[DEBUG][hide] захват фокуса освобожден")
+        except Exception as e:
+            self.logger.warning(f"[DEBUG][hide] ошибка освобождения захвата: {e}")
 
         try:
             if self.root and self.root.winfo_exists():
@@ -464,8 +508,6 @@ class OverlayWindow:
         """Показывает оверлей."""
         self.logger.info("[DEBUG] show() вызван")
 
-        # === ИСПРАВЛЕНИЕ: НЕ проверяем _is_visible_by_user, так как это блокирует автозамену ===
-        # Проверяем только _hidden_by_user (ручное скрытие через F1)
         if self._hidden_by_user:
             self.logger.info("[DEBUG] show() - оверлей скрыт пользователем (F1), пропускаем")
             return
@@ -530,6 +572,30 @@ class OverlayWindow:
             self._is_visible_by_user = True
             self._enable_esc_hook()
 
+            # ============================================================
+            # ПРИНУДИТЕЛЬНЫЙ ЗАХВАТ ФОКУСА
+            # ============================================================
+            try:
+                self.canvas.focus_set()
+                self.root.focus_force()
+                # Захватываем все события, чтобы ESC точно перехватывался
+                self.root.grab_set()
+                self.logger.info("[DEBUG] show() - фокус захвачен (grab_set)")
+            except Exception as e:
+                self.logger.warning(f"[DEBUG] show() - не удалось захватить фокус: {e}")
+
+            # Повторная установка фокуса через 100мс
+            def ensure_focus():
+                try:
+                    if self.root and self.root.winfo_exists() and self.visible:
+                        self.root.focus_force()
+                        self.root.grab_set()
+                        self.logger.info("[DEBUG] show() - повторный захват фокуса")
+                except Exception as e:
+                    self.logger.warning(f"[DEBUG] show() - ошибка повторного захвата: {e}")
+
+            self.root.after(100, ensure_focus)
+
             if self.auto_hide_enabled:
                 self._start_visibility_monitor()
 
@@ -551,16 +617,23 @@ class OverlayWindow:
 
     def _start_drag(self, event):
         """Начинает перетаскивание окна."""
-        if not self._edit_mode_enabled:
-            self.logger.info("[DEBUG] _start_drag: режим редактирования ВЫКЛЮЧЕН - перетаскивание запрещено")
+        # Разрешаем перетаскивание если:
+        # 1. Это F2-оверлей (всегда разрешено)
+        # 2. ИЛИ включен глобальный режим редактирования (F5)
+        is_f2_overlay = hasattr(self, '_is_f2_overlay') and self._is_f2_overlay
+        can_drag = is_f2_overlay or self._edit_mode_enabled
+
+        if not can_drag:
+            self.logger.debug(
+                "[DEBUG] _start_drag: перетаскивание запрещено (не F2-оверлей и редактирование выключено)")
             return "break"
 
         if not self.visible:
-            self.logger.info("[DEBUG] _start_drag - оверлей скрыт, перетаскивание запрещено")
+            self.logger.debug("[DEBUG] _start_drag - оверлей скрыт, перетаскивание запрещено")
             return "break"
 
         if self._is_dragging:
-            self.logger.info("[DEBUG] _start_drag - уже перетаскивается, пропускаем")
+            self.logger.debug("[DEBUG] _start_drag - уже перетаскивается, пропускаем")
             return "break"
 
         # Отменяем предыдущий таймер сохранения
@@ -589,14 +662,14 @@ class OverlayWindow:
             self._drag_start_x = 0
             self._drag_start_y = 0
 
-        self.logger.info("[DEBUG] Начало перетаскивания, флаг _is_dragging=True")
+        self.logger.debug("[DEBUG] Начало перетаскивания, флаг _is_dragging=True")
         self._stop_visibility_monitor()
-        self.logger.info("[DEBUG] _start_drag: монитор видимости отключен")
+        self.logger.debug("[DEBUG] _start_drag: монитор видимости отключен")
 
         # Отключаем сохранение состояния во время перетаскивания
         if hasattr(self, '_overlay_manager') and self._overlay_manager:
             self._overlay_manager._suppress_save = True
-            self.logger.info("[DEBUG] _start_drag: сохранение состояния отключено")
+            self.logger.debug("[DEBUG] _start_drag: сохранение состояния отключено")
             self._overlay_manager.set_dragging(True)
 
     def _stop_drag(self, event):
@@ -730,7 +803,7 @@ class OverlayWindow:
 
     def _on_right_click(self, event):
         """Обработчик правой кнопки мыши - показывает контекстное меню через менеджер."""
-        self.logger.info("[DEBUG] _on_right_click вызван")
+        self.logger.debug("[DEBUG] _on_right_click вызван")
 
         if self._right_click_processing:
             return
@@ -738,9 +811,15 @@ class OverlayWindow:
         if not self.visible:
             return
 
-        # Проверяем режим редактирования
-        if not self._edit_mode_enabled:
-            self.logger.info("[DEBUG] _on_right_click: режим редактирования ВЫКЛЮЧЕН")
+        # Разрешаем контекстное меню если:
+        # 1. Это F2-оверлей (всегда разрешено)
+        # 2. ИЛИ включен глобальный режим редактирования (F5)
+        is_f2_overlay = hasattr(self, '_is_f2_overlay') and self._is_f2_overlay
+        can_show_menu = is_f2_overlay or self._edit_mode_enabled
+
+        if not can_show_menu:
+            self.logger.debug(
+                "[DEBUG] _on_right_click: контекстное меню запрещено (не F2-оверлей и редактирование выключено)")
             return
 
         if not hasattr(self, '_overlay_manager') or not self._overlay_manager:
@@ -756,7 +835,7 @@ class OverlayWindow:
         self._context_menu_visible = True
 
         self._overlay_manager.show_context_menu(self, event.x_root, event.y_root)
-        self.logger.info("[DEBUG] Контекстное меню показано через менеджер")
+        self.logger.debug("[DEBUG] Контекстное меню показано через менеджер")
 
         self._start_menu_close_monitor()
 
@@ -842,7 +921,14 @@ class OverlayWindow:
         self._updating_visibility = True
 
         try:
-            # === НОВАЯ ПРОВЕРКА: если оверлей не должен быть виден — не управляем им ===
+            # F2-оверлеи НЕ ПОКАЗЫВАЕМ через монитор видимости
+            # Они должны показываться только при переключении на целевое окно
+            is_f2_overlay = hasattr(self, '_is_f2_overlay') and self._is_f2_overlay
+            if is_f2_overlay:
+                # F2-оверлей НЕ ПОКАЗЫВАЕМ автоматически
+                self._updating_visibility = False
+                return
+
             if not self._is_visible_by_user:
                 self._updating_visibility = False
                 return
@@ -865,7 +951,7 @@ class OverlayWindow:
             if time.time() < self._monitor_stable_time:
                 return
 
-            # === В РЕЖИМЕ РЕДАКТИРОВАНИЯ НЕ СКРЫВАЕМ ===
+            # В режиме редактирования НЕ СКРЫВАЕМ
             if self._edit_mode_enabled:
                 self._updating_visibility = False
                 return
@@ -873,6 +959,7 @@ class OverlayWindow:
             if self._mouse_over or self._hidden_by_mouse:
                 if self.visible:
                     self._hide_internal()
+                self._updating_visibility = False
                 return
 
             try:
@@ -888,10 +975,8 @@ class OverlayWindow:
                         self._show_internal(force=False)
                     return
 
-                # === НОВАЯ ЛОГИКА: обновляем target_hwnd если необходимо ===
                 target_hwnd = self.get_target_hwnd()
 
-                # Если target_hwnd не задан или невалиден, пытаемся найти по имени приложения
                 if not target_hwnd or not win32gui.IsWindow(target_hwnd):
                     if self._update_target_hwnd():
                         target_hwnd = self._target_hwnd
@@ -902,26 +987,9 @@ class OverlayWindow:
                         self._hide_internal()
                     return
 
-                cursor_pos = win32api.GetCursorPos()
-                cursor_x, cursor_y = cursor_pos
-
-                # === ИСПРАВЛЕНИЕ: упрощаем логику для режима просмотра ===
-                # В режиме просмотра оверлей должен быть скрыт, если курсор над ним
-                is_cursor_inside = False
-                if self._last_window_rect:
-                    x1, y1, x2, y2 = self._last_window_rect
-                    if x1 <= cursor_x <= x2 and y1 <= cursor_y <= y2:
-                        is_cursor_inside = True
-
-                # Если курсор внутри — скрываем оверлей
-                if is_cursor_inside and self.visible:
-                    self._hidden_by_mouse = True
-                    self._hide_internal()
-                    return
-
-                # === УДАЛЕНА ЛОГИКА АВТОМАТИЧЕСКОГО ПОКАЗА ПРИ ВЫХОДЕ МЫШИ ===
-                # В режиме просмотра оверлей не должен показываться автоматически
-                # Он может быть показан только монитором или действием пользователя
+                # Если активное окно соответствует целевому - показываем оверлей
+                if not self.visible and self._is_visible_by_user and not self._hidden_by_user:
+                    self._show_internal(force=False)
 
             except Exception as e:
                 self.logger.warning(f"Ошибка в _check_and_update_visibility: {e}")
@@ -1074,6 +1142,14 @@ class OverlayWindow:
                 self._ensure_topmost()
                 self._enable_esc_hook()
 
+                # Устанавливаем фокус на оверлей для перехвата ESC
+                try:
+                    self.canvas.focus_set()
+                    self.root.focus_force()
+                    self.logger.info("[DEBUG] Фокус установлен на оверлей")
+                except Exception as e:
+                    self.logger.warning(f"[DEBUG] Не удалось установить фокус: {e}")
+
                 if self._edit_frame_visible:
                     self._update_edit_frame_position()
 
@@ -1220,6 +1296,15 @@ class OverlayWindow:
                 self.root.lift()
                 self.root.update_idletasks()
 
+                # Устанавливаем фокус и захватываем события
+                try:
+                    self.canvas.focus_set()
+                    self.root.focus_force()
+                    self.root.grab_set()
+                    self.logger.info("[DEBUG] _show_window_safe - фокус захвачен")
+                except Exception as e:
+                    self.logger.warning(f"[DEBUG] _show_window_safe - не удалось захватить фокус: {e}")
+
                 # Обновляем рамку после показа
                 if self._edit_frame_visible:
                     self._update_edit_frame_position()
@@ -1242,7 +1327,6 @@ class OverlayWindow:
         self._showing_in_progress = True
 
         try:
-            # === НОВАЯ ПРОВЕРКА: если оверлей не должен быть виден — не показываем ===
             if not self._is_visible_by_user:
                 self.logger.debug("[DEBUG] _show_internal: _is_visible_by_user=False, пропускаем")
                 return
@@ -1269,6 +1353,17 @@ class OverlayWindow:
                     self.root.after(0, self._show_window_safe)
                     self.visible = True
                     self._ensure_topmost()
+
+                    # ============================================================
+                    # УСТАНАВЛИВАЕМ ФОКУС ДЛЯ ПЕРЕХВАТА ESC
+                    # ============================================================
+                    try:
+                        self.canvas.focus_set()
+                        self.root.focus_force()
+                        self.logger.info("[DEBUG] _show_internal - фокус установлен на оверлей")
+                    except Exception as e:
+                        self.logger.warning(f"[DEBUG] _show_internal - не удалось установить фокус: {e}")
+
                     if self._saved_position:
                         x, y = self._saved_position
                         current_x = self.root.winfo_x()
@@ -1345,6 +1440,16 @@ class OverlayWindow:
         self._hiding_in_progress = True
 
         try:
+            # F2-оверлеи НЕ СКРЫВАЕМ автоматически
+            if hasattr(self, '_is_f2_overlay') and self._is_f2_overlay:
+                self.logger.debug("[DEBUG] _hide_internal: F2-оверлей, не скрываем автоматически")
+                return
+
+            # НЕ СКРЫВАЕМ ОВЕРЛЕЙ, ЕСЛИ ПОЛЬЗОВАТЕЛЬ ХОЧЕТ ЕГО ВИДЕТЬ
+            if self._is_visible_by_user:
+                self.logger.debug("[DEBUG] _hide_internal: _is_visible_by_user=True, не скрываем")
+                return
+
             # Проверяем, не активно ли окно выбора области
             try:
                 import win32gui

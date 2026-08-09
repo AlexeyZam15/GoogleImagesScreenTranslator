@@ -58,17 +58,16 @@ class OverlayManager:
 
     def reset_f1_state(self):
         """
-        Сбрасывает сохранённое состояние F1 и восстанавливает видимость оверлеев.
-        Используется при изменении настроек автоскрытия, чтобы оверлеи
-        снова автоматически показывались при переключении окон.
+        Сбрасывает сохранённое состояние F1.
+        Используется при изменении настроек автоскрытия.
         """
-        self.logger.info("[F1] Сброс сохранённого состояния F1 и восстановление видимости оверлеев")
+        self.logger.info("[F1] Сброс сохранённого состояния F1")
 
         # 1. Очищаем сохранённое состояние
         self._f1_state.clear()
         self.logger.info("[F1] Состояние F1 сброшено")
 
-        # 2. Восстанавливаем видимость всех оверлеев
+        # 2. Сбрасываем флаги скрытия у всех оверлеев, НО НЕ ПОКАЗЫВАЕМ ИХ
         restored_count = 0
         for overlay in self.overlays:
             try:
@@ -80,22 +79,21 @@ class OverlayManager:
                 overlay._hidden_by_user = False
                 overlay._hidden_by_mouse = False
 
-                # Если оверлей не виден - показываем его
-                if not overlay.visible:
-                    overlay.show()
-                    self.logger.info(f"[F1] Восстановлена видимость оверлея для {overlay._app_name}")
-                    restored_count += 1
-                else:
-                    self.logger.info(f"[F1] Оверлей для {overlay._app_name} уже виден")
+                # НЕ ПОКАЗЫВАЕМ ОВЕРЛЕЙ!
+                # Они будут показаны только при переключении на целевое окно
+                # через _on_window_switch в app.py
+
+                restored_count += 1
+                self.logger.info(f"[F1] Сброшены флаги для оверлея {overlay._app_name} (НЕ ПОКАЗАН)")
 
             except Exception as e:
-                self.logger.warning(f"[F1] Ошибка восстановления видимости оверлея: {e}")
+                self.logger.warning(f"[F1] Ошибка сброса состояния оверлея: {e}")
 
-        self.logger.info(f"[F1] Восстановлена видимость {restored_count} оверлеев")
+        self.logger.info(f"[F1] Сброшены флаги для {restored_count} оверлеев (без показа)")
 
-        # 3. Сохраняем состояние после восстановления
+        # 3. Сохраняем состояние после сброса
         self.save_overlay_state(immediate=True)
-        self.logger.info("[F1] Состояние сохранено после восстановления видимости")
+        self.logger.info("[F1] Состояние сохранено после сброса")
 
     def _remove_from_f1_state(self, overlay: OverlayWindow):
         """
@@ -557,7 +555,7 @@ class OverlayManager:
             window_rect=window_rect,
             target_hwnd=target_hwnd,
             is_fullscreen=False,
-            show_immediately=show_immediately,
+            show_immediately=False,  # НИКОГДА НЕ ПОКАЗЫВАЕМ ПРИ СОЗДАНИИ
             is_window_screenshot=is_window_screenshot,
             is_auto_replace=is_auto_replace,
             template_id=template_id,
@@ -590,39 +588,30 @@ class OverlayManager:
                 self.logger.info(f"[OVERLAY] Сохранён путь к шаблону: {region_path}")
 
             # ============================================================
-            # F2-оверлей: включаем режим редактирования, НО сохраняем автоскрытие
-            # И ДОБАВЛЯЕМ ФЛАГ _is_f2_overlay
+            # F2-оверлей: включаем режим редактирования, НО НЕ ПОКАЗЫВАЕМ
             # ============================================================
             if force_edit_mode:
                 self.logger.info(f"[OVERLAY] Принудительно включаем режим редактирования для F2-оверлея")
 
                 overlay._edit_mode_enabled = True
                 overlay._show_edit_frame()
-                overlay._is_f2_overlay = True  # <-- НОВЫЙ ФЛАГ
+                overlay._is_f2_overlay = True
 
                 overlay._hidden_by_user = False
                 overlay._hidden_by_mouse = False
                 overlay._is_visible_by_user = True
 
-                if not overlay.visible:
-                    overlay.show()
+                # НЕ ПОКАЗЫВАЕМ ОВЕРЛЕЙ ПРИ СОЗДАНИИ
+                # overlay.show() - УБИРАЕМ!
 
-                self.logger.info(f"[OVERLAY] Режим редактирования включен для F2-оверлея (автоскрытие сохранено)")
+                self.logger.info(f"[OVERLAY] Режим редактирования включен для F2-оверлея (НО НЕ ПОКАЗЫВАЕМ)")
 
-            if show_immediately:
-                overlay.visible = True
-                try:
-                    overlay.root.deiconify()
-                    overlay.root.lift()
-                    overlay._ensure_topmost()
-                except Exception as e:
-                    self.logger.warning(f"[OVERLAY] Не удалось показать оверлей: {e}")
-            else:
-                overlay.visible = False
-                try:
-                    overlay.root.withdraw()
-                except Exception as e:
-                    self.logger.warning(f"[OVERLAY] Не удалось скрыть оверлей: {e}")
+            # Оверлей всегда создается скрытым
+            overlay.visible = False
+            try:
+                overlay.root.withdraw()
+            except Exception as e:
+                self.logger.warning(f"[OVERLAY] Не удалось скрыть оверлей: {e}")
 
             if app_name not in self.overlays_by_app_name:
                 self.overlays_by_app_name[app_name] = []
@@ -724,8 +713,10 @@ class OverlayManager:
                 new_overlay._hidden_by_mouse = False
 
         self.logger.info("[DEBUG] Вызываем show_for_window")
+        # ВСЕГДА show_immediately=False при создании
         new_overlay.show_for_window(
-            image_path, window_rect, target_hwnd, is_fullscreen, show_immediately,
+            image_path, window_rect, target_hwnd, is_fullscreen,
+            show_immediately=False,  # НИКОГДА НЕ ПОКАЗЫВАЕМ ПРИ СОЗДАНИИ
             is_startup=is_startup,
             is_temporary=is_temporary,
             lifetime_seconds=lifetime_seconds
@@ -1465,27 +1456,27 @@ class OverlayManager:
 
     def _remove_overlay_under_cursor(self):
         """Удаляет оверлей, для которого было показано контекстное меню."""
-        self.logger.info("[DEBUG] Удаление оверлея через контекстное меню")
+        self.logger.debug("[DEBUG] Удаление оверлея через контекстное меню")
 
         try:
             if self._context_menu:
                 try:
                     self._context_menu.unpost()
                     self._context_menu.update_idletasks()
-                    self.logger.info("[DEBUG] Контекстное меню закрыто (unpost)")
+                    self.logger.debug("[DEBUG] Контекстное меню закрыто (unpost)")
                 except Exception as e:
                     self.logger.warning(f"[DEBUG] Ошибка при unpost: {e}")
 
                 try:
                     if hasattr(self._context_menu, 'tk') and self._context_menu.tk:
                         self._context_menu.tk.call('destroy', self._context_menu)
-                        self.logger.info("[DEBUG] Контекстное меню уничтожено через tk.call")
+                        self.logger.debug("[DEBUG] Контекстное меню уничтожено через tk.call")
                 except Exception as e:
                     self.logger.warning(f"[DEBUG] Ошибка при уничтожении меню: {e}")
 
                 self._context_menu = None
                 self._create_context_menu()
-                self.logger.info("[DEBUG] Контекстное меню пересоздано")
+                self.logger.debug("[DEBUG] Контекстное меню пересоздано")
         except Exception as e:
             self.logger.warning(f"[DEBUG] Не удалось закрыть меню: {e}")
 
@@ -1493,7 +1484,7 @@ class OverlayManager:
         if hasattr(self, '_context_menu_overlay') and self._context_menu_overlay:
             overlay = self._context_menu_overlay
             self._context_menu_overlay = None
-            self.logger.info("[DEBUG] Ссылка на оверлей сброшена")
+            self.logger.debug("[DEBUG] Ссылка на оверлей сброшена")
 
         if overlay is None:
             self.logger.warning("[DEBUG] Нет оверлея для удаления")
@@ -1512,6 +1503,7 @@ class OverlayManager:
         overlay_edit_mode = hasattr(overlay, '_edit_mode_enabled') and overlay._edit_mode_enabled
 
         # F2-оверлеи можно удалять всегда
+        # Обычные оверлеи - только в режиме редактирования
         if not (is_f2_overlay or is_edit_mode or overlay_edit_mode):
             self.logger.warning("[DEBUG] Удаление запрещено: не F2-оверлей и режим редактирования выключен")
             if hasattr(self.parent, 'show_notification'):
@@ -1548,7 +1540,7 @@ class OverlayManager:
 
                 # Удаляем оверлей через основной метод
                 self.remove_overlay(overlay, force=True)
-                self.logger.info("[DEBUG] Оверлей удален")
+                self.logger.debug("[DEBUG] Оверлей удален")
 
                 # Показываем уведомление об успешном удалении
                 if hasattr(self.parent, 'show_notification'):
