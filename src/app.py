@@ -2341,11 +2341,14 @@ class ScreenshotTranslatorApp:
             self.logger.error(f"Ошибка инициализации: {error}")
             self.initializing = False
 
-            # РАЗБЛОКИРУЕМ КНОПКУ ПРИ ОШИБКЕ
-            if hasattr(self, 'ui'):
-                self.ui.settings_btn.config(state=tk.NORMAL, bg='#3c3c3c', fg='#cccccc')
-                self.ui.set_settings_menu_enabled(True)
-                self.logger.info("[APP] Кнопка настроек разблокирована (ошибка инициализации)")
+            # ============================================================
+            # УБРАНО: РАЗБЛОКИРОВКА КНОПКИ ПРИ ОШИБКЕ
+            # Кнопка настроек остаётся заблокированной до успешной инициализации
+            # ============================================================
+            # if hasattr(self, 'ui'):
+            #     self.ui.settings_btn.config(state=tk.NORMAL, bg='#3c3c3c', fg='#cccccc')
+            #     self.ui.set_settings_menu_enabled(True)
+            #     self.logger.info("[APP] Кнопка настроек разблокирована (ошибка инициализации)")
 
             self.ui.root.after(self._init_retry_delay, self._init_translator_step)
             return
@@ -2390,7 +2393,9 @@ class ScreenshotTranslatorApp:
             except Exception as e:
                 self.logger.error(f"[STATE] Ошибка восстановления оверлеев: {e}")
 
-        # Разблокируем меню настроек
+        # ============================================================
+        # РАЗБЛОКИРОВКА КНОПКИ ТОЛЬКО ПРИ УСПЕШНОЙ ИНИЦИАЛИЗАЦИИ
+        # ============================================================
         if hasattr(self.ui, 'settings_btn'):
             self.ui.settings_btn.config(state=tk.NORMAL, bg='#3c3c3c', fg='#cccccc')
             self.logger.info("[APP] Кнопка настроек разблокирована")

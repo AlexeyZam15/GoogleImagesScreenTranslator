@@ -143,9 +143,7 @@ class SettingsWindow:
         )
         yandex_radio.pack(side=tk.LEFT)
 
-        # ============================================================
-        # НОВЫЙ БЛОК: ВЫБОР ЦЕЛЕВОГО ЯЗЫКА ПЕРЕВОДА
-        # ============================================================
+        # БЛОК: ВЫБОР ЦЕЛЕВОГО ЯЗЫКА ПЕРЕВОДА (РАЗБЛОКИРОВАН)
         tk.Label(
             translator_inner,
             text="🎯 " + self.get_string('target_language'),
@@ -179,25 +177,14 @@ class SettingsWindow:
                 self.target_lang_in_settings_combo.set(item)
                 break
 
-        # Функция для блокировки/разблокировки выбора языка в зависимости от движка
+        # ============================================================
+        # ИЗМЕНЕНИЕ: РАЗБЛОКИРОВКА ВЫБОРА ЯЗЫКА
+        # ============================================================
         def update_language_combo_state(*args):
-            engine = self.translator_engine_var.get()
-            if engine == "yandex":
-                # При выборе Яндекс - блокируем и устанавливаем русский
-                self.target_lang_in_settings_combo.config(state='disabled')
-                # Находим "Русский (ru)" в списке
-                for item in lang_display_names:
-                    if "(ru)" in item:
-                        self.target_lang_in_settings_combo.set(item)
-                        break
-            else:
-                # Для Google - разблокируем
-                self.target_lang_in_settings_combo.config(state='readonly')
+            # Разрешаем выбор языка для любого движка
+            self.target_lang_in_settings_combo.config(state='readonly')
 
-        # Привязываем функцию к изменению переменной движка
         self.translator_engine_var.trace('w', update_language_combo_state)
-
-        # Вызываем один раз для установки начального состояния
         update_language_combo_state()
 
         tk.Label(
