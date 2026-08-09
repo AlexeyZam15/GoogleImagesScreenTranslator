@@ -224,6 +224,198 @@ class ScreenshotTranslatorApp:
         self.logger.info("✅ Приложение инициализировано успешно")
         self._force_log_flush()
 
+    def _clear_f2_overlays_for_current_app(self):
+        """
+        Удаляет все F2-оверлеи для текущего активного приложения.
+        Возвращает True если были удалены, иначе False.
+        """
+        try:
+            import win32gui
+            from src.window_utils import get_process_name_by_hwnd
+
+            current_hwnd = win32gui.GetForegroundWindow()
+            if not current_hwnd or not self.overlay_manager:
+                return False
+
+            app_name = get_process_name_by_hwnd(current_hwnd)
+            if not app_name or app_name == "Неизвестно":
+                return False
+
+            # Находим все F2-оверлеи для этого приложения
+            f2_overlays = []
+            for overlay in self.overlay_manager.get_overlays_by_app_name(app_name):
+                if hasattr(overlay, '_is_f2_overlay') and overlay._is_f2_overlay:
+                    f2_overlays.append(overlay)
+
+            if not f2_overlays:
+                return False
+
+            self.logger.info(f"[F3] Найдено {len(f2_overlays)} F2-оверлеев для {app_name}. Удаляем...")
+
+            # Временно отключаем сохранение состояния для массового удаления
+            old_suppress = self.overlay_manager._suppress_save
+            self.overlay_manager._suppress_save = True
+
+            try:
+                for overlay in f2_overlays:
+                    self.overlay_manager.remove_overlay(overlay, force=True)
+                self.logger.info(f"[F3] Удалено {len(f2_overlays)} F2-оверлеев")
+                return True
+            finally:
+                self.overlay_manager._suppress_save = old_suppress
+                # Сохраняем состояние после удаления
+                self.overlay_manager.save_overlay_state(immediate=True)
+                self.window_list.refresh()
+
+        except Exception as e:
+            self.logger.warning(f"[F3] Ошибка удаления F2-оверлеев: {e}")
+            return False
+
+    def capture_area(self):
+        """Захват области - вызывается при коротком нажатии F3"""
+        if not self.ready or self.initializing or self._capture_mode:
+            return
+
+        # ============================================================
+        # 1. УДАЛЯЕМ F2-ОВЕРЛЕИ ДЛЯ ТЕКУЩЕГО ПРИЛОЖЕНИЯ
+        # ============================================================
+        self._clear_f2_overlays_for_current_app()
+
+        # ============================================================
+        # 2. ПРОДОЛЖАЕМ ОБЫЧНУЮ ЛОГИКУ ЗАХВАТА ОБЛАСТИ
+        # ============================================================
+
+        # Убеждаемся, что ESC не заблокирован перед открытием окна выбора области
+        try:
+            import keyboard
+            keyboard.unblock_key('esc')
+            self.logger.info("[F3] ESC разблокирован перед открытием окна выбора области")
+        except Exception as e:
+            self.logger.warning(f"[F3] Не удалось разблокировать ESC: {e}")
+
+        self.set_actions_blocked(True)
+        self._capture_mode = True
+        try:
+            self.ui.root.iconify()
+        except:
+            pass
+        self.ui.root.after(300, self._capture_window_for_area)
+
+        # Принудительный захват фокуса для ESC
+        def ensure_esc_capture():
+            try:
+                if hasattr(self, '_area_selector') and self._area_selector:
+                    if self._area_selector.root and self._area_selector.root.winfo_exists():
+                        self._area_selector.root.focus_force()
+                        self._area_selector.root.grab_set()
+                        self.logger.info("[F3] Принудительный захват фокуса для ESC")
+            except:
+                pass
+
+        self.ui.root.after(500, ensure_esc_capture)
+
+    def process_fullscreen_with_ocr(self):
+        """
+        Длительное зажатие F3 - скриншот всего окна + OCR + оверлеи по зонам
+        """
+        if self.translating or not self.ready:
+            return
+
+        # Проверяем, готов ли OCR
+        if not self._ocr_initialized or self.ocr_processor is None:
+            self.logger.warning("[F3_HOLD] OCR не инициализирован, запускаем...")
+            self.show_notification("⏳ Инициализация OCR...")
+            self._init_ocr_background()
+            self.ui.root.after(3000, self.process_fullscreen_with_ocr)
+            return
+
+        self.logger.info("[F3_HOLD] Начало обработки с OCR (OCR готов)")
+        self.set_actions_blocked(True)
+
+        current_hwnd = win32gui.GetForegroundWindow()
+        if current_hwnd:
+            self.screenshot._last_hwnd = current_hwnd
+            self.screenshot._is_fullscreen = self.screenshot.is_window_fullscreen(current_hwnd)
+
+        # ============================================================
+        # 1. УДАЛЯЕМ F2-ОВЕРЛЕИ ДЛЯ ТЕКУЩЕГО ПРИЛОЖЕНИЯ
+        # ============================================================
+        self._clear_f2_overlays_for_current_app()
+
+        # ============================================================
+        # 2. ПРОДОЛЖАЕМ ОБЫЧНУЮ ЛОГИКУ OCR
+        # ============================================================
+
+        # Переключение полноэкранного режима
+        if self.screenshot._is_fullscreen and self.settings.get_auto_windowed_fullscreen():
+            self.logger.info("[F3_HOLD] Обнаружен полноэкранный режим, переключаем в оконный...")
+            try:
+                import keyboard
+                from src.window_utils import make_windowed_fullscreen
+
+                keyboard.press_and_release('alt+enter')
+                self.logger.info("[F3_HOLD] Alt+Enter отправлен")
+                time.sleep(0.5)
+
+                make_windowed_fullscreen(current_hwnd)
+                time.sleep(0.3)
+                self.logger.info("[F3_HOLD] Окно переключено в оконный полноэкранный режим")
+            except Exception as e:
+                self.logger.warning(f"[F3_HOLD] Ошибка переключения полноэкранного режима: {e}")
+
+        self.translating = True
+        self.logger.info("[F3_HOLD] Запуск перевода с OCR...")
+
+        # Показываем индикатор
+        self._show_translation_overlay()
+
+        def capture_and_translate_task():
+            import time
+            from PIL import Image
+
+            try:
+                img = self.screenshot.capture_active_window()
+                if not img:
+                    self.logger.error("[F3_HOLD] Ошибка захвата окна")
+                    self.translating = False
+                    self.set_actions_blocked(False)
+                    self._hide_translation_overlay()
+                    return
+
+                screenshot_path = self.temp_dir / f"fullscreen_{int(time.time())}.png"
+                img.save(screenshot_path)
+
+                window_rect = self.screenshot.get_last_window_rect() or self.screenshot.get_active_window_rect()
+                if not window_rect:
+                    window_rect = (0, 0, img.width, img.height)
+
+                out_dir = self.temp_dir / "translated_ocr"
+                out_dir.mkdir(parents=True, exist_ok=True)
+
+                self._pending_area_rect = None
+                self._pending_region_path = None
+                self._is_temporary_translation = False
+
+                cmd_id = self.browser_worker.translate_image(
+                    screenshot_path,
+                    out_dir,
+                    lambda result, error: self._on_ocr_translate_finished(
+                        result, error,
+                        screenshot_path,
+                        window_rect,
+                        current_hwnd
+                    )
+                )
+                self._pending_command_ids[cmd_id] = 'translate_ocr'
+
+            except Exception as e:
+                self.logger.error(f"[F3_HOLD] Ошибка: {e}")
+                self.translating = False
+                self.set_actions_blocked(False)
+                self._hide_translation_overlay()
+
+        threading.Thread(target=capture_and_translate_task, daemon=True).start()
+
     def hide_f2_overlay_under_cursor(self):
         """
         Публичный метод для скрытия F2-оверлея под курсором.
@@ -1375,102 +1567,6 @@ class ScreenshotTranslatorApp:
             self._ocr_initialized = False
             self.ocr_processor = None
 
-    def process_fullscreen_with_ocr(self):
-        """
-        Длительное зажатие F3 - скриншот всего окна + OCR + оверлеи по зонам
-        """
-        if self.translating or not self.ready:
-            return
-
-        # Проверяем, готов ли OCR
-        if not self._ocr_initialized or self.ocr_processor is None:
-            self.logger.warning("[F3_HOLD] OCR не инициализирован, запускаем...")
-            self.show_notification("⏳ Инициализация OCR...")
-            self._init_ocr_background()
-            self.ui.root.after(3000, self.process_fullscreen_with_ocr)
-            return
-
-        self.logger.info("[F3_HOLD] Начало обработки с OCR (OCR готов)")
-
-        self.set_actions_blocked(True)
-
-        current_hwnd = win32gui.GetForegroundWindow()
-        if current_hwnd:
-            self.screenshot._last_hwnd = current_hwnd
-            self.screenshot._is_fullscreen = self.screenshot.is_window_fullscreen(current_hwnd)
-
-        # Переключение полноэкранного режима
-        if self.screenshot._is_fullscreen and self.settings.get_auto_windowed_fullscreen():
-            self.logger.info("[F3_HOLD] Обнаружен полноэкранный режим, переключаем в оконный...")
-            try:
-                import keyboard
-                from src.window_utils import make_windowed_fullscreen
-
-                keyboard.press_and_release('alt+enter')
-                self.logger.info("[F3_HOLD] Alt+Enter отправлен")
-                time.sleep(0.5)
-
-                make_windowed_fullscreen(current_hwnd)
-                time.sleep(0.3)
-                self.logger.info("[F3_HOLD] Окно переключено в оконный полноэкранный режим")
-            except Exception as e:
-                self.logger.warning(f"[F3_HOLD] Ошибка переключения полноэкранного режима: {e}")
-
-        self.translating = True
-        # Статус "translating" — УБИРАЕМ
-        self.logger.info("[F3_HOLD] Запуск перевода с OCR...")
-
-        # Показываем индикатор
-        self._show_translation_overlay()
-
-        def capture_and_translate_task():
-            import time
-            from PIL import Image
-
-            try:
-                img = self.screenshot.capture_active_window()
-                if not img:
-                    # Ошибка захвата — только лог
-                    self.logger.error("[F3_HOLD] Ошибка захвата окна")
-                    self.translating = False
-                    self.set_actions_blocked(False)
-                    self._hide_translation_overlay()
-                    return
-
-                screenshot_path = self.temp_dir / f"fullscreen_{int(time.time())}.png"
-                img.save(screenshot_path)
-
-                window_rect = self.screenshot.get_last_window_rect() or self.screenshot.get_active_window_rect()
-                if not window_rect:
-                    window_rect = (0, 0, img.width, img.height)
-
-                out_dir = self.temp_dir / "translated_ocr"
-                out_dir.mkdir(parents=True, exist_ok=True)
-
-                self._pending_area_rect = None
-                self._pending_region_path = None
-                self._is_temporary_translation = False
-
-                cmd_id = self.browser_worker.translate_image(
-                    screenshot_path,
-                    out_dir,
-                    lambda result, error: self._on_ocr_translate_finished(
-                        result, error,
-                        screenshot_path,
-                        window_rect,
-                        current_hwnd
-                    )
-                )
-                self._pending_command_ids[cmd_id] = 'translate_ocr'
-
-            except Exception as e:
-                self.logger.error(f"[F3_HOLD] Ошибка: {e}")
-                self.translating = False
-                self.set_actions_blocked(False)
-                self._hide_translation_overlay()
-
-        threading.Thread(target=capture_and_translate_task, daemon=True).start()
-
     def _on_ocr_translate_finished(self, result, error, screenshot_path, window_rect, target_hwnd):
         """Обработчик завершения перевода для OCR режима."""
         import time
@@ -2519,39 +2615,6 @@ class ScreenshotTranslatorApp:
             self.translation_monitor.stop()
         status_text = "включена" if new_state else "выключена"
         self.show_notification(f"Автозамена {status_text}")
-
-    def capture_area(self):
-        if not self.ready or self.initializing or self._capture_mode:
-            return
-
-        # Убеждаемся, что ESC не заблокирован перед открытием окна выбора области
-        try:
-            import keyboard
-            keyboard.unblock_key('esc')
-            self.logger.info("[F3] ESC разблокирован перед открытием окна выбора области")
-        except Exception as e:
-            self.logger.warning(f"[F3] Не удалось разблокировать ESC: {e}")
-
-        self.set_actions_blocked(True)
-        self._capture_mode = True
-        try:
-            self.ui.root.iconify()
-        except:
-            pass
-        self.ui.root.after(300, self._capture_window_for_area)
-
-        # === ПРИНУДИТЕЛЬНЫЙ ЗАХВАТ ФОКУСА ДЛЯ ESC ===
-        def ensure_esc_capture():
-            try:
-                if hasattr(self, '_area_selector') and self._area_selector:
-                    if self._area_selector.root and self._area_selector.root.winfo_exists():
-                        self._area_selector.root.focus_force()
-                        self._area_selector.root.grab_set()
-                        self.logger.info("[F3] Принудительный захват фокуса для ESC")
-            except:
-                pass
-
-        self.ui.root.after(500, ensure_esc_capture)
 
     def _on_translate_error(self, error_msg):
         self.logger.error(f"Ошибка перевода: {error_msg}")
