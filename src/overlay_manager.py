@@ -245,12 +245,16 @@ class OverlayManager:
             overlay: Оверлей для удаления
             force: Принудительное удаление (игнорирует проверки)
         """
+
         self.logger.info(f"[OVERLAY_MANAGER] === remove_overlay НАЧАЛО ===")
         self.logger.info(f"[OVERLAY_MANAGER] overlay={overlay}")
         self.logger.info(f"[OVERLAY_MANAGER] force={force}")
 
         if overlay not in self.overlays:
             self.logger.warning("[OVERLAY_MANAGER] Оверлей уже удалён из списка, пропускаем")
+            # <-- ДОБАВЛЕНО: обновляем список на случай, если он был неактуален
+            if hasattr(self.parent, 'window_list'):
+                self.parent.window_list.refresh()
             return
 
         target_hwnd = overlay.get_target_hwnd()
@@ -261,7 +265,7 @@ class OverlayManager:
         # ============================================================
         # 1. УДАЛЯЕМ ИЗ F1 СОСТОЯНИЯ
         # ============================================================
-        self._remove_from_f1_state(overlay)  # <-- ТЕПЕРЬ ЭТОТ МЕТОД СУЩЕСТВУЕТ
+        self._remove_from_f1_state(overlay)
 
         # 2. Удаляем из словаря по имени приложения
         self._remove_from_app_dict(overlay, app_name)
@@ -278,6 +282,16 @@ class OverlayManager:
         else:
             self.logger.info("[OVERLAY_MANAGER] Сохранение состояния пропущено (_suppress_save=True)")
 
+        # ============================================================
+        # 6. ДОБАВЛЕНО: ОБНОВЛЯЕМ СПИСОК ОКОН
+        # ============================================================
+        if hasattr(self.parent, 'window_list'):
+            try:
+                self.parent.window_list.refresh()
+                self.logger.info("[OVERLAY_MANAGER] Список окон обновлен после удаления оверлея")
+            except Exception as e:
+                self.logger.warning(f"[OVERLAY_MANAGER] Ошибка обновления списка окон: {e}")
+
         self.logger.info("[OVERLAY_MANAGER] === remove_overlay ЗАВЕРШЕН ===")
 
     def remove_all_overlays_for_app(self, app_name: str, force: bool = False):
@@ -289,6 +303,9 @@ class OverlayManager:
         overlays = self.overlays_by_app_name.get(app_name, [])
         if not overlays:
             self.logger.info(f"[OVERLAY_MANAGER] Нет оверлеев для {app_name}")
+            # <-- ДОБАВЛЕНО: обновляем список на случай, если он был неактуален
+            if hasattr(self.parent, 'window_list'):
+                self.parent.window_list.refresh()
             return
 
         count = len(overlays)
@@ -311,11 +328,7 @@ class OverlayManager:
                         monitor.templates.remove(template_data)
                         self.logger.info(f"[MONITOR] Удалён шаблон #{template_data.get('pair_index')}")
 
-            # 2. УДАЛЯЕМ ЭТУ СТРОКУ — она больше не нужна:
-            # for overlay in overlays:
-            #     self._remove_from_f1_state(overlay)  # <-- УДАЛИТЬ
-
-            # 3. Закрываем ВСЕ оверлеи за один проход
+            # 2. Закрываем ВСЕ оверлеи за один проход
             for overlay in overlays[:]:
                 try:
                     overlay._closing = True
@@ -324,15 +337,15 @@ class OverlayManager:
                 except Exception as e:
                     self.logger.warning(f"[OVERLAY] Ошибка закрытия оверлея: {e}")
 
-            # 4. Очищаем все списки
+            # 3. Очищаем все списки
             self.overlays = [ov for ov in self.overlays if ov not in overlays]
             if app_name in self.overlays_by_app_name:
                 del self.overlays_by_app_name[app_name]
 
-            # 5. Удаляем состояние из файла
+            # 4. Удаляем состояние из файла
             self._remove_state_from_file(app_name)
 
-            # 6. Уведомляем родителя
+            # 5. Уведомляем родителя
             if hasattr(self.parent, '_on_overlay_removed'):
                 try:
                     self.parent._on_overlay_removed(app_name)
@@ -344,6 +357,16 @@ class OverlayManager:
         finally:
             self._suppress_save = old_suppress
             self.save_overlay_state(immediate=True)
+
+            # ============================================================
+            # 6. ДОБАВЛЕНО: ОБНОВЛЯЕМ СПИСОК ОКОН
+            # ============================================================
+            if hasattr(self.parent, 'window_list'):
+                try:
+                    self.parent.window_list.refresh()
+                    self.logger.info("[OVERLAY_MANAGER] Список окон обновлен после массового удаления")
+                except Exception as e:
+                    self.logger.warning(f"[OVERLAY_MANAGER] Ошибка обновления списка окон: {e}")
 
     def _remove_state_from_file(self, app_name: str):
         """
