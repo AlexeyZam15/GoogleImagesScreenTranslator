@@ -819,21 +819,15 @@ class ScreenshotTranslatorApp:
             self.logger.warning("[APP] browser_worker не инициализирован, пропускаем")
             return
 
-        # ============================================================
         # 1. СОХРАНЯЕМ СОСТОЯНИЕ ОВЕРЛЕЕВ ПЕРЕД ОЧИСТКОЙ
-        # ============================================================
         if hasattr(self, 'overlay_manager') and self.overlay_manager:
             try:
-                # Принудительно сохраняем состояние в файл
                 self.overlay_manager.save_overlay_state(immediate=True)
                 self.logger.info("[APP] Состояние оверлеев сохранено перед перезапуском")
             except Exception as e:
                 self.logger.warning(f"[APP] Ошибка сохранения состояния: {e}")
 
-        # ============================================================
         # 2. ОЧИСТКА КОМПОНЕНТОВ (БЕЗ УДАЛЕНИЯ ФАЙЛА СОСТОЯНИЯ)
-        # ============================================================
-
         # 2.1 Останавливаем и очищаем TranslationMonitor
         if hasattr(self, 'translation_monitor') and self.translation_monitor:
             try:
@@ -871,16 +865,17 @@ class ScreenshotTranslatorApp:
         self._init_attempts = 0
         self.logger.info("[APP] Флаги инициализации сброшены")
 
-        # ============================================================
         # 3. ПРОВЕРЯЕМ ДВИЖОК И ПЕРЕЗАПУСКАЕМ БРАУЗЕР
-        # ============================================================
-
         engine = self.settings.get_translator_engine()
         if not hasattr(self, '_last_engine'):
             self._last_engine = engine
         elif self._last_engine != engine:
             self.logger.info(f"[APP] Движок изменен: {self._last_engine} -> {engine}")
             self._last_engine = engine
+
+        # <--- НОВОЕ: СОХРАНЯЕМ ТЕКУЩИЙ ЯЗЫК ДЛЯ ОТСЛЕЖИВАНИЯ ИЗМЕНЕНИЙ --->
+        self._last_target_lang = self.settings.get_target_language()
+        self.logger.info(f"[APP] Текущий целевой язык: {self._last_target_lang}")
 
         show_browser = self.settings.get_show_browser()
         target_lang = self.settings.get_target_language()
@@ -2248,7 +2243,6 @@ class ScreenshotTranslatorApp:
         if error:
             self.logger.error(f"Ошибка инициализации: {error}")
             self.initializing = False
-            # Статус ошибки убран — только лог
             self.ui.root.after(self._init_retry_delay, self._init_translator_step)
             return
 
@@ -2258,35 +2252,28 @@ class ScreenshotTranslatorApp:
         self._init_done = True
         self._init_attempts = 0
 
-        # Сохраняем используемый движок
+        # Сохраняем используемый движок и язык
         self._last_engine = self.settings.get_translator_engine()
-        engine_name = "Google Translate" if self._last_engine == "google" else "Яндекс.Переводчик (OCR)"
-        self.logger.info(f"[APP] Используется движок: {engine_name}")
+        self._last_target_lang = self.settings.get_target_language()
 
-        # ============================================================
+        engine_name = "Google Translate" if self._last_engine == "google" else "Яндекс.Переводчик (OCR)"
+        self.logger.info(f"[APP] Используется движок: {engine_name}, язык: {self._last_target_lang}")
+
         # Переустанавливаем горячие клавиши после инициализации
-        # ============================================================
         if hasattr(self, 'hotkeys'):
             self.hotkeys.setup()
             self.logger.info("[APP] Горячие клавиши переустановлены после инициализации браузера")
 
-        # ============================================================
-        # Создаём компоненты заново (как при первом запуске)
-        # ============================================================
-
-        # Создаём OverlayManager, если его нет
+        # Создаём компоненты заново
         if not self.overlay_manager:
             self.overlay_manager = OverlayManager(self)
             self.logger.info("[APP] OverlayManager создан")
 
-        # Создаём TranslationMonitor, если его нет
         if not self.translation_monitor:
             self.translation_monitor = TranslationMonitor(self, self.overlay_manager, self.settings)
             self.logger.info("[APP] TranslationMonitor создан")
 
-        # ============================================================
-        # ВОССТАНАВЛИВАЕМ ОВЕРЛЕИ ИЗ СОХРАНЁННОГО СОСТОЯНИЯ
-        # ============================================================
+        # Восстанавливаем оверлеи из сохранённого состояния
         restored_count = 0
         if self.overlay_manager:
             try:
@@ -2308,14 +2295,15 @@ class ScreenshotTranslatorApp:
         # Обновляем статус на "Готов"
         ready_text = self.ui.get_string('ready')
         self.logger.info(f"[STATUS] Обновление статуса на: {ready_text}")
-        self.ui.update_status(f"● {ready_text} ({engine_name})", '#4CAF50')
+        self.ui.update_status(f"● {ready_text} ({engine_name}, {self._last_target_lang.upper()})", '#4CAF50')
         self.logger.info("[STATUS] Статус обновлён на Готов")
 
         self.window_list.refresh()
         self.logger.info("Инициализация полностью завершена, статус: Готов")
 
         # Показываем уведомление о готовности
-        self.show_notification(f"✅ {self.ui.get_string('ready_notification')} ({engine_name})", 2000)
+        self.show_notification(
+            f"✅ {self.ui.get_string('ready_notification')} ({engine_name}, {self._last_target_lang.upper()})", 2000)
 
     def _on_window_switch(self, new_hwnd):
         """Обработчик переключения окон - показывает/скрывает оверлеи при переключении"""
@@ -2978,7 +2966,6 @@ class ScreenshotTranslatorApp:
     def on_settings_changed(self):
         """Обработчик изменения настроек"""
         self.ui.update_ui_language()
-        # self.hotkeys.setup()  # <-- УДАЛЕН дублирующий вызов
 
         # Проверяем, изменился ли движок перевода
         if not hasattr(self, '_last_engine'):
@@ -2994,8 +2981,25 @@ class ScreenshotTranslatorApp:
                     self._restart_translator()
                 else:
                     self.logger.info("[SETTINGS] Браузер не готов, перезапуск отложен")
+                return
 
-        # Обновляем статус, если приложение готово — ТОЛЬКО ДЛЯ БРАУЗЕРА
+        # Проверяем, изменился ли целевой язык
+        if not hasattr(self, '_last_target_lang'):
+            self._last_target_lang = self.settings.get_target_language()
+        else:
+            new_lang = self.settings.get_target_language()
+            if self._last_target_lang != new_lang:
+                self._last_target_lang = new_lang
+                self.logger.info(
+                    f"[SETTINGS] Целевой язык изменен: {self._last_target_lang} -> {new_lang}, перезапускаем браузер"
+                )
+                if self.ready:
+                    self._restart_translator()
+                else:
+                    self.logger.info("[SETTINGS] Браузер не готов, перезапуск отложен")
+                return
+
+        # Обновляем статус, если приложение готово
         if self.ready:
             engine = self.settings.get_translator_engine()
             engine_name = "Google Translate" if engine == "google" else "Яндекс.Переводчик (OCR)"

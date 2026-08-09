@@ -103,13 +103,13 @@ class GoogleTranslateDebug:
                     "--disable-popup-blocking",
                 ],
                 ignore_default_args=["--enable-automation"],
-                timeout=60000,  # УВЕЛИЧЕНО: добавлен таймаут 60 секунд для запуска браузера
+                timeout=60000,
                 permissions=["clipboard-read", "clipboard-write"],
                 executable_path=browser_path,
             )
             self.logger.info("✅ Браузер запущен")
             self.logger.info("Ожидание инициализации браузера (3с)...")
-            time.sleep(3)  # УВЕЛИЧЕНО: 2 -> 3
+            time.sleep(3)
 
             pages = self._context.pages
             if pages:
@@ -141,6 +141,8 @@ class GoogleTranslateDebug:
 
             self.logger.info("Открытие Google Translate...")
             try:
+                # <--- ВАЖНО: URL использует self.target_lang --->
+                self.base_url = f"https://translate.google.com/details?hl=ru&sl=auto&tl={self.target_lang}&op=images"
                 timeout_ms = 6000
                 self.logger.info(f"Загрузка страницы (таймаут {timeout_ms}мс): {self.base_url}")
                 self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=timeout_ms)
@@ -1349,8 +1351,9 @@ class YandexOcrTranslator:
             self.logger.error(f"Ошибка сброса страницы: {e}")
 
     def update_target_language(self, target_lang: str):
-        """Обновляет целевой язык"""
+        """Обновляет целевой язык перевода"""
         self.target_lang = target_lang
+        self.base_url = f"https://translate.google.com/details?hl=ru&sl=auto&tl={target_lang}&op=images"
         self.logger.info(f"Целевой язык обновлен на: {target_lang}")
 
     def update_interface_language(self, lang_code: str):

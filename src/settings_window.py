@@ -272,6 +272,45 @@ class SettingsWindow:
         ui_inner = tk.Frame(ui_frame, bg='#1e1e1e')
         ui_inner.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
+        # ============================================================
+        # ВЫБОР ЦЕЛЕВОГО ЯЗЫКА ПЕРЕВОДА
+        # ============================================================
+        tk.Label(
+            ui_inner,
+            text="🎯 Целевой язык перевода:",
+            bg='#1e1e1e',
+            fg='#cccccc',
+            font=('Segoe UI', 11, 'bold'),
+            anchor='w'
+        ).pack(anchor=tk.W, pady=(0, 5))
+
+        # Импортируем словарь языков
+        from src.main_window import LANGUAGES
+
+        lang_display_names = [f"{name} ({code})" for code, name in LANGUAGES.items()]
+        lang_display_names.sort()
+
+        self.target_lang_var = tk.StringVar()
+        self.target_lang_combo = ttk.Combobox(
+            ui_inner,
+            textvariable=self.target_lang_var,
+            values=lang_display_names,
+            state='readonly',
+            font=('Segoe UI', 10),
+            width=40
+        )
+        self.target_lang_combo.pack(anchor=tk.W, pady=(0, 15))
+
+        # Устанавливаем текущий язык
+        current_lang = self.settings.get_target_language()
+        for item in lang_display_names:
+            if f"({current_lang})" in item:
+                self.target_lang_combo.set(item)
+                break
+
+        # ============================================================
+        # ОСТАЛЬНЫЕ НАСТРОЙКИ
+        # ============================================================
         self.show_indicator_var = tk.BooleanVar(value=self.settings.get_show_translation_indicator())
         indicator_cb = tk.Checkbutton(
             ui_inner,
@@ -344,6 +383,7 @@ class SettingsWindow:
         edit_mode_cb.pack(anchor=tk.W, pady=4)
         self._add_tooltip(edit_mode_cb, self.get_string('edit_mode_tooltip'))
 
+        # Время жизни временного оверлея
         temp_lifetime_label = tk.Label(
             ui_inner,
             text=self.get_string('temporary_lifetime'),
@@ -694,6 +734,19 @@ class SettingsWindow:
         old_auto_hide = self.settings.get_auto_hide_overlay()
         new_auto_hide = self.auto_hide_var.get()
 
+        # ============================================================
+        # СОХРАНЯЕМ ЦЕЛЕВОЙ ЯЗЫК ПЕРЕВОДА
+        # ============================================================
+        old_target_lang = self.settings.get_target_language()
+        new_target_lang = old_target_lang
+
+        selected = self.target_lang_var.get()
+        if selected and "(" in selected and ")" in selected:
+            new_target_lang = selected.split("(")[-1].replace(")", "").strip()
+            if old_target_lang != new_target_lang:
+                self.settings.set_target_language(new_target_lang)
+                logger.info(f"[SETTINGS] Целевой язык изменён: {old_target_lang} -> {new_target_lang}")
+
         # Сохраняем все настройки
         self.settings.set_browser_path(new_browser_path)
         self.settings.set_show_translation_indicator(self.show_indicator_var.get())
@@ -742,12 +795,16 @@ class SettingsWindow:
                     if monitor.is_running():
                         monitor.stop()
 
-        # Проверяем, изменился ли движок перевода
+        # ============================================================
+        # ПРОВЕРЯЕМ: ИЗМЕНИЛСЯ ЛИ ЯЗЫК ИЛИ ДВИЖОК ИЛИ ПУТЬ К БРАУЗЕРУ
+        # ============================================================
+        language_changed = (old_target_lang != new_target_lang)
         engine_changed = (old_engine != new_engine)
-
-        # Перезапускаем браузер если изменился путь ИЛИ движок
         browser_path_changed = (old_browser_path != new_browser_path)
-        if browser_path_changed or engine_changed:
+
+        if language_changed or engine_changed or browser_path_changed:
+            if language_changed:
+                logger.info(f"[SETTINGS] Язык изменен: {old_target_lang} -> {new_target_lang}")
             if engine_changed:
                 logger.info(f"[SETTINGS] Движок изменен: {old_engine} -> {new_engine}")
             if browser_path_changed:
@@ -779,9 +836,7 @@ class SettingsWindow:
                 )
             self.app.logger.info(f"Режим редактирования из настроек: {edit_mode}")
 
-        # ============================================================
-        # ЕДИНСТВЕННЫЙ ВЫЗОВ ПЕРЕРЕГИСТРАЦИИ ГОРЯЧИХ КЛАВИШ
-        # ============================================================
+        # Перерегистрируем горячие клавиши
         if hasattr(self, 'app') and hasattr(self.app, 'hotkeys'):
             self.app.hotkeys.setup()
             logger.info("[SETTINGS] Горячие клавиши переустановлены через HotkeyManager")
@@ -1426,6 +1481,7 @@ class SettingsWindow:
         """Загружает текущие настройки в поля."""
         current_path = self.settings.get_browser_path()
         self.browser_path_var.set(current_path)
+
         if hasattr(self, 'show_indicator_var'):
             self.show_indicator_var.set(self.settings.get_show_translation_indicator())
         if hasattr(self, 'auto_hide_var'):
@@ -1434,6 +1490,20 @@ class SettingsWindow:
             self.auto_windowed_fullscreen_var.set(self.settings.get_auto_windowed_fullscreen())
         if hasattr(self, 'edit_mode_var'):
             self.edit_mode_var.set(self.settings.get_edit_mode_enabled())
+
+        # ============================================================
+        # ЗАГРУЖАЕМ ЦЕЛЕВОЙ ЯЗЫК
+        # ============================================================
+        if hasattr(self, 'target_lang_combo'):
+            current_lang = self.settings.get_target_language()
+            from src.main_window import LANGUAGES
+            lang_display_names = [f"{name} ({code})" for code, name in LANGUAGES.items()]
+            lang_display_names.sort()
+            for item in lang_display_names:
+                if f"({current_lang})" in item:
+                    self.target_lang_combo.set(item)
+                    break
+
         if hasattr(self, 'hotkey_capture_manager'):
             for action, var in self.hotkey_capture_manager.hotkey_vars.items():
                 key = self.settings.get_hotkey(action)
