@@ -270,17 +270,17 @@ class BrowserWorker:
             except Exception as e:
                 self.logger.warning(f"[BROWSER_WORKER] Ошибка отправки сигнала: {e}")
 
-        # 3. Закрываем браузер (это может занять время)
+        # 3. Отменяем текущий перевод
+        if hasattr(self, 'translator') and self.translator:
+            try:
+                self.translator.cancel_translation()
+            except:
+                pass
+
+        # 4. Закрываем браузер (это может занять время)
         if hasattr(self, 'translator') and self.translator:
             try:
                 self.logger.info("[BROWSER_WORKER] Закрытие браузера...")
-                # Устанавливаем флаг отмены, чтобы прервать текущие операции
-                try:
-                    self.translator._cancel_flag = True
-                except:
-                    pass
-
-                # Закрываем с таймаутом
                 close_start = time.time()
                 self.translator.close_browser()
                 close_elapsed = time.time() - close_start
@@ -289,15 +289,15 @@ class BrowserWorker:
                 self.logger.warning(f"[BROWSER_WORKER] Ошибка закрытия браузера: {e}")
             self.translator = None
 
-        # 4. Ждем завершения потока с таймаутом
+        # 5. Ждем завершения потока с таймаутом (уменьшено до 0.5 секунды)
         if self._thread and self._thread.is_alive():
             self.logger.info("[BROWSER_WORKER] Ожидание завершения потока...")
-            self._thread.join(timeout=5.0)  # УВЕЛИЧЕНО: 3.0 -> 5.0
+            self._thread.join(timeout=0.5)  # УМЕНЬШЕНО: 3.0 -> 0.5
 
             if self._thread.is_alive():
-                self.logger.warning("[BROWSER_WORKER] Поток не завершился, принудительное завершение")
-                # Помечаем поток как демонический, чтобы он не блокировал выход
-                self._thread.daemon = True
+                self.logger.warning("[BROWSER_WORKER] Поток не завершился за 0.5 секунды, продолжаем закрытие.")
+                # Не пытаемся сделать поток демоном - просто продолжаем
+                # Поток будет завершен при выходе из процесса
 
         self.logger.info("[BROWSER_WORKER] Остановлен")
 

@@ -20,7 +20,8 @@ class HotkeyManager:
         '_action_queue', '_processing_queue',
         '_f3_down_time', '_f3_timer', '_f3_hold_triggered',
         '_f5_down_time', '_f5_timer', '_f5_hold_triggered',
-        '_setup_in_progress'  # <-- НОВЫЙ АТРИБУТ
+        '_setup_in_progress',  # <-- УЖЕ БЫЛО
+        '_esc_hook_active'  # <-- ДОБАВЛЯЕМ
     )
 
     def __init__(self, app):
@@ -48,6 +49,64 @@ class HotkeyManager:
         # <-- НОВЫЙ АТРИБУТ ДЛЯ ЗАЩИТЫ ОТ ПОВТОРНОЙ РЕГИСТРАЦИИ
         self._setup_in_progress = False
 
+        # <-- НОВЫЙ АТРИБУТ ДЛЯ ГЛОБАЛЬНОГО ХУКА ESC
+        self._esc_hook_active = False
+
+        # <-- УСТАНАВЛИВАЕМ ГЛОБАЛЬНЫЙ ХУК ESC
+        self._setup_esc_hook()
+
+    def cleanup_esc_hook(self):
+        """Очищает глобальный хук ESC."""
+        if self._esc_hook_active:
+            try:
+                import keyboard
+                keyboard.unhook_key('esc')
+                self._esc_hook_active = False
+                self.logger.info("[HOTKEYS] Глобальный хук ESC отключен")
+            except Exception as e:
+                self.logger.warning(f"[HOTKEYS] Ошибка отключения хука ESC: {e}")
+
+    def _on_esc_global(self, event):
+        """
+        Глобальный обработчик ESC.
+        Вызывается при нажатии ESC в любом приложении.
+        """
+        self.logger.info("[HOTKEYS][ESC] Глобальный ESC перехвачен")
+
+        # Проверяем, не заблокированы ли действия
+        if self._hotkeys_blocked:
+            self.logger.info("[HOTKEYS][ESC] Действия заблокированы, пропускаем")
+            return False
+
+        # Вызываем метод скрытия F2-оверлея из app.py
+        if hasattr(self.app, 'hide_f2_overlay_under_cursor'):
+            if self.app.hide_f2_overlay_under_cursor():
+                self.logger.info("[HOTKEYS][ESC] F2-оверлей скрыт")
+                return False  # Блокируем дальнейшую обработку ESC
+
+        # Если F2-оверлей не найден, пропускаем событие дальше
+        self.logger.info("[HOTKEYS][ESC] F2-оверлей не найден, пропускаем")
+        return True  # Пропускаем событие дальше
+
+    def _setup_esc_hook(self):
+        """Устанавливает глобальный хук для ESC."""
+        try:
+            import keyboard
+            # Отключаем старый хук, если был
+            if self._esc_hook_active:
+                try:
+                    keyboard.unhook_key('esc')
+                except:
+                    pass
+                self._esc_hook_active = False
+
+            # Устанавливаем новый хук
+            keyboard.on_press_key('esc', self._on_esc_global, suppress=True)
+            self._esc_hook_active = True
+            self.logger.info("[HOTKEYS] Глобальный хук ESC установлен")
+        except Exception as e:
+            self.logger.warning(f"[HOTKEYS] Не удалось установить глобальный хук ESC: {e}")
+
     def _delayed_setup(self):
         """Отложенная перерегистрация горячих клавиш (вызывается через after)"""
         self.logger.info("[HOTKEYS] Выполнение отложенной перерегистрации...")
@@ -58,7 +117,6 @@ class HotkeyManager:
 
     def setup(self):
         """Настраивает горячие клавиши"""
-        # <-- ЗАЩИТА ОТ ПОВТОРНОЙ РЕГИСТРАЦИИ
         if self._setup_in_progress:
             self.logger.info("[HOTKEYS] Регистрация уже выполняется, пропускаем")
             return
@@ -117,6 +175,11 @@ class HotkeyManager:
                 self.logger.info("[HOTKEYS] Зарегистрировано: F5 (блокировка)")
             except Exception as e:
                 self.logger.warning(f"[HOTKEYS] Не удалось зарегистрировать F5: {e}")
+
+            # ============================================================
+            # ВОССТАНАВЛИВАЕМ ГЛОБАЛЬНЫЙ ХУК ESC
+            # ============================================================
+            self._setup_esc_hook()
 
             self._hotkey_hook_active = True
             self.logger.info("[HOTKEYS] Горячие клавиши зарегистрированы (все с блокировкой)")
@@ -299,41 +362,38 @@ class HotkeyManager:
                 keyboard.block_key('f5')
                 keyboard.block_key('f6')
                 # НЕ БЛОКИРУЕМ ESC
+                self.logger.info("[HOTKEYS] ESC НЕ заблокирован")
             except Exception as e:
                 self.logger.warning(f"[HOTKEYS] Не удалось заблокировать клавиши: {e}")
         else:
             self.logger.info("[HOTKEYS] Горячие клавиши разблокированы")
             try:
                 import keyboard
-                # ============================================================
-                # ПОЛНЫЙ СБРОС ВСЕХ ХУКОВ
-                # ============================================================
                 keyboard.unhook_all()
                 self.logger.info("[HOTKEYS] Все хуки отключены при разблокировке")
 
-                # ============================================================
-                # ОТЛОЖЕННАЯ ПЕРЕРЕГИСТРАЦИЯ (через 600мс)
-                # Чтобы дождаться сброса флага _setup_in_progress
-                # ============================================================
+                # Восстанавливаем ESC хук
+                self._setup_esc_hook()
+
                 if hasattr(self.app, 'root') and self.app.root:
                     self.app.root.after(600, self._delayed_setup)
                     self.logger.info("[HOTKEYS] Отложенная перерегистрация запланирована через 600мс")
                 else:
-                    # Если нет root, используем threading.Timer
                     import threading
                     threading.Timer(0.6, self._delayed_setup).start()
                     self.logger.info("[HOTKEYS] Отложенная перерегистрация запланирована через threading.Timer")
-
             except Exception as e:
                 self.logger.warning(f"[HOTKEYS] Ошибка разблокировки: {e}")
 
     def cleanup(self):
         """Очищает все хуки"""
         try:
+            import keyboard
             keyboard.unhook_all()
             self._hotkey_hook_active = False
             self._action_queue.clear()
             self._processing_queue = False
+            self.cleanup_esc_hook()  # <-- ДОБАВИТЬ ЭТУ СТРОКУ
             self.logger.info("[HOTKEYS] Все хуки очищены")
         except Exception as e:
             self.logger.error(f"[HOTKEYS] Ошибка очистки: {e}")

@@ -51,10 +51,25 @@ class OverlayManager:
         # ============================================================
         # НОВЫЙ АТРИБУТ: запоминаем состояние оверлеев при F1
         # ============================================================
-        self._f1_state = {}  # overlay_id -> {visible: bool, hidden_by_user: bool}
+        self._f1_state = {}
 
         self._create_context_menu()
+
+        # ============================================================
+        # УДАЛЯЕМ ГЛОБАЛЬНЫЙ ОБРАБОТЧИК ESC ДЛЯ ГЛАВНОГО ОКНА
+        # ТЕПЕРЬ ESC ОБРАБАТЫВАЕТСЯ ЧЕРЕЗ hotkeys.py (ГЛОБАЛЬНЫЙ СИСТЕМНЫЙ ХУК)
+        # ============================================================
+        # if hasattr(self.parent, 'root') and self.parent.root:
+        #     self.parent.root.bind('<Escape>', self._on_global_esc)
+        #     self.logger.info("[OVERLAY_MANAGER] Глобальный обработчик ESC добавлен к главному окну")
+
         self.logger.info("OverlayManager инициализирован")
+
+    def _global_esc_handler(self, event):
+        """Глобальный обработчик ESC - передается в app.py."""
+        if self.parent and hasattr(self.parent, '_global_esc_handler'):
+            return self.parent._global_esc_handler(event)
+        return True
 
     def reset_f1_state(self):
         """
@@ -723,8 +738,8 @@ class OverlayManager:
         )
         self.logger.info("[DEBUG] show_for_window завершен")
 
-        self._enable_esc_hook()
-        self.logger.info("[DEBUG] ESC хук включен")
+        # УДАЛЕНО: self._enable_esc_hook()
+        self.logger.info("[DEBUG] ESC хук управляется из app.py (глобальный системный хук)")
 
         # Добавляем в словарь по имени приложения
         if app_name not in self.overlays_by_app_name:
@@ -766,21 +781,40 @@ class OverlayManager:
             return "Неизвестно"
 
     def close_all(self):
-        """Закрывает все оверлеи с таймаутом."""
-        import time
-
+        """Закрывает все оверлеи."""
         self.logger.info(f"[OVERLAY_MANAGER] Закрытие всех оверлеев. Количество: {len(self.overlays)}")
 
-        # ============================================================
-        # ОЧИЩАЕМ F1 СОСТОЯНИЕ
-        # ============================================================
+        # Очищаем F1 состояние
         self._f1_state.clear()
         self.logger.info("[OVERLAY_MANAGER] F1 состояние очищено")
 
-        # Отключаем ESC хук
-        self._disable_esc_hook()
+        # Отключаем ESC обработчик
+        if hasattr(self.parent, 'root') and self.parent.root:
+            try:
+                self.parent.root.unbind('<Escape>')
+                self.logger.info("[OVERLAY_MANAGER] ESC обработчик отключен")
+            except:
+                pass
 
-        # ... остальной код close_all ...
+        # Копируем список оверлеев для итерации
+        overlays_to_close = self.overlays[:]
+
+        for overlay in overlays_to_close:
+            try:
+                if overlay is None:
+                    continue
+                if hasattr(overlay, '_closing'):
+                    overlay._closing = True
+                if hasattr(overlay, 'close'):
+                    overlay.close()
+                elif overlay.root and overlay.root.winfo_exists():
+                    overlay.root.destroy()
+            except Exception as e:
+                self.logger.warning(f"[OVERLAY_MANAGER] Ошибка закрытия оверлея: {e}")
+
+        self.overlays.clear()
+        self.overlays_by_app_name.clear()
+        self.logger.info(f"[OVERLAY_MANAGER] Все оверлеи закрыты")
 
     def set_dragging(self, dragging: bool):
         """Устанавливает глобальный флаг перетаскивания для всех оверлеев."""
@@ -1634,48 +1668,6 @@ class OverlayManager:
             self.logger.warning(f"[DEBUG] Не удалось показать контекстное меню: {e}")
             self._context_menu_overlay = None
 
-    def _global_esc_handler(self, event):
-        """Глобальный обработчик ESC - только отменяет перевод или скрывает F2-оверлей."""
-        self.logger.info("[DEBUG] ESC нажат в OverlayManager._global_esc_handler")
-
-        # Проверяем режим захвата области
-        if self.parent and hasattr(self.parent, '_capture_mode') and self.parent._capture_mode:
-            self.logger.info("[DEBUG] ESC: режим захвата области активен - пропускаем обработку")
-            return True
-
-        self.logger.info("[DEBUG] ESC нажат - проверка состояния перевода")
-
-        # Только отменяем перевод, если он выполняется
-        if hasattr(self.parent, '_translation_in_progress') and self.parent._translation_in_progress:
-            self.logger.info("[DEBUG] ESC: обнаружен активный перевод - отменяем")
-            if hasattr(self.parent, '_cancel_translation'):
-                self.parent._cancel_translation()
-            return False
-
-        # ============================================================
-        # НОВАЯ ЛОГИКА: скрываем F2-оверлей под курсором
-        # ============================================================
-        f2_overlay = None
-        try:
-            overlay = self._find_overlay_under_cursor()
-            if overlay and hasattr(overlay, '_is_f2_overlay') and overlay._is_f2_overlay:
-                f2_overlay = overlay
-                self.logger.info("[DEBUG] ESC: найден F2-оверлей под курсором, скрываем его")
-        except Exception as e:
-            self.logger.warning(f"[DEBUG] Ошибка поиска F2-оверлея под курсором: {e}")
-
-        if f2_overlay:
-            if f2_overlay.visible:
-                f2_overlay.hide(by_user=True)
-                self.logger.info("[DEBUG] ESC: F2-оверлей скрыт")
-            else:
-                self.logger.info("[DEBUG] ESC: F2-оверлей уже скрыт")
-            return True
-
-        # Ничего не делаем с другими оверлеями
-        self.logger.info("[DEBUG] ESC: нет активного перевода или F2-оверлея под курсором, игнорируем")
-        return True
-
     def save_position(self, overlay_id, art_x, art_y, art_w, art_h, icon_x=None, icon_y=None,
                       user_modified=False, offset_x=None, offset_y=None):
         """Сохраняет позицию арта относительно иконки/шаблона."""
@@ -1926,16 +1918,6 @@ class OverlayManager:
         except Exception as e:
             self.logger.warning(f"[DEBUG] _find_overlay_under_cursor: общая ошибка: {e}")
             return None
-
-    def _enable_esc_hook(self):
-        """Включает глобальный хук ESC."""
-        if not self._esc_hook_active:
-            try:
-                keyboard.on_press_key('esc', self._global_esc_handler)
-                self._esc_hook_active = True
-                self.logger.info("Глобальный хук ESC включен (OverlayManager)")
-            except Exception as e:
-                self.logger.warning(f"Не удалось включить глобальный хук ESC: {e}")
 
     def _disable_esc_hook(self):
         """Отключает глобальный хук ESC."""

@@ -212,53 +212,119 @@ class ScreenshotTranslatorApp:
         self.ui.root.after(100, self._init_translator_step)
 
         # ============================================================
-        # ГЛОБАЛЬНАЯ ПРИВЯЗКА ESC ДЛЯ СКРЫТИЯ F2-ОВЕРЛЕЕВ
+        # УДАЛЯЕМ ГЛОБАЛЬНЫЙ СИСТЕМНЫЙ ХУК ESC - используем Tkinter
         # ============================================================
-        self.ui.root.bind('<Escape>', self._on_escape_global)
-        self.logger.info("[APP] Глобальная привязка ESC добавлена")
+        # Вместо глобального хука - привязываем ESC к OverlayManager
+        # OverlayManager сам создаст обработчик на главном окне
+
+        # Запасной вариант через Tkinter (уже не нужен, но оставим для совместимости)
+        # self.ui.root.bind('<Escape>', self._on_escape_global)  # УДАЛИТЬ ЭТУ СТРОКУ
 
         self._force_log_flush()
         self.logger.info("✅ Приложение инициализировано успешно")
         self._force_log_flush()
 
-    def _on_escape_global(self, event):
+    def hide_f2_overlay_under_cursor(self):
         """
-        Глобальный обработчик ESC на главном окне.
-        Скрывает все видимые F2-оверлеи.
+        Публичный метод для скрытия F2-оверлея под курсором.
+        Вызывается из OverlayManager при нажатии ESC.
+        Возвращает True если оверлей был скрыт, иначе False.
         """
-        self.logger.info("[APP][ESC] Глобальный ESC нажат")
+        self.logger.info("[APP][ESC] Вызов hide_f2_overlay_under_cursor")
 
-        # Проверяем, есть ли видимые F2-оверлеи
-        if not self.overlay_manager:
-            return "break"
-
-        hidden_count = 0
-        for overlay in self.overlay_manager.overlays:
+        # 1. Сначала пробуем скрыть последний перетащенный F2-оверлей
+        if hasattr(self, '_last_dragged_f2_overlay') and self._last_dragged_f2_overlay:
+            overlay = self._last_dragged_f2_overlay
             try:
-                if overlay is None:
-                    continue
-                if not overlay.root or not overlay.root.winfo_exists():
-                    continue
-
-                # Проверяем, что это F2-оверлей
-                is_f2 = hasattr(overlay, '_is_f2_overlay') and overlay._is_f2_overlay
-                if not is_f2:
-                    continue
-
-                # Проверяем, виден ли оверлей
-                if overlay.visible:
+                if overlay and overlay.root and overlay.root.winfo_exists():
+                    self.logger.info(f"[APP][ESC] Скрываем последний перетащенный F2-оверлей: {overlay._app_name}")
                     overlay.hide(by_user=True)
-                    hidden_count += 1
-                    self.logger.info(f"[APP][ESC] Скрыт F2-оверлей для {overlay._app_name}")
+                    self._last_dragged_f2_overlay = None
+
+                    # Сохраняем состояние
+                    if hasattr(self, 'overlay_manager') and self.overlay_manager:
+                        self.overlay_manager.save_overlay_state(immediate=True)
+                        self.logger.info("[APP][ESC] Состояние оверлея сохранено после скрытия перетащенного")
+
+                    return True
+                else:
+                    self._last_dragged_f2_overlay = None
             except Exception as e:
-                self.logger.warning(f"[APP][ESC] Ошибка скрытия оверлея: {e}")
+                self.logger.warning(f"[APP][ESC] Ошибка при скрытии перетащенного оверлея: {e}")
+                self._last_dragged_f2_overlay = None
 
-        if hidden_count > 0:
-            self.logger.info(f"[APP][ESC] Скрыто {hidden_count} F2-оверлеев")
+        # 2. Если нет перетащенного, пробуем найти под курсором
+        f2_overlay = self.find_f2_overlay_under_cursor()
+        if f2_overlay:
+            self.logger.info(f"[APP][ESC] Найден F2-оверлей под курсором: {f2_overlay._app_name}, скрываем.")
+            f2_overlay.hide(by_user=True)
+
+            # Сохраняем состояние
+            if hasattr(self, 'overlay_manager') and self.overlay_manager:
+                self.overlay_manager.save_overlay_state(immediate=True)
+                self.logger.info("[APP][ESC] Состояние оверлея сохранено после скрытия под курсором")
+
+            self.logger.info("[APP][ESC] F2-оверлей скрыт")
+            return True
         else:
-            self.logger.info("[APP][ESC] Нет видимых F2-оверлеев для скрытия")
+            self.logger.info("[APP][ESC] Нет F2-оверлея под курсором.")
+            return False
 
-        return "break"
+    def find_f2_overlay_under_cursor(self):
+        """
+        Публичный метод: находит F2-оверлей под курсором мыши.
+        Возвращает overlay или None.
+        """
+        try:
+            import win32gui
+            import win32api
+
+            cursor_pos = win32api.GetCursorPos()
+            cursor_x, cursor_y = cursor_pos
+
+            self.logger.info(f"[APP][ESC] Проверка курсора в ({cursor_x}, {cursor_y})")
+
+            if not self.overlay_manager:
+                self.logger.info("[APP][ESC] overlay_manager не инициализирован")
+                return None
+
+            self.logger.info(f"[APP][ESC] Всего оверлеев: {len(self.overlay_manager.overlays)}")
+
+            # Идем с конца списка (последние созданные оверлеи сверху)
+            for i, overlay in enumerate(reversed(self.overlay_manager.overlays)):
+                try:
+                    if overlay is None:
+                        continue
+                    if not overlay.root or not overlay.root.winfo_exists():
+                        continue
+                    if not overlay.visible:
+                        continue
+
+                    # Проверяем, что это F2-оверлей
+                    is_f2 = hasattr(overlay, '_is_f2_overlay') and overlay._is_f2_overlay
+                    if not is_f2:
+                        continue
+
+                    # Получаем координаты окна оверлея
+                    overlay_hwnd = int(overlay.root.winfo_id())
+                    rect = win32gui.GetWindowRect(overlay_hwnd)
+                    x1, y1, x2, y2 = rect
+
+                    self.logger.info(f"[APP][ESC] Оверлей #{i}: rect=({x1},{y1})-({x2},{y2}), видим={overlay.visible}")
+
+                    # Проверяем, находится ли курсор внутри оверлея
+                    if x1 <= cursor_x <= x2 and y1 <= cursor_y <= y2:
+                        self.logger.info(f"[APP][ESC] Найден F2-оверлей под курсором: {overlay._app_name}")
+                        return overlay
+
+                except Exception as e:
+                    self.logger.warning(f"[APP][ESC] Ошибка проверки оверлея #{i}: {e}")
+                    continue
+
+        except Exception as e:
+            self.logger.warning(f"[APP][ESC] Ошибка поиска оверлея под курсором: {e}")
+
+        return None
 
     def reset_f1_state(self):
         """
@@ -2928,11 +2994,11 @@ class ScreenshotTranslatorApp:
         help_window.focus_force()
 
     def on_close(self):
-        """Закрытие приложения с таймаутами и принудительным завершением"""
+        """Закрытие приложения с улучшенной обработкой потоков и таймаутами."""
         import time
         import threading
         import os
-        from pathlib import Path
+        import sys
 
         self.logger.info("=" * 60)
         self.logger.info("🛑 НАЧАЛО ЗАКРЫТИЯ ПРИЛОЖЕНИЯ")
@@ -2955,13 +3021,13 @@ class ScreenshotTranslatorApp:
         except:
             pass
 
-        # 4. Отключаем горячие клавиши
+        # 4. Отключаем горячие клавиши (хуки keyboard)
         try:
             import keyboard
             keyboard.unhook_all()
-            self.logger.info("[CLOSE] Горячие клавиши отключены")
+            self.logger.info("[CLOSE] Все хуки клавиатуры отключены")
         except Exception as e:
-            self.logger.warning(f"[CLOSE] Ошибка отключения клавиш: {e}")
+            self.logger.warning(f"[CLOSE] Ошибка отключения хуков: {e}")
 
         # 5. Сохраняем настройки
         try:
@@ -2971,7 +3037,7 @@ class ScreenshotTranslatorApp:
         except Exception as e:
             self.logger.warning(f"[CLOSE] Ошибка сохранения настроек: {e}")
 
-        # 6. Останавливаем TranslationMonitor
+        # 6. Останавливаем TranslationMonitor с таймаутом
         if hasattr(self, 'translation_monitor') and self.translation_monitor:
             try:
                 self.logger.info("[CLOSE] Остановка TranslationMonitor...")
@@ -2984,10 +3050,26 @@ class ScreenshotTranslatorApp:
         if hasattr(self, 'browser_worker') and self.browser_worker:
             try:
                 self.logger.info("[CLOSE] Остановка BrowserWorker...")
+                # Устанавливаем флаг отмены в переводчике
+                translator = self.browser_worker.get_translator()
+                if translator:
+                    try:
+                        translator.cancel_translation()
+                    except:
+                        pass
+
+                # Останавливаем рабочий поток
                 self.browser_worker.stop()
                 self.logger.info("[CLOSE] BrowserWorker остановлен")
             except Exception as e:
                 self.logger.warning(f"[CLOSE] Ошибка остановки BrowserWorker: {e}")
+                # В случае ошибки - пробуем закрыть браузер напрямую
+                try:
+                    translator = self.browser_worker.get_translator()
+                    if translator:
+                        translator.close_browser()
+                except:
+                    pass
 
         # 8. Закрываем оверлеи
         if hasattr(self, 'overlay_manager') and self.overlay_manager:
@@ -3007,11 +3089,7 @@ class ScreenshotTranslatorApp:
             except Exception as e:
                 self.logger.warning(f"[CLOSE] Ошибка освобождения DXcam: {e}")
 
-        # 10. Ждем завершения всех потоков
-        self.logger.info("[CLOSE] Ожидание завершения потоков...")
-        time.sleep(0.5)
-
-        # 11. Закрываем главное окно
+        # 10. Закрываем главное окно (убираем лишнюю задержку)
         try:
             self.logger.info("[CLOSE] Закрытие главного окна...")
             if self.ui and self.ui.root:
@@ -3024,14 +3102,5 @@ class ScreenshotTranslatorApp:
         self.logger.info("✅ ЗАКРЫТИЕ ЗАВЕРШЕНО")
         self.logger.info("=" * 60)
 
-        # 12. Принудительное завершение
-        def force_exit():
-            time.sleep(2.0)
-            self.logger.warning("[CLOSE] Принудительное завершение процесса...")
-            try:
-                os._exit(0)
-            except:
-                pass
-
-        force_thread = threading.Thread(target=force_exit, daemon=True)
-        force_thread.start()
+        # Убираем принудительный выход os._exit(0) - теперь это не нужно
+        # os._exit(0) # <--- УДАЛЕНО

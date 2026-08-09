@@ -170,31 +170,38 @@ class OverlayWindow:
         self.root.bind('<Leave>', self._on_mouse_leave)
 
         # ============================================================
-        # ПРИВЯЗКА ESC ДЛЯ СКРЫТИЯ F2-ОВЕРЛЕЯ
+        # ДОБАВЛЯЕМ ЛОКАЛЬНЫЙ ОБРАБОТЧИК ESC ДЛЯ ОВЕРЛЕЯ
         # ============================================================
         self.root.bind('<Escape>', self._on_escape_local)
         self.canvas.bind('<Escape>', self._on_escape_local)
+        self.logger.info("[OVERLAY] Локальный обработчик ESC добавлен")
 
         self.logger.info("OverlayWindow инициализирован")
 
     def _on_escape_local(self, event):
-        """
-        Локальный обработчик ESC для скрытия F2-оверлея.
-        Срабатывает, когда фокус находится на окне оверлея.
-        """
-        self.logger.info("[DEBUG][ESC] Локальный ESC нажат")
+        """Локальный обработчик ESC для оверлея."""
+        self.logger.info("[OVERLAY][ESC] Локальный ESC перехвачен")
 
-        # Проверяем, является ли оверлей F2-оверлеем
+        # Проверяем, является ли этот оверлей F2-оверлеем
         is_f2_overlay = hasattr(self, '_is_f2_overlay') and self._is_f2_overlay
 
         if is_f2_overlay:
-            self.logger.info("[DEBUG][ESC] F2-оверлей, скрываем")
-            self.hide(by_user=True)
-            return "break"
+            # Пытаемся скрыть F2-оверлей через родительское приложение
+            if hasattr(self, '_overlay_manager') and self._overlay_manager:
+                parent = self._overlay_manager.parent
+                if parent and hasattr(parent, 'hide_f2_overlay_under_cursor'):
+                    if parent.hide_f2_overlay_under_cursor():
+                        self.logger.info("[OVERLAY][ESC] F2-оверлей скрыт через родителя")
+                        return "break"
 
-        # Для обычных оверлеев - передаём в менеджер
+        # Если не удалось скрыть через родителя, просто скрываем текущий оверлей
+        self.logger.info("[OVERLAY][ESC] Скрываем текущий оверлей")
+        self.hide(by_user=True)
+
+        # Сохраняем состояние
         if hasattr(self, '_overlay_manager') and self._overlay_manager:
-            return self._overlay_manager._global_esc_handler(event)
+            self._overlay_manager.save_overlay_state(immediate=True)
+            self.logger.info("[OVERLAY][ESC] Состояние сохранено")
 
         return "break"
 
@@ -496,7 +503,7 @@ class OverlayWindow:
         self.visible = False
 
         self._stop_visibility_monitor()
-        self._disable_esc_hook()
+        # УДАЛЕНО: self._disable_esc_hook()
 
         try:
             self.root.withdraw()
@@ -570,31 +577,16 @@ class OverlayWindow:
             self.visible = True
             self._ensure_topmost()
             self._is_visible_by_user = True
-            self._enable_esc_hook()
 
             # ============================================================
-            # ПРИНУДИТЕЛЬНЫЙ ЗАХВАТ ФОКУСА
+            # УСТАНАВЛИВАЕМ ФОКУС НА ОВЕРЛЕЙ ДЛЯ ПЕРЕХВАТА КЛАВИАТУРЫ
             # ============================================================
             try:
                 self.canvas.focus_set()
                 self.root.focus_force()
-                # Захватываем все события, чтобы ESC точно перехватывался
-                self.root.grab_set()
-                self.logger.info("[DEBUG] show() - фокус захвачен (grab_set)")
+                self.logger.info("[DEBUG] Фокус установлен на оверлей для ESC")
             except Exception as e:
-                self.logger.warning(f"[DEBUG] show() - не удалось захватить фокус: {e}")
-
-            # Повторная установка фокуса через 100мс
-            def ensure_focus():
-                try:
-                    if self.root and self.root.winfo_exists() and self.visible:
-                        self.root.focus_force()
-                        self.root.grab_set()
-                        self.logger.info("[DEBUG] show() - повторный захват фокуса")
-                except Exception as e:
-                    self.logger.warning(f"[DEBUG] show() - ошибка повторного захвата: {e}")
-
-            self.root.after(100, ensure_focus)
+                self.logger.warning(f"[DEBUG] Не удалось установить фокус: {e}")
 
             if self.auto_hide_enabled:
                 self._start_visibility_monitor()
@@ -1142,11 +1134,13 @@ class OverlayWindow:
                 self._ensure_topmost()
                 self._enable_esc_hook()
 
-                # Устанавливаем фокус на оверлей для перехвата ESC
+                # ============================================================
+                # УСТАНАВЛИВАЕМ ФОКУС НА ОВЕРЛЕЙ ДЛЯ ПЕРЕХВАТА ESC
+                # ============================================================
                 try:
                     self.canvas.focus_set()
                     self.root.focus_force()
-                    self.logger.info("[DEBUG] Фокус установлен на оверлей")
+                    self.logger.info("[DEBUG] Фокус установлен на оверлей для ESC")
                 except Exception as e:
                     self.logger.warning(f"[DEBUG] Не удалось установить фокус: {e}")
 
@@ -1296,14 +1290,9 @@ class OverlayWindow:
                 self.root.lift()
                 self.root.update_idletasks()
 
-                # Устанавливаем фокус и захватываем события
-                try:
-                    self.canvas.focus_set()
-                    self.root.focus_force()
-                    self.root.grab_set()
-                    self.logger.info("[DEBUG] _show_window_safe - фокус захвачен")
-                except Exception as e:
-                    self.logger.warning(f"[DEBUG] _show_window_safe - не удалось захватить фокус: {e}")
+                # ============================================================
+                # НЕ ЗАХВАТЫВАЕМ ФОКУС
+                # ============================================================
 
                 # Обновляем рамку после показа
                 if self._edit_frame_visible:
@@ -1355,14 +1344,14 @@ class OverlayWindow:
                     self._ensure_topmost()
 
                     # ============================================================
-                    # УСТАНАВЛИВАЕМ ФОКУС ДЛЯ ПЕРЕХВАТА ESC
+                    # УСТАНАВЛИВАЕМ ФОКУС НА ОВЕРЛЕЙ ДЛЯ ПЕРЕХВАТА ESC
                     # ============================================================
                     try:
                         self.canvas.focus_set()
                         self.root.focus_force()
-                        self.logger.info("[DEBUG] _show_internal - фокус установлен на оверлей")
+                        self.logger.debug("[DEBUG] Фокус установлен на оверлей для ESC")
                     except Exception as e:
-                        self.logger.warning(f"[DEBUG] _show_internal - не удалось установить фокус: {e}")
+                        self.logger.warning(f"[DEBUG] Не удалось установить фокус: {e}")
 
                     if self._saved_position:
                         x, y = self._saved_position
@@ -1370,7 +1359,7 @@ class OverlayWindow:
                         current_y = self.root.winfo_y()
                         if abs(current_x - x) > 5 or abs(current_y - y) > 5:
                             self.root.geometry(f"+{x}+{y}")
-                    self._enable_esc_hook()
+
                     if self.auto_hide_enabled:
                         self._start_visibility_monitor()
 
@@ -1469,7 +1458,7 @@ class OverlayWindow:
             self.visible = False
             try:
                 self.root.withdraw()
-                self._disable_esc_hook()
+                # УДАЛЕНО: self._disable_esc_hook()
             except Exception as e:
                 self.logger.error(f"[DEBUG][_hide_internal] ОШИБКА: {e}")
 

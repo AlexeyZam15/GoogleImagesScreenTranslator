@@ -1,158 +1,160 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """
-Точка входа для программы перевода скриншотов
+Точка входа в приложение GoogleScreenTranslate
 """
 
 import sys
 import os
-import logging
+import argparse
+import tkinter as tk
 from pathlib import Path
 
-# Добавляем папку src в путь импорта
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+# Добавляем корневую папку в путь
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# === ИМПОРТ ДЛЯ ПРОВЕРКИ ВЕРСИИ ===
-from src.version_checker import check_and_clean_version
-
-# Проверяем аргументы командной строки
-DEBUG_MODE = '--debug' in sys.argv or '-d' in sys.argv
-ADMIN_MODE = '--admin' in sys.argv
+from src.app import ScreenshotTranslatorApp
+from src.version_checker import check_and_clean_version, APP_VERSION
 
 
-def is_admin():
-    """Проверяет, запущена ли программа с правами администратора"""
-    try:
-        import ctypes
-        return ctypes.windll.shell32.IsUserAnAdmin() != 0
-    except:
-        return False
+def parse_arguments():
+    """Парсит аргументы командной строки"""
+    parser = argparse.ArgumentParser(
+        description="GoogleScreenTranslate - перевод скриншотов через Google Translate",
+        epilog="Пример: python main.py --debug"
+    )
+
+    parser.add_argument(
+        '--debug',
+        '-d',
+        action='store_true',
+        help='Включить режим отладки (подробные логи)'
+    )
+
+    parser.add_argument(
+        '--no-browser',
+        action='store_true',
+        help='Запустить без отображения браузера'
+    )
+
+    parser.add_argument(
+        '--lang',
+        '-l',
+        type=str,
+        choices=['ru', 'en'],
+        default=None,
+        help='Язык интерфейса (ru/en)'
+    )
+
+    parser.add_argument(
+        '--version',
+        '-v',
+        action='version',
+        version=f'GoogleScreenTranslate v{APP_VERSION}'
+    )
+
+    return parser.parse_args()
 
 
-def run_as_admin():
-    """Перезапускает программу с правами администратора"""
-    try:
-        import ctypes
-        import sys
-        import os
+def setup_debug_logging():
+    """Настраивает расширенное логирование для debug режима"""
+    import logging
 
-        script_path = os.path.abspath(sys.argv[0])
-        args = ' '.join([arg for arg in sys.argv[1:] if arg != '--admin'])
+    # Устанавливаем уровень логирования DEBUG для всех модулей
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
 
-        ctypes.windll.shell32.ShellExecuteW(
-            None,
-            "runas",
-            sys.executable,
-            f'"{script_path}" {args}',
-            None,
-            1
-        )
-        return True
-    except Exception as e:
-        print(f"Ошибка при запросе прав администратора: {e}")
-        return False
+    # Включаем DEBUG для всех модулей src
+    for logger_name in ['src.app', 'src.overlay', 'src.overlay_manager',
+                        'src.hotkeys', 'src.translation_monitor',
+                        'src.browser_worker', 'src.translator']:
+        logging.getLogger(logger_name).setLevel(logging.DEBUG)
+
+    # Отключаем излишние логи от сторонних библиотек
+    logging.getLogger("playwright").setLevel(logging.WARNING)
+    logging.getLogger("PIL").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("asyncio").setLevel(logging.WARNING)
+
+    print("🐞 РЕЖИМ ОТЛАДКИ ВКЛЮЧЕН")
+    print("=" * 70)
 
 
-if __name__ == "__main__":
-    # === ПРИНУДИТЕЛЬНЫЙ ВЫВОД В КОНСОЛЬ ===
+def main():
+    """Главная функция запуска"""
+    # Парсим аргументы командной строки
+    args = parse_arguments()
+
     print("=" * 70)
     print("🚀 ЗАПУСК GoogleScreenTranslate")
     print("=" * 70)
     print(f"📂 Текущая директория: {os.getcwd()}")
     print(f"🐍 Python: {sys.executable}")
     print(f"📋 Аргументы: {sys.argv}")
+    print(f"🔧 Режим отладки: {'ВКЛЮЧЕН' if args.debug else 'ВЫКЛЮЧЕН'}")
     print("=" * 70)
-    sys.stdout.flush()
-
-    # === ПРОВЕРКА ВЕРСИИ В САМОМ НАЧАЛЕ ===
-    app_docs_path = Path.home() / "Documents" / "GoogleScreenTranslate"
-    version_ok = check_and_clean_version(app_docs_path)
-    if not version_ok:
-        print("⚠️ Ошибка при проверке версии, работа продолжается...")
-        sys.stdout.flush()
-
-    # Проверяем аргументы командной строки
-    DEBUG_MODE = '--debug' in sys.argv or '-d' in sys.argv
-    ADMIN_MODE = '--admin' in sys.argv
-
-
-    def is_admin():
-        """Проверяет, запущена ли программа с правами администратора"""
-        try:
-            import ctypes
-            return ctypes.windll.shell32.IsUserAnAdmin() != 0
-        except:
-            return False
-
-
-    def run_as_admin():
-        """Перезапускает программу с правами администратора"""
-        try:
-            import ctypes
-            import sys
-            import os
-
-            script_path = os.path.abspath(sys.argv[0])
-            args = ' '.join([arg for arg in sys.argv[1:] if arg != '--admin'])
-
-            ctypes.windll.shell32.ShellExecuteW(
-                None,
-                "runas",
-                sys.executable,
-                f'"{script_path}" {args}',
-                None,
-                1
-            )
-            return True
-        except Exception as e:
-            print(f"Ошибка при запросе прав администратора: {e}")
-            return False
-
-
-    # Проверяем режим администратора
-    if ADMIN_MODE and not is_admin():
-        print("👑 Запрос прав администратора...")
-        sys.stdout.flush()
-        if run_as_admin():
-            print("✅ Программа перезапущена с правами администратора")
-            sys.stdout.flush()
-            sys.exit(0)
-        else:
-            print("❌ Не удалось получить права администратора")
-            print("⚠️ Программа будет запущена с ограниченными правами")
-            sys.stdout.flush()
-    elif ADMIN_MODE and is_admin():
-        print("👑 РЕЖИМ АДМИНИСТРАТОРА: программа запущена с правами администратора")
-        sys.stdout.flush()
-
-    # Инициализация настроек (после проверки версии)
-    from src.settings import Settings
-
-    settings = Settings()
-    if not settings.profiles:
-        settings.profiles = {
-            "default": {
-                "name": "Профиль по умолчанию",
-                "pairs": []
-            }
-        }
-        settings.save()
-
-    if DEBUG_MODE:
-        settings.set_show_browser(True)
-        print("🔧 РЕЖИМ ОТЛАДКИ: браузер будет показан")
-    else:
-        settings.set_show_browser(False)
-
-    sys.stdout.flush()
-
-    from src.app import ScreenshotTranslatorApp
-
     print("⏳ Запуск приложения...")
-    sys.stdout.flush()
 
+    # Если включен debug режим - настраиваем расширенное логирование
+    if args.debug:
+        setup_debug_logging()
+
+    # Проверяем и очищаем папку приложения при несоответствии версий
+    app_docs_path = Path.home() / "Documents" / "GoogleScreenTranslate"
+    check_and_clean_version(app_docs_path)
+
+    # Создаем приложение
     app = ScreenshotTranslatorApp()
 
-    print("✅ Приложение запущено, вход в главный цикл...")
-    sys.stdout.flush()
+    # Применяем аргументы командной строки
+    if args.lang:
+        app.settings.set_language(args.lang)
+        app.ui.update_ui_language()
+        print(f"🌐 Язык интерфейса установлен: {args.lang}")
 
-    app.run()
+    if args.no_browser:
+        app.settings.set_show_browser(False)
+        print("🌐 Браузер будет скрыт")
+
+    # ============================================================
+    # ОБРАБОТКА ЗАКРЫТИЯ ОКНА
+    # ============================================================
+    def on_closing():
+        """Обработчик закрытия главного окна"""
+        print("\n🛑 Закрытие приложения...")
+        app.on_close()
+
+    # Привязываем обработчик закрытия к окну
+    app.ui.root.protocol("WM_DELETE_WINDOW", on_closing)
+
+    # Также обрабатываем Ctrl+Q для выхода
+    app.ui.root.bind('<Control-q>', lambda e: on_closing())
+    app.ui.root.bind('<Control-Q>', lambda e: on_closing())
+
+    # Обработка Alt+F4 (стандартное закрытие окна)
+    app.ui.root.bind('<Alt-F4>', lambda e: on_closing())
+
+    # В debug режиме добавляем дополнительную информацию в статус
+    if args.debug:
+        app.ui.update_status("🐞 DEBUG режим", '#ff9800')
+        print("🐞 Отладка: добавлена дополнительная информация в логи")
+
+    print("✅ Приложение запущено, вход в главный цикл...")
+
+    try:
+        app.run()
+    except KeyboardInterrupt:
+        print("\n⏹️ Прервано пользователем (Ctrl+C)")
+        app.on_close()
+    except Exception as e:
+        print(f"\n❌ Критическая ошибка: {e}")
+        import traceback
+        traceback.print_exc()
+        app.on_close()
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

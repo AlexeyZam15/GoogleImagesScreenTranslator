@@ -48,7 +48,17 @@ class MainWindow:
         self.root.resizable(True, True)
         self.root.configure(bg='#1e1e1e')
 
-        self.target_lang_var = StringVar(value=self.settings.get_target_language())
+        # ============================================================
+        # ДОБАВЛЯЕМ ПРИВЯЗКУ ЗАКРЫТИЯ ОКНА
+        # ============================================================
+        self.root.protocol("WM_DELETE_WINDOW", self.app.on_close)
+
+        # ============================================================
+        # ДОБАВЛЯЕМ ОБРАБОТЧИК ИЗМЕНЕНИЯ РАЗМЕРА ОКНА (ДЛЯ СВОРАЧИВАНИЯ/ВОССТАНОВЛЕНИЯ)
+        # ============================================================
+        self.root.bind('<Configure>', self._on_window_configure)
+
+        self.target_lang_var = tk.StringVar(value=self.settings.get_target_language())
         self._all_lang_items = []
 
         self._window_hwnd_map = {}
@@ -76,6 +86,30 @@ class MainWindow:
         self.root.deiconify()
         self.root.lift()
         self.root.focus_force()
+
+    def _on_window_configure(self, event):
+        """
+        Обработчик изменения размера/состояния окна.
+        Вызывается при сворачивании, восстановлении, изменении размера.
+        """
+        # Проверяем, что событие относится к нашему окну, а не к дочерним элементам
+        if event.widget == self.root:
+            try:
+                state = self.root.winfo_state()
+
+                if state == 'iconic':
+                    # Окно свернуто - приостанавливаем мониторинг
+                    self.logger.info("[WINDOW] Окно свернуто, приостанавливаем работу монитора...")
+                    if hasattr(self.app, 'translation_monitor') and self.app.translation_monitor:
+                        self.app.translation_monitor.stop()
+                elif state == 'normal':
+                    # Окно восстановлено - возобновляем мониторинг если нужно
+                    self.logger.info("[WINDOW] Окно восстановлено, возобновляем работу монитора...")
+                    if hasattr(self.app, 'translation_monitor') and self.app.translation_monitor:
+                        if self.app.settings.get_auto_replace_translated():
+                            self.app.translation_monitor.start()
+            except Exception as e:
+                self.logger.warning(f"[WINDOW] Ошибка обработки состояния окна: {e}")
 
     def _create_context_menu(self):
         """Создает контекстное меню для списка окон"""
@@ -134,7 +168,6 @@ class MainWindow:
             traceback.print_exc()
         finally:
             self.context_menu.grab_release()
-
 
     def create_menu(self):
         """Создает главное меню"""
