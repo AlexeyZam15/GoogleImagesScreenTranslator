@@ -1696,15 +1696,17 @@ class ScreenshotTranslatorApp:
         return debug_dir, timestamp
 
     def _get_ocr_regions(self, translated_image_path: Path, debug_dir: Path, timestamp: str):
-        """Получает регионы через OCR с параметрами для движка."""
+        """Получает регионы через OCR с фильтрацией по уверенности (минимум 0.7)."""
         import time
         step_start = time.time()
         self.logger.info("[TIMING] Этап 4: OCR-обработка (get_regions_from_image)...")
 
         engine = self.settings.get_translator_engine()
+
+        # Получаем полные результаты OCR с уверенностью
         if engine == "yandex":
             # Для Яндекс - объединяем только зоны с минимальным gap (0-1px)
-            regions = self.ocr_processor.get_regions_from_image(
+            results, _ = self.ocr_processor.process_image(
                 translated_image_path,
                 save_debug=True,
                 debug_dir=debug_dir,
@@ -1714,15 +1716,42 @@ class ScreenshotTranslatorApp:
             )
         else:
             # Для Google - стандартные параметры
-            regions = self.ocr_processor.get_regions_from_image(
+            results, _ = self.ocr_processor.process_image(
                 translated_image_path,
                 save_debug=True,
                 debug_dir=debug_dir,
                 debug_prefix=timestamp
             )
 
+        # ============================================================
+        # ФИЛЬТРУЕМ РЕГИОНЫ ПО УВЕРЕННОСТИ (МИНИМУМ 0.7)
+        # ============================================================
+        MIN_CONFIDENCE = 0.7
+        regions = []
+        rejected_count = 0
+
+        for bbox, text, confidence in results:
+            if confidence >= MIN_CONFIDENCE:
+                x_coords = [p[0] for p in bbox]
+                y_coords = [p[1] for p in bbox]
+                x1 = int(min(x_coords))
+                y1 = int(min(y_coords))
+                x2 = int(max(x_coords))
+                y2 = int(max(y_coords))
+                if x2 > x1 and y2 > y1:
+                    regions.append((x1, y1, x2, y2))
+                    self.logger.debug(f"[OCR] ✅ Принята зона: '{text[:30]}' (уверенность: {confidence:.3f})")
+            else:
+                rejected_count += 1
+                self.logger.debug(
+                    f"[OCR] ❌ Отклонена зона: '{text[:30]}' (уверенность: {confidence:.3f} < {MIN_CONFIDENCE})")
+
         ocr_time = time.time() - step_start
-        self.logger.info(f"[TIMING] Этап 4: {ocr_time:.3f}с (найдено {len(regions)} областей, движок: {engine})")
+        self.logger.info(
+            f"[TIMING] Этап 4: {ocr_time:.3f}с (найдено {len(regions)} областей, "
+            f"отклонено {rejected_count}, движок: {engine})"
+        )
+
         return regions
 
     def _save_ocr_debug_image(self, translated_img, regions, debug_dir, timestamp):
@@ -1741,10 +1770,9 @@ class ScreenshotTranslatorApp:
             self.logger.warning(f"[DEBUG] Не удалось сохранить отладочный скриншот: {e}")
 
     def _handle_ocr_no_text(self):
-        """Обрабатывает случай, когда текст не обнаружен."""
-        self.logger.info("[F3_HOLD] Текст не обнаружен")
-        self.show_notification("ℹ️ Текст не обнаружен")
-        # Статус убран
+        """Обрабатывает случай, когда текст не обнаружен или все зоны отклонены."""
+        self.logger.info("[F3_HOLD] Текст не обнаружен или все зоны отклонены (низкая уверенность)")
+        self.show_notification("ℹ️ Текст не обнаружен или низкая уверенность распознавания")
         self.set_actions_blocked(False)
         self._hide_translation_overlay()
 
@@ -1798,7 +1826,6 @@ class ScreenshotTranslatorApp:
                     self.logger.info(f"[F3_HOLD] Зона #{i} пропущена (уже занята)")
                     continue
 
-                # === ИЗМЕНЕНИЕ: НЕ создаем оверлей, только добавляем шаблон в монитор ===
                 # Сохраняем регион изображения как шаблон
                 region_img = translated_img.crop((x1, y1, x2, y2))
                 region_path = self.temp_dir / f"ocr_region_{i}_{int(time.time())}.png"
