@@ -54,22 +54,9 @@ class MainWindow:
         self.root.protocol("WM_DELETE_WINDOW", self.app.on_close)
 
         # ============================================================
-        # ДОБАВЛЯЕМ ОБРАБОТЧИК ИЗМЕНЕНИЯ РАЗМЕРА ОКНА (ДЛЯ СВОРАЧИВАНИЯ/ВОССТАНОВЛЕНИЯ)
+        # ДОБАВЛЯЕМ ОБРАБОТЧИК ИЗМЕНЕНИЯ РАЗМЕРА ОКНА
         # ============================================================
         self.root.bind('<Configure>', self._on_window_configure)
-
-        self.target_lang_var = tk.StringVar(value=self.settings.get_target_language())
-        self._all_lang_items = []
-
-        self._window_hwnd_map = {}
-        self.window_listbox = None
-        self.status = None
-        self.settings_btn = None
-        self.lang_btn = None
-        self.title_label = None
-        self.target_lang_combo = None
-        self.target_lang_label = None
-        self.context_menu = None
 
         self._setup_icon()
         self.create_menu()
@@ -77,6 +64,12 @@ class MainWindow:
         self._create_context_menu()
         self.update_ui_language()
         self._center_window()
+
+        # ============================================================
+        # ИНИЦИАЛИЗИРУЕМ СЛОВАРИ ДЛЯ WINDOW_LIST_MANAGER
+        # ============================================================
+        self._window_hwnd_map = {}
+        self._window_app_map = {}
 
         # ============================================================
         # ОТКЛЮЧАЕМ СТАНДАРТНУЮ ОБРАБОТКУ F1 (СПРАВКА) В TKINTER
@@ -92,22 +85,27 @@ class MainWindow:
         Обработчик изменения размера/состояния окна.
         Вызывается при сворачивании, восстановлении, изменении размера.
         """
-        # Проверяем, что событие относится к нашему окну, а не к дочерним элементам
+        # Проверяем, что событие относится к нашему окну
         if event.widget == self.root:
             try:
-                state = self.root.winfo_state()
+                # Дополнительная проверка существования окна
+                if self.root and self.root.winfo_exists():
+                    state = self.root.winfo_state()
 
-                if state == 'iconic':
-                    # Окно свернуто - приостанавливаем мониторинг
-                    self.logger.info("[WINDOW] Окно свернуто, приостанавливаем работу монитора...")
-                    if hasattr(self.app, 'translation_monitor') and self.app.translation_monitor:
-                        self.app.translation_monitor.stop()
-                elif state == 'normal':
-                    # Окно восстановлено - возобновляем мониторинг если нужно
-                    self.logger.info("[WINDOW] Окно восстановлено, возобновляем работу монитора...")
-                    if hasattr(self.app, 'translation_monitor') and self.app.translation_monitor:
-                        if self.app.settings.get_auto_replace_translated():
-                            self.app.translation_monitor.start()
+                    if state == 'iconic':
+                        # Окно свернуто - приостанавливаем мониторинг
+                        self.logger.info("[WINDOW] Окно свернуто, приостанавливаем работу монитора...")
+                        if hasattr(self.app, 'translation_monitor') and self.app.translation_monitor:
+                            self.app.translation_monitor.stop()
+                    elif state == 'normal':
+                        # Окно восстановлено - возобновляем мониторинг если нужно
+                        self.logger.info("[WINDOW] Окно восстановлено, возобновляем работу монитора...")
+                        if hasattr(self.app, 'translation_monitor') and self.app.translation_monitor:
+                            if self.app.settings.get_auto_replace_translated():
+                                self.app.translation_monitor.start()
+            except AttributeError:
+                # Игнорируем ошибки отсутствия метода winfo_state
+                pass
             except Exception as e:
                 self.logger.warning(f"[WINDOW] Ошибка обработки состояния окна: {e}")
 
