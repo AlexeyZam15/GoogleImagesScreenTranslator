@@ -201,6 +201,24 @@ class HotkeyCaptureManager:
             logger.warning("[HOTKEYS] Попытка обмена с пустой комбинацией")
             return False
 
+        # ============================================================
+        # ПРОВЕРКА ВАЛИДНОСТИ КОМБИНАЦИИ
+        # ============================================================
+        try:
+            import keyboard
+            # Пытаемся зарегистрировать временный хук для проверки
+            def temp_callback():
+                pass
+
+            keyboard.add_hotkey(new_combo, temp_callback, suppress=True)
+            # Если дошли сюда — комбинация валидна, отменяем регистрацию
+            keyboard.remove_hotkey(new_combo)
+            logger.info(f"[HOTKEYS] Комбинация '{new_combo}' валидна")
+        except Exception as e:
+            logger.warning(f"[HOTKEYS] Комбинация '{new_combo}' невалидна: {e}")
+            # Возвращаем False, чтобы не сохранять невалидную комбинацию
+            return False
+
         # Проверяем, не занята ли комбинация другим действием
         conflicting_action = None
         old_combo = self.hotkey_vars[action].get()

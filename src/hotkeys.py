@@ -149,14 +149,15 @@ class HotkeyManager:
             # Список действий, которые обрабатываются отдельно (сложные/длительное зажатие)
             special_actions = ['area', 'fullscreen_ocr', 'edit_mode']
 
-            # Регистрируем обычные клавиши
+            # Регистрируем обычные клавиши через add_hotkey
             for action, hotkey in self._hotkey_actions.items():
                 if action in special_actions:
                     continue  # Эти обрабатываются отдельно
                 if hotkey:
                     try:
-                        keyboard.on_press_key(hotkey, lambda e, a=action: self._queue_action(a), suppress=True)
-                        self.logger.info(f"[HOTKEYS] Зарегистрировано (блокировка): {hotkey} -> {action}")
+                        # Используем add_hotkey для поддержки комбинаций
+                        keyboard.add_hotkey(hotkey, lambda a=action: self._queue_action(a), suppress=True)
+                        self.logger.info(f"[HOTKEYS] Зарегистрировано: {hotkey} -> {action}")
                     except Exception as e:
                         self.logger.warning(f"[HOTKEYS] Не удалось зарегистрировать {hotkey}: {e}")
 
@@ -187,10 +188,6 @@ class HotkeyManager:
         except Exception as e:
             self.logger.error(f"[HOTKEYS] Ошибка регистрации: {e}")
         finally:
-            # ============================================================
-            # Сбрасываем флаг СРАЗУ, а не с задержкой
-            # Теперь задержка управляется через _delayed_setup
-            # ============================================================
             self._setup_in_progress = False
             self.logger.info("[HOTKEYS] Флаг _setup_in_progress сброшен")
 
@@ -390,10 +387,11 @@ class HotkeyManager:
         try:
             import keyboard
             keyboard.unhook_all()
+            keyboard.unhook_all_hotkeys()  # <-- ДОБАВЛЯЕМ
             self._hotkey_hook_active = False
             self._action_queue.clear()
             self._processing_queue = False
-            self.cleanup_esc_hook()  # <-- ДОБАВИТЬ ЭТУ СТРОКУ
+            self.cleanup_esc_hook()
             self.logger.info("[HOTKEYS] Все хуки очищены")
         except Exception as e:
             self.logger.error(f"[HOTKEYS] Ошибка очистки: {e}")
