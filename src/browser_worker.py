@@ -167,7 +167,7 @@ class BrowserWorker:
                 self.translator = None
 
             import time
-            time.sleep(0.5)
+            time.sleep(2.0)  # УВЕЛИЧЕНО: 0.5 -> 2.0
 
             engine = self.settings.get_translator_engine()
             self.logger.info(f"Используемый движок перевода: {engine}")
@@ -222,7 +222,7 @@ class BrowserWorker:
         self._ready = False
 
         import time
-        time.sleep(1.0)
+        time.sleep(2.0)  # УВЕЛИЧЕНО: 1.0 -> 2.0
 
         return self._init_browser(show_browser, target_lang)
 
@@ -292,7 +292,7 @@ class BrowserWorker:
         # 4. Ждем завершения потока с таймаутом
         if self._thread and self._thread.is_alive():
             self.logger.info("[BROWSER_WORKER] Ожидание завершения потока...")
-            self._thread.join(timeout=3.0)
+            self._thread.join(timeout=5.0)  # УВЕЛИЧЕНО: 3.0 -> 5.0
 
             if self._thread.is_alive():
                 self.logger.warning("[BROWSER_WORKER] Поток не завершился, принудительное завершение")

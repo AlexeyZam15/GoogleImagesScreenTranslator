@@ -103,13 +103,13 @@ class GoogleTranslateDebug:
                     "--disable-popup-blocking",
                 ],
                 ignore_default_args=["--enable-automation"],
-                timeout=30000,
+                timeout=60000,  # УВЕЛИЧЕНО: добавлен таймаут 60 секунд для запуска браузера
                 permissions=["clipboard-read", "clipboard-write"],
                 executable_path=browser_path,
             )
             self.logger.info("✅ Браузер запущен")
-            self.logger.info("Ожидание инициализации браузера (2с)...")
-            time.sleep(2)
+            self.logger.info("Ожидание инициализации браузера (3с)...")
+            time.sleep(3)  # УВЕЛИЧЕНО: 2 -> 3
 
             pages = self._context.pages
             if pages:
@@ -982,12 +982,12 @@ class YandexOcrTranslator:
                     "--disable-features=IsolateOrigins,site-per-process",
                 ],
                 ignore_default_args=["--enable-automation"],
-                timeout=30000,
+                timeout=60000,  # УВЕЛИЧЕНО: добавлен таймаут 60 секунд для запуска браузера
                 executable_path=browser_path,
             )
             self.logger.info("✅ Браузер запущен")
 
-            time.sleep(2)
+            time.sleep(3)  # УВЕЛИЧЕНО: 2 -> 3
 
             pages = self._context.pages
             if pages:
