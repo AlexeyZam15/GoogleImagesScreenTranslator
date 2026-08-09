@@ -409,6 +409,14 @@ class OverlayWindow:
             self._mouse_over = True
             return
 
+        # ============================================================
+        # В РЕЖИМЕ РЕДАКТИРОВАНИЯ НЕ СКРЫВАЕМ ОВЕРЛЕЙ ПРИ НАВЕДЕНИИ
+        # ============================================================
+        if self._edit_mode_enabled:
+            self.logger.debug("[DEBUG] _on_mouse_enter: режим редактирования, оверлей не скрываем")
+            self._mouse_over = True
+            return
+
         if self._suppress_enter_events:
             self._suppress_enter_events = False
             return
@@ -419,9 +427,7 @@ class OverlayWindow:
         self._mouse_over = True
         self.logger.debug(f"[DEBUG] _on_mouse_enter: mouse_over=True, edit_mode={self._edit_mode_enabled}")
 
-        # ============================================================
-        # СКРЫВАЕМ ОВЕРЛЕЙ ПРИ НАВЕДЕНИИ МЫШИ
-        # ============================================================
+        # Скрываем оверлей при наведении (только в режиме просмотра)
         if self.visible and self._is_visible_by_user:
             self.logger.debug("[DEBUG] _on_mouse_enter: скрываем оверлей (наведение мыши)")
             self._hidden_by_mouse = True
@@ -440,6 +446,14 @@ class OverlayWindow:
             self._mouse_over = False
             return
 
+        # ============================================================
+        # В РЕЖИМЕ РЕДАКТИРОВАНИЯ НЕ ПОКАЗЫВАЕМ ОВЕРЛЕЙ АВТОМАТИЧЕСКИ
+        # ============================================================
+        if self._edit_mode_enabled:
+            self.logger.debug("[DEBUG] _on_mouse_leave: режим редактирования, игнорируем")
+            self._mouse_over = False
+            return
+
         if not self._is_visible_by_user:
             self.logger.debug(f"[DEBUG] _on_mouse_leave: _is_visible_by_user=False, игнорируем")
             return
@@ -452,9 +466,7 @@ class OverlayWindow:
 
         self._hidden_by_mouse = False
 
-        # ============================================================
-        # ПОКАЗЫВАЕМ ОВЕРЛЕЙ ПРИ УХОДЕ МЫШИ
-        # ============================================================
+        # Показываем оверлей при уходе мыши (только в режиме просмотра)
         if self._last_image_path and self._last_window_rect:
             if not self.visible and not self._hidden_by_mouse:
                 self._show_internal()
@@ -487,19 +499,21 @@ class OverlayWindow:
         except Exception as e:
             self.logger.warning(f"[DEBUG][hide] Ошибка сохранения позиции: {e}")
 
-        # by_user=False означает, что оверлей скрывается системой (переключение окна)
+        # ============================================================
+        # F1: by_user=True означает, что пользователь нажал F1
+        # В режиме редактирования F1 тоже должен работать
+        # ============================================================
         if by_user:
             self._hidden_by_user = True
             self._is_visible_by_user = False
         else:
-            # При системном скрытии НЕ сбрасываем _is_visible_by_user,
+            # При системном скрытии (переключение окон) НЕ сбрасываем _is_visible_by_user,
             # чтобы оверлей мог быть показан автоматически при возврате в окно
             self._hidden_by_user = False
 
         self.visible = False
 
         self._stop_visibility_monitor()
-        # УДАЛЕНО: self._disable_esc_hook()
 
         try:
             self.root.withdraw()
@@ -575,14 +589,8 @@ class OverlayWindow:
             self._is_visible_by_user = True
 
             # ============================================================
-            # УСТАНАВЛИВАЕМ ФОКУС НА ОВЕРЛЕЙ ДЛЯ ПЕРЕХВАТА КЛАВИАТУРЫ
+            # УБРАН АВТОФОКУС НА ОВЕРЛЕЙ
             # ============================================================
-            try:
-                self.canvas.focus_set()
-                self.root.focus_force()
-                self.logger.info("[DEBUG] Фокус установлен на оверлей для ESC")
-            except Exception as e:
-                self.logger.warning(f"[DEBUG] Не удалось установить фокус: {e}")
 
             if self.auto_hide_enabled:
                 self._start_visibility_monitor()
@@ -597,11 +605,27 @@ class OverlayWindow:
 
         self._edit_mode_enabled = edit_mode_enabled
 
-        # Обновляем рамку: показываем при включении режима, скрываем при выключении
+        # ============================================================
+        # ТОЛЬКО РАМКА! Монитор видимости и F1 продолжают работать
+        # ============================================================
         if edit_mode_enabled:
+            # Показываем рамку
             self._show_edit_frame()
+
+            # Сбрасываем флаг скрытия мышью (чтобы оверлей не был скрыт из-за мыши)
+            # НО НЕ ВЛИЯЕМ НА F1 И АВТОСКРЫТИЕ ПРИ ПЕРЕКЛЮЧЕНИИ ОКОН
+            if self._hidden_by_mouse:
+                self._hidden_by_mouse = False
+                if not self.visible and self._last_image_path and self._last_window_rect:
+                    # Показываем только если оверлей НЕ скрыт пользователем (F1) и НЕ скрыт системой
+                    if not self._hidden_by_user and self._is_visible_by_user:
+                        self.show()
+
+            self.logger.info("[DEBUG] Режим редактирования включен: рамка показана")
         else:
+            # Скрываем рамку
             self._hide_edit_frame()
+            self.logger.info("[DEBUG] Режим редактирования выключен: рамка скрыта")
 
     def _start_drag(self, event):
         """Начинает перетаскивание окна."""
@@ -1130,14 +1154,8 @@ class OverlayWindow:
                 self._enable_esc_hook()
 
                 # ============================================================
-                # УСТАНАВЛИВАЕМ ФОКУС НА ОВЕРЛЕЙ ДЛЯ ПЕРЕХВАТА ESC
+                # УБРАН АВТОФОКУС НА ОВЕРЛЕЙ
                 # ============================================================
-                try:
-                    self.canvas.focus_set()
-                    self.root.focus_force()
-                    self.logger.info("[DEBUG] Фокус установлен на оверлей для ESC")
-                except Exception as e:
-                    self.logger.warning(f"[DEBUG] Не удалось установить фокус: {e}")
 
                 if self._edit_frame_visible:
                     self._update_edit_frame_position()
@@ -1334,14 +1352,8 @@ class OverlayWindow:
                     self._ensure_topmost()
 
                     # ============================================================
-                    # УСТАНАВЛИВАЕМ ФОКУС НА ОВЕРЛЕЙ ДЛЯ ПЕРЕХВАТА ESC
+                    # УБРАН АВТОФОКУС НА ОВЕРЛЕЙ
                     # ============================================================
-                    try:
-                        self.canvas.focus_set()
-                        self.root.focus_force()
-                        self.logger.debug("[DEBUG] Фокус установлен на оверлей для ESC")
-                    except Exception as e:
-                        self.logger.warning(f"[DEBUG] Не удалось установить фокус: {e}")
 
                     if self._saved_position:
                         x, y = self._saved_position

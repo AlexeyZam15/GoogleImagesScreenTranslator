@@ -65,6 +65,71 @@ class OverlayManager:
 
         self.logger.info("OverlayManager инициализирован")
 
+    def _hide_overlay_under_cursor(self):
+        """Скрывает оверлей через контекстное меню."""
+        self.logger.info("[DEBUG] Скрытие оверлея через контекстное меню")
+
+        try:
+            if self._context_menu:
+                try:
+                    self._context_menu.unpost()
+                    self._context_menu.update_idletasks()
+                except Exception as e:
+                    self.logger.warning(f"[DEBUG] Ошибка при unpost: {e}")
+
+            overlay = self._context_menu_overlay
+
+            if overlay is None:
+                self.logger.warning("[DEBUG] Нет оверлея для скрытия")
+                return
+
+            if overlay not in self.overlays:
+                self.logger.warning("[DEBUG] Оверлей не найден в списке")
+                return
+
+            self.logger.info(f"[DEBUG] Скрываем оверлей: {overlay}")
+
+            overlay._hidden_by_user = True
+            overlay._is_visible_by_user = False
+            overlay._hidden_by_mouse = False
+            overlay._mouse_over = False
+            overlay.auto_hide_enabled = True
+
+            overlay.hide(by_user=True)
+
+            self.logger.info("[DEBUG] Оверлей скрыт через контекстное меню")
+            self.save_overlay_state()
+
+        except Exception as e:
+            self.logger.error(f"[DEBUG] Ошибка при скрытии оверлея: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def is_overlay_hwnd(self, hwnd: int) -> bool:
+        """Проверяет, принадлежит ли HWND окну оверлея."""
+        if not hwnd:
+            return False
+
+        try:
+            for overlay in self.overlays:
+                if overlay is None:
+                    continue
+                try:
+                    if overlay.root is None:
+                        continue
+                    if not overlay.root.winfo_exists():
+                        continue
+                    overlay_hwnd = int(overlay.root.winfo_id())
+                    if overlay_hwnd == hwnd:
+                        return True
+                except Exception as e:
+                    self.logger.debug(f"[OVERLAY] Ошибка проверки оверлея: {e}")
+                    continue
+        except Exception as e:
+            self.logger.warning(f"[OVERLAY] Ошибка в is_overlay_hwnd: {e}")
+
+        return False
+
     def _global_esc_handler(self, event):
         """Глобальный обработчик ESC - передается в app.py."""
         if self.parent and hasattr(self.parent, '_global_esc_handler'):
@@ -1413,46 +1478,6 @@ class OverlayManager:
         """
         return self.overlays_by_hwnd.get(hwnd, [])
 
-    def _hide_overlay_under_cursor(self):
-        """Скрывает оверлей под курсором (через контекстное меню)."""
-        self.logger.info("[DEBUG] Скрытие оверлея через контекстное меню")
-
-        try:
-            if self._context_menu:
-                try:
-                    self._context_menu.unpost()
-                    self._context_menu.update_idletasks()
-                except Exception as e:
-                    self.logger.warning(f"[DEBUG] Ошибка при unpost: {e}")
-
-            overlay = self._context_menu_overlay
-
-            if overlay is None:
-                self.logger.warning("[DEBUG] Нет оверлея для скрытия")
-                return
-
-            if overlay not in self.overlays:
-                self.logger.warning("[DEBUG] Оверлей не найден в списке")
-                return
-
-            self.logger.info(f"[DEBUG] Скрываем оверлей: {overlay}")
-
-            overlay._hidden_by_user = True
-            overlay._is_visible_by_user = False
-            overlay._hidden_by_mouse = False
-            overlay._mouse_over = False
-            overlay.auto_hide_enabled = True
-
-            overlay.hide(by_user=True)
-
-            self.logger.info("[DEBUG] Оверлей скрыт через контекстное меню")
-            self.save_overlay_state()
-
-        except Exception as e:
-            self.logger.error(f"[DEBUG] Ошибка при скрытии оверлея: {e}")
-            import traceback
-            traceback.print_exc()
-
     def toggle_all_overlays(self):
         """Переключает видимость всех оверлеев."""
         if not self.overlays:
@@ -1619,7 +1644,9 @@ class OverlayManager:
         try:
             self._context_menu.delete(0, "end")
 
-            # Пункт "Скрыть" - всегда доступен
+            # ============================================================
+            # ПУНКТ "Скрыть оверлей" — ВСЕГДА ДОСТУПЕН
+            # ============================================================
             self._context_menu.add_command(
                 label="👁️ Скрыть оверлей",
                 command=self._hide_overlay_under_cursor
@@ -1627,36 +1654,12 @@ class OverlayManager:
             self._context_menu.add_separator()
 
             # ============================================================
-            # ПРОВЕРЯЕМ: можно ли удалять оверлей
+            # ПУНКТ "Удалить оверлей" — ВСЕГДА ДОСТУПЕН
             # ============================================================
-            can_delete = False
-
-            # 1. Проверяем глобальный режим редактирования (F5)
-            is_edit_mode = False
-            if hasattr(self.parent, 'is_edit_mode_enabled'):
-                is_edit_mode = self.parent.is_edit_mode_enabled()
-            elif hasattr(self.parent, '_edit_mode_enabled'):
-                is_edit_mode = self.parent._edit_mode_enabled
-
-            # 2. Проверяем, является ли оверлей F2-оверлеем
-            is_f2_overlay = hasattr(overlay, '_is_f2_overlay') and overlay._is_f2_overlay
-
-            # 3. Проверяем, включён ли режим редактирования у самого оверлея
-            overlay_edit_mode = hasattr(overlay, '_edit_mode_enabled') and overlay._edit_mode_enabled
-
-            # 4. F2-оверлеи можно удалять всегда
-            can_delete = is_f2_overlay or is_edit_mode or overlay_edit_mode
-
-            if can_delete:
-                self._context_menu.add_command(
-                    label="🗑️ Удалить оверлей",
-                    command=self._remove_overlay_under_cursor
-                )
-            else:
-                self._context_menu.add_command(
-                    label="🗑️ Удалить оверлей (включите F5)",
-                    state="disabled"
-                )
+            self._context_menu.add_command(
+                label="🗑️ Удалить оверлей",
+                command=self._remove_overlay_under_cursor
+            )
 
         except Exception as e:
             self.logger.warning(f"[DEBUG] Ошибка обновления меню: {e}")

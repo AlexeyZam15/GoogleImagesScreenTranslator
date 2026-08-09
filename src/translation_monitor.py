@@ -42,8 +42,8 @@ class TranslationMonitor:
         '_capture_debug_counter',
         '_size_debug_counter',
         '_match_debug_counter',
-        # === НОВЫЙ АТРИБУТ ===
-        '_first_scan_after_switch'
+        '_first_scan_after_switch',
+        '_our_app_name'  # <-- ДОБАВЛЯЕМ
     )
 
     def __init__(self, parent, overlay_manager, settings, debug_mode=False):
@@ -77,16 +77,16 @@ class TranslationMonitor:
         self._frame_cache_time = 0
         self._frame_cache_ttl = 0.05
 
-        # === НОВЫЕ АТРИБУТЫ ДЛЯ УМЕНЬШЕННОГО ИЗОБРАЖЕНИЯ ===
+        # Атрибуты для уменьшенного изображения
         self._frame_cache_original_size = None
         self._frame_cache_scale = 1.0
 
-        # === ОТЛАДОЧНЫЕ СЧЁТЧИКИ ===
+        # Отладочные счётчики
         self._capture_debug_counter = 0
         self._size_debug_counter = {}
         self._match_debug_counter = {}
 
-        # === НОВЫЙ АТРИБУТ: первый скан после переключения окна ===
+        # Первый скан после переключения окна
         self._first_scan_after_switch = True
 
         # Дополнительные атрибуты
@@ -95,11 +95,28 @@ class TranslationMonitor:
         self._last_captured_image = None
         self._last_captured_hwnd = None
 
+        # ============================================================
+        # ОПРЕДЕЛЯЕМ ИМЯ НАШЕГО ПРИЛОЖЕНИЯ ОДИН РАЗ
+        # ============================================================
+        self._our_app_name = self._get_our_app_name()
+
         if settings:
             self.confidence_threshold = settings.get_confidence_threshold()
             self.delay_sec = settings.get_monitor_delay()
 
-        self.logger.info("TranslationMonitor инициализирован")
+        self.logger.info(f"TranslationMonitor инициализирован, имя приложения: {self._our_app_name}")
+
+    def _get_our_app_name(self) -> str:
+        """Определяет имя текущего приложения один раз при инициализации."""
+        try:
+            import os
+            import psutil
+            current_pid = os.getpid()
+            current_process = psutil.Process(current_pid)
+            return current_process.name().lower()
+        except Exception as e:
+            self.logger.warning(f"Не удалось определить имя приложения: {e}")
+            return "python.exe"
 
     def _monitor_loop(self):
         """Основной цикл мониторинга — оптимизированная версия с логированием точности"""
@@ -744,7 +761,9 @@ class TranslationMonitor:
             is_temporary = template_data.get('is_temporary', False)
             lifetime_seconds = template_data.get('lifetime_seconds', 180)
 
-            # === НОВАЯ ПРОВЕРКА: активное окно должно соответствовать целевому приложению ===
+            # ============================================================
+            # ПРОВЕРКА АКТИВНОГО ОКНА
+            # ============================================================
             try:
                 import win32gui
                 from src.window_utils import get_process_name_by_hwnd
@@ -753,8 +772,12 @@ class TranslationMonitor:
                 if active_hwnd:
                     active_app_name = get_process_name_by_hwnd(active_hwnd)
 
-                    # Если целевое приложение указано и не совпадает с активным — скрываем оверлей
-                    if target_app_name and target_app_name != "Неизвестно":
+                    # ============================================================
+                    # ЕСЛИ АКТИВНОЕ ОКНО - НАШЕ ПРИЛОЖЕНИЕ, ПРОПУСКАЕМ ПРОВЕРКУ
+                    # ============================================================
+                    if active_app_name and active_app_name.lower() == self._our_app_name:
+                        self.logger.debug(f"[MONITOR] Активное окно {active_app_name} (наше приложение), не скрываем")
+                    elif target_app_name and target_app_name != "Неизвестно":
                         if active_app_name != target_app_name:
                             self.logger.info(
                                 f"[MONITOR] Шаблон #{pair_index} для {target_app_name}, "
@@ -769,13 +792,12 @@ class TranslationMonitor:
             if not template_id:
                 template_id = template_data.get('hash')
 
-            # Если шаблон НЕ найден - скрываем оверлей
             if not is_found:
                 if overlay and overlay.visible:
                     self._hide_overlay_in_main_thread(overlay, pair_index)
                 return
 
-            # === ШАБЛОН НАЙДЕН ===
+            # ШАБЛОН НАЙДЕН
             template_x = x
             template_y = y
             template_w = w
@@ -793,7 +815,6 @@ class TranslationMonitor:
                 template_data['overlay_width'] = overlay_w
                 template_data['overlay_height'] = overlay_h
 
-            # Вычисляем финальную позицию
             final_x = template_x + offset_x
             final_y = template_y + offset_y
             final_w = overlay_w
@@ -802,11 +823,10 @@ class TranslationMonitor:
             current_template_pos = (template_x, template_y)
             last_template_pos = template_data.get('last_template_position')
 
-            # === ЕСЛИ ОВЕРЛЕЙ УЖЕ СУЩЕСТВУЕТ ===
+            # ЕСЛИ ОВЕРЛЕЙ УЖЕ СУЩЕСТВУЕТ
             if overlay:
                 try:
                     if overlay.root and overlay.root.winfo_exists():
-                        # Проверяем, можно ли показывать оверлей
                         if not overlay.can_be_shown_by_monitor():
                             self.logger.info(
                                 f"[MONITOR] Шаблон #{pair_index} найден, но оверлей скрыт мышью/пользователем, не показываем"
@@ -816,7 +836,6 @@ class TranslationMonitor:
                         if hasattr(overlay, '_closing') and overlay._closing:
                             return
 
-                        # Обновляем позицию только если она изменилась
                         position_changed = (last_template_pos is None or last_template_pos != current_template_pos)
 
                         if position_changed:
@@ -827,7 +846,6 @@ class TranslationMonitor:
                             template_data['last_template_position'] = current_template_pos
                             self.logger.info(f"[MONITOR] Обновлена позиция оверлея #{pair_index}")
 
-                        # Сбрасываем флаги скрытия
                         overlay._hidden_by_user = False
                         overlay._hidden_by_mouse = False
 
@@ -845,7 +863,7 @@ class TranslationMonitor:
                     self.logger.warning(f"[MONITOR] Ошибка обновления оверлея #{pair_index}: {e}")
                     template_data['overlay'] = None
 
-            # === СОЗДАЁМ НОВЫЙ ОВЕРЛЕЙ ===
+            # СОЗДАЁМ НОВЫЙ ОВЕРЛЕЙ
             if not self.monitoring:
                 return
 
