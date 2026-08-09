@@ -68,6 +68,11 @@ class MainWindow:
         self.update_ui_language()
         self._center_window()
 
+        # ============================================================
+        # ОТКЛЮЧАЕМ СТАНДАРТНУЮ ОБРАБОТКУ F1 (СПРАВКА) В TKINTER
+        # ============================================================
+        self.root.bind('<F1>', lambda e: 'break')
+
         self.root.deiconify()
         self.root.lift()
         self.root.focus_force()
@@ -308,8 +313,6 @@ class MainWindow:
             highlightthickness=0
         )
         self.window_listbox.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
-
-        # Двойной клик удален - больше не нужен
 
     def update_ui_language(self):
         """Обновляет язык интерфейса"""

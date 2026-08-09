@@ -690,10 +690,14 @@ class SettingsWindow:
             )
             return
 
+        # Сохраняем старые значения для сравнения
+        old_auto_hide = self.settings.get_auto_hide_overlay()
+        new_auto_hide = self.auto_hide_var.get()
+
         # Сохраняем все настройки
         self.settings.set_browser_path(new_browser_path)
         self.settings.set_show_translation_indicator(self.show_indicator_var.get())
-        self.settings.set_auto_hide_overlay(self.auto_hide_var.get())
+        self.settings.set_auto_hide_overlay(new_auto_hide)
         self.settings.set_auto_windowed_fullscreen(self.auto_windowed_fullscreen_var.get())
         self.settings.set_auto_replace_translated(self.auto_replace_translated_var.get())
         self.settings.set_confidence_threshold(self.confidence_var.get())
@@ -716,6 +720,13 @@ class SettingsWindow:
                     self.settings.set_hotkey(action, key)
 
         self.settings.save()
+
+        # Если изменилась настройка автоскрытия - сбрасываем F1 состояние
+        if old_auto_hide != new_auto_hide:
+            logger.info(f"[SETTINGS] Изменена настройка автоскрытия: {old_auto_hide} -> {new_auto_hide}")
+            if hasattr(self, 'app') and hasattr(self.app, 'reset_f1_state'):
+                self.app.reset_f1_state()
+                logger.info("[SETTINGS] Состояние F1 сброшено после изменения автоскрытия")
 
         # Обновляем монитор
         if hasattr(self, 'app') and hasattr(self.app, 'translation_monitor'):
@@ -744,7 +755,6 @@ class SettingsWindow:
 
             if hasattr(self.app, 'ready') and self.app.ready:
                 logger.info("[SETTINGS] Браузер активен, выполняем перезапуск...")
-                # Всегда обновляем статус при перезапуске
                 if hasattr(self.app, 'update_status'):
                     self.app.update_status("● " + self.app.get_string('starting_browser'), '#ff9800')
                 if hasattr(self.app, '_restart_translator'):
@@ -770,14 +780,11 @@ class SettingsWindow:
             self.app.logger.info(f"Режим редактирования из настроек: {edit_mode}")
 
         # ============================================================
-        # ИЗМЕНЕНИЕ: Переустанавливаем горячие клавиши через HotkeyManager
+        # ЕДИНСТВЕННЫЙ ВЫЗОВ ПЕРЕРЕГИСТРАЦИИ ГОРЯЧИХ КЛАВИШ
         # ============================================================
         if hasattr(self, 'app') and hasattr(self.app, 'hotkeys'):
             self.app.hotkeys.setup()
             logger.info("[SETTINGS] Горячие клавиши переустановлены через HotkeyManager")
-        elif hasattr(self, 'app') and hasattr(self.app, 'setup_hotkeys'):
-            self.app.setup_hotkeys()
-            logger.warning("[SETTINGS] Используется устаревший setup_hotkeys")
 
         if hasattr(self, 'app') and hasattr(self.app, 'update_hotkey_buttons'):
             self.app.update_hotkey_buttons()
@@ -794,8 +801,28 @@ class SettingsWindow:
 
     def on_close(self):
         """Закрывает окно настроек и разблокирует выполнение хоткеев"""
+        self.logger = logging.getLogger(__name__)
+
+        # ============================================================
+        # ГАРАНТИРОВАННО РАЗБЛОКИРУЕМ ХОТКЕИ ПРИ ЗАКРЫТИИ
+        # ============================================================
         if hasattr(self.app, 'set_actions_blocked'):
             self.app.set_actions_blocked(False)
+            self.logger.info("[SETTINGS] Хоткеи разблокированы при закрытии окна")
+
+        # Если идет захват горячей клавиши - отменяем его
+        if hasattr(self, 'hotkey_capture_manager'):
+            for action in self.hotkey_capture_manager.hotkey_capturing:
+                if self.hotkey_capture_manager.hotkey_capturing[action]:
+                    self.hotkey_capture_manager.hotkey_capturing[action] = False
+                    self.hotkey_capture_manager.hotkey_buttons[action].config(
+                        bg='#2d2d2d',
+                        text=self.hotkey_capture_manager.hotkey_vars[action].get().upper() or "—"
+                    )
+                    self.window.unbind_all('<Key>')
+                    self.window.unbind_all('<Escape>')
+                    break
+
         try:
             self.window.destroy()
         except:
@@ -859,8 +886,10 @@ class SettingsWindow:
                     bg='#4CAF50' if edit_mode else '#ff9800'
                 )
 
-        if hasattr(self, 'app') and hasattr(self.app, 'setup_hotkeys'):
-            self.app.setup_hotkeys()
+        # Переустанавливаем горячие клавиши ТОЛЬКО ОДИН РАЗ через HotkeyManager
+        if hasattr(self, 'app') and hasattr(self.app, 'hotkeys'):
+            self.app.hotkeys.setup()
+            logger.info("[SETTINGS] Горячие клавиши переустановлены через HotkeyManager")
 
         if hasattr(self, 'app') and hasattr(self.app, 'update_hotkey_buttons'):
             self.app.update_hotkey_buttons()

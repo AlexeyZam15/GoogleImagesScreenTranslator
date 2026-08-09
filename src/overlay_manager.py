@@ -56,6 +56,47 @@ class OverlayManager:
         self._create_context_menu()
         self.logger.info("OverlayManager инициализирован")
 
+    def reset_f1_state(self):
+        """
+        Сбрасывает сохранённое состояние F1 и восстанавливает видимость оверлеев.
+        Используется при изменении настроек автоскрытия, чтобы оверлеи
+        снова автоматически показывались при переключении окон.
+        """
+        self.logger.info("[F1] Сброс сохранённого состояния F1 и восстановление видимости оверлеев")
+
+        # 1. Очищаем сохранённое состояние
+        self._f1_state.clear()
+        self.logger.info("[F1] Состояние F1 сброшено")
+
+        # 2. Восстанавливаем видимость всех оверлеев
+        restored_count = 0
+        for overlay in self.overlays:
+            try:
+                if overlay is None or not overlay.root or not overlay.root.winfo_exists():
+                    continue
+
+                # Сбрасываем флаги скрытия
+                overlay._is_visible_by_user = True
+                overlay._hidden_by_user = False
+                overlay._hidden_by_mouse = False
+
+                # Если оверлей не виден - показываем его
+                if not overlay.visible:
+                    overlay.show()
+                    self.logger.info(f"[F1] Восстановлена видимость оверлея для {overlay._app_name}")
+                    restored_count += 1
+                else:
+                    self.logger.info(f"[F1] Оверлей для {overlay._app_name} уже виден")
+
+            except Exception as e:
+                self.logger.warning(f"[F1] Ошибка восстановления видимости оверлея: {e}")
+
+        self.logger.info(f"[F1] Восстановлена видимость {restored_count} оверлеев")
+
+        # 3. Сохраняем состояние после восстановления
+        self.save_overlay_state(immediate=True)
+        self.logger.info("[F1] Состояние сохранено после восстановления видимости")
+
     def _remove_from_f1_state(self, overlay: OverlayWindow):
         """
         Удаляет оверлей из сохранённого F1 состояния.
@@ -122,7 +163,6 @@ class OverlayManager:
             self.logger.info(f"[OVERLAY_MANAGER] Оверлей закрыт")
         except Exception as e:
             self.logger.warning(f"[OVERLAY_MANAGER] Ошибка закрытия оверлея: {e}")
-
 
     def remove_overlay(self, overlay: OverlayWindow, force: bool = False):
         """
@@ -1603,7 +1643,8 @@ class OverlayManager:
             self._context_menu_overlay = None
 
     def _global_esc_handler(self, event):
-        """Глобальный обработчик ESC - только отменяет перевод."""
+        """Глобальный обработчик ESC - только отменяет перевод или скрывает F2-оверлей."""
+        self.logger.info("[DEBUG] ESC нажат в OverlayManager._global_esc_handler")
 
         # Проверяем режим захвата области
         if self.parent and hasattr(self.parent, '_capture_mode') and self.parent._capture_mode:
@@ -1619,8 +1660,28 @@ class OverlayManager:
                 self.parent._cancel_translation()
             return False
 
-        # Ничего не делаем с оверлеями
-        self.logger.info("[DEBUG] ESC: нет активного перевода, игнорируем")
+        # ============================================================
+        # НОВАЯ ЛОГИКА: скрываем F2-оверлей под курсором
+        # ============================================================
+        f2_overlay = None
+        try:
+            overlay = self._find_overlay_under_cursor()
+            if overlay and hasattr(overlay, '_is_f2_overlay') and overlay._is_f2_overlay:
+                f2_overlay = overlay
+                self.logger.info("[DEBUG] ESC: найден F2-оверлей под курсором, скрываем его")
+        except Exception as e:
+            self.logger.warning(f"[DEBUG] Ошибка поиска F2-оверлея под курсором: {e}")
+
+        if f2_overlay:
+            if f2_overlay.visible:
+                f2_overlay.hide(by_user=True)
+                self.logger.info("[DEBUG] ESC: F2-оверлей скрыт")
+            else:
+                self.logger.info("[DEBUG] ESC: F2-оверлей уже скрыт")
+            return True
+
+        # Ничего не делаем с другими оверлеями
+        self.logger.info("[DEBUG] ESC: нет активного перевода или F2-оверлея под курсором, игнорируем")
         return True
 
     def save_position(self, overlay_id, art_x, art_y, art_w, art_h, icon_x=None, icon_y=None,

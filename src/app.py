@@ -215,6 +215,16 @@ class ScreenshotTranslatorApp:
         self.logger.info("✅ Приложение инициализировано успешно")
         self._force_log_flush()
 
+    def reset_f1_state(self):
+        """
+        Сбрасывает сохранённое состояние F1 в OverlayManager.
+        Используется при изменении настроек автоскрытия.
+        """
+        self.logger.info("[APP] Сброс состояния F1")
+        if hasattr(self, 'overlay_manager') and self.overlay_manager:
+            self.overlay_manager.reset_f1_state()
+            self.logger.info("[APP] Состояние F1 сброшено через OverlayManager")
+
     def _remove_overlay_state_from_file(self, app_name: str, template_id: str = None):
         """
         Удаляет конкретный оверлей из файла состояния.
@@ -2519,33 +2529,8 @@ class ScreenshotTranslatorApp:
             self.hotkeys.set_actions_blocked(blocked)
             if blocked:
                 self.logger.info("[HOTKEYS] Горячие клавиши заблокированы на системном уровне")
-                # Дополнительная блокировка через keyboard
-                try:
-                    import keyboard
-                    keyboard.block_key('f4')
-                    keyboard.block_key('f1')
-                    keyboard.block_key('f2')
-                    keyboard.block_key('f3')
-                    keyboard.block_key('f5')
-                    keyboard.block_key('f6')
-                    # НЕ БЛОКИРУЕМ ESC, чтобы он работал в окне выбора области
-                    # keyboard.block_key('esc')  # <-- УДАЛЕНО
-                    self.logger.info("[HOTKEYS] Дополнительная блокировка клавиш через block_key (ESC не блокируется)")
-                except Exception as e:
-                    self.logger.warning(f"[HOTKEYS] Не удалось заблокировать клавиши: {e}")
             else:
                 self.logger.info("[HOTKEYS] Горячие клавиши разблокированы")
-                try:
-                    import keyboard
-                    keyboard.unblock_key('f4')
-                    keyboard.unblock_key('f1')
-                    keyboard.unblock_key('f2')
-                    keyboard.unblock_key('f3')
-                    keyboard.unblock_key('f5')
-                    keyboard.unblock_key('f6')
-                    # keyboard.unblock_key('esc')  # <-- УДАЛЕНО
-                except:
-                    pass
         else:
             self.logger.warning("[HOTKEYS] HotkeyManager не инициализирован")
 
@@ -2789,7 +2774,7 @@ class ScreenshotTranslatorApp:
     def on_settings_changed(self):
         """Обработчик изменения настроек"""
         self.ui.update_ui_language()
-        self.hotkeys.setup()
+        # self.hotkeys.setup()  # <-- УДАЛЕН дублирующий вызов
 
         # Проверяем, изменился ли движок перевода
         if not hasattr(self, '_last_engine'):
