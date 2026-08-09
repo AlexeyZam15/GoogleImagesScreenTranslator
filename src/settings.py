@@ -19,7 +19,7 @@ class Settings:
         "hide_delay": 1500,
         "always_on_top": True,
         "current_profile": "default",
-        "show_browser": True,
+        "show_browser": False,  # <-- ИЗМЕНЕНО: по умолчанию браузер скрыт
         "show_translation_indicator": True,
         "browser_path": "",
         "auto_hide_overlay": True,
@@ -262,7 +262,7 @@ class Settings:
 
     def get_show_browser(self):
         """Возвращает настройку показа браузера"""
-        return self.settings.get("show_browser", True)
+        return self.settings.get("show_browser", False)  # <-- ИЗМЕНЕНО: по умолчанию False
 
     def set_show_browser(self, show):
         """Устанавливает настройку показа браузера"""

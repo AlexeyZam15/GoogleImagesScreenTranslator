@@ -131,6 +131,14 @@ class ScreenshotTranslatorApp:
     def __init__(self, debug_mode: bool = False):
         """Инициализация приложения"""
 
+        # ============================================================
+        # ИСПРАВЛЕНИЕ: отключаем debug-режим в .exe по умолчанию
+        # ============================================================
+        # Если приложение собрано в .exe и debug_mode не передан явно,
+        # отключаем debug-режим
+        if getattr(sys, 'frozen', False) and not debug_mode:
+            debug_mode = False
+
         # Сохраняем флаг отладки
         self.debug_mode = debug_mode
 
@@ -225,6 +233,7 @@ class ScreenshotTranslatorApp:
         Args:
             callback: Функция, которая будет вызвана после завершения перезапуска
         """
+
         self.logger.info("[APP] === _restart_translator_with_callback НАЧАЛО ===")
 
         if not self.browser_worker:
@@ -289,6 +298,9 @@ class ScreenshotTranslatorApp:
         self._last_target_lang = self.settings.get_target_language()
         self.logger.info(f"[APP] Текущий целевой язык: {self._last_target_lang}")
 
+        # ============================================================
+        # ИСПРАВЛЕНИЕ: проверяем debug_mode при показе браузера
+        # ============================================================
         show_browser = self.settings.get_show_browser()
         if self.debug_mode:
             show_browser = True
@@ -904,6 +916,7 @@ class ScreenshotTranslatorApp:
 
     def _restart_translator(self):
         """Перезапускает переводчик с сохранением состояния оверлеев"""
+
         self.logger.info("[APP] === _restart_translator НАЧАЛО ===")
         self.logger.info("[APP] Выполняется сохранение состояния и перезапуск...")
 
@@ -969,7 +982,9 @@ class ScreenshotTranslatorApp:
         self._last_target_lang = self.settings.get_target_language()
         self.logger.info(f"[APP] Текущий целевой язык: {self._last_target_lang}")
 
-        # Если включен режим отладки - показываем браузер
+        # ============================================================
+        # ИСПРАВЛЕНИЕ: проверяем debug_mode при показе браузера
+        # ============================================================
         show_browser = self.settings.get_show_browser()
         if self.debug_mode:
             show_browser = True
@@ -2337,19 +2352,12 @@ class ScreenshotTranslatorApp:
 
     def _on_init_complete(self, result, error):
         """Завершение инициализации (восстанавливает оверлеи из сохранённого состояния)"""
+
         if error:
             self.logger.error(f"Ошибка инициализации: {error}")
             self.initializing = False
 
-            # ============================================================
-            # УБРАНО: РАЗБЛОКИРОВКА КНОПКИ ПРИ ОШИБКЕ
             # Кнопка настроек остаётся заблокированной до успешной инициализации
-            # ============================================================
-            # if hasattr(self, 'ui'):
-            #     self.ui.settings_btn.config(state=tk.NORMAL, bg='#3c3c3c', fg='#cccccc')
-            #     self.ui.set_settings_menu_enabled(True)
-            #     self.logger.info("[APP] Кнопка настроек разблокирована (ошибка инициализации)")
-
             self.ui.root.after(self._init_retry_delay, self._init_translator_step)
             return
 
@@ -2393,9 +2401,7 @@ class ScreenshotTranslatorApp:
             except Exception as e:
                 self.logger.error(f"[STATE] Ошибка восстановления оверлеев: {e}")
 
-        # ============================================================
-        # РАЗБЛОКИРОВКА КНОПКИ ТОЛЬКО ПРИ УСПЕШНОЙ ИНИЦИАЛИЗАЦИИ
-        # ============================================================
+        # Разблокировка кнопки только при успешной инициализации
         if hasattr(self.ui, 'settings_btn'):
             self.ui.settings_btn.config(state=tk.NORMAL, bg='#3c3c3c', fg='#cccccc')
             self.logger.info("[APP] Кнопка настроек разблокирована")
@@ -2927,6 +2933,7 @@ class ScreenshotTranslatorApp:
 
     def _init_translator_step(self):
         """Инициализация переводчика с учетом выбранного движка"""
+
         if self._init_done or self.initializing:
             return
 
@@ -2940,7 +2947,9 @@ class ScreenshotTranslatorApp:
         self.initializing = True
         self.ui.update_status("● " + self.ui.get_string('starting_browser'), '#ff9800')
 
-        # Если включен режим отладки - показываем браузер
+        # ============================================================
+        # ИСПРАВЛЕНИЕ: проверяем debug_mode при показе браузера
+        # ============================================================
         show_browser = self.settings.get_show_browser()
         if self.debug_mode:
             show_browser = True
@@ -3009,10 +3018,12 @@ class ScreenshotTranslatorApp:
 
     def _show_translation_overlay(self):
         """Показывает индикатор перевода - использует один экземпляр"""
+
+        # Проверяем настройку показа индикатора
         if not self.settings.get_show_translation_indicator():
             return
 
-        # <-- ЗАЩИТА ОТ ПОВТОРНЫХ ВЫЗЫВОВ
+        # Защита от повторных вызовов
         if self._indicator_shown:
             self.logger.debug("[DEBUG] Индикатор уже показан, пропускаем")
             return
@@ -3028,7 +3039,11 @@ class ScreenshotTranslatorApp:
                 )
                 self.translation_overlay.set_app(self)
 
-            self.translation_overlay.show(self.get_string('translation_status_translating'))
+            # ============================================================
+            # ИСПРАВЛЕНИЕ: используем локализованную строку
+            # ============================================================
+            status_text = self.get_string('translation_status_translating')
+            self.translation_overlay.show(status_text)
             self._indicator_shown = True
             self._indicator_hidden = False
             self.logger.info("[DEBUG] Индикатор перевода показан")

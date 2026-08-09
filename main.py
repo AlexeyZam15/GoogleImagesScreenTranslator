@@ -9,18 +9,33 @@ import sys
 import os
 import argparse
 import logging
+from pathlib import Path
 
 
 def main():
     """Главная функция запуска приложения"""
+
+    # ============================================================
+    # ДОБАВЛЯЕМ: ПРОВЕРКА ВЕРСИИ ПРИ ЗАПУСКЕ
+    # ============================================================
+    try:
+        from src.version_checker import check_and_clean_version
+        app_docs_path = Path.home() / "Documents" / "GoogleScreenTranslate"
+        check_and_clean_version(app_docs_path)
+        print("✅ Проверка версии выполнена")
+    except Exception as e:
+        print(f"⚠️ Ошибка проверки версии: {e}")
 
     # Парсинг аргументов командной строки
     parser = argparse.ArgumentParser(description='Google Screen Translate')
     parser.add_argument('--debug', action='store_true', help='Включить режим отладки')
     args = parser.parse_args()
 
-    # Устанавливаем флаг отладки
     debug_mode = args.debug
+
+    if getattr(sys, 'frozen', False) and not debug_mode:
+        debug_mode = False
+        print("🔧 Запуск из .exe: debug-режим отключён")
 
     # Настройка путей
     project_root = os.path.dirname(os.path.abspath(__file__))
@@ -42,7 +57,6 @@ def main():
     if debug_mode:
         print("🐞 РЕЖИМ ОТЛАДКИ ВКЛЮЧЕН")
         print("=" * 70)
-        # Включаем вывод логов в консоль
         logging.basicConfig(
             level=logging.DEBUG,
             format='%(asctime)s [%(levelname)s] %(name)s: %(message)s'
@@ -54,7 +68,6 @@ def main():
 
         print("⏳ Запуск приложения...")
 
-        # Передаем флаг отладки в приложение
         app = ScreenshotTranslatorApp(debug_mode=debug_mode)
 
         print("✅ Приложение запущено, вход в главный цикл...")
