@@ -28,6 +28,7 @@ class Settings:
         "auto_replace_translated": True,
         "temporary_lifetime": 180,
         "translator_engine": "google",  # "google" или "yandex"
+        "target_language": "ru",
     }
 
     # Значения горячих клавиш по умолчанию

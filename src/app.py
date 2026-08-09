@@ -128,7 +128,12 @@ class ScreenshotTranslatorApp:
         """Возвращает корневое окно tkinter для обратной совместимости"""
         return self.ui.root
 
-    def __init__(self):
+    def __init__(self, debug_mode: bool = False):
+        """Инициализация приложения"""
+
+        # Сохраняем флаг отладки
+        self.debug_mode = debug_mode
+
         # Настройка логирования
         self.log_file = setup_logging()
         self.logger = logging.getLogger(__name__)
@@ -173,9 +178,7 @@ class ScreenshotTranslatorApp:
         self._current_active_hwnd = None
         self._last_valid_app_name = None
 
-        # ============================================================
-        # ДЛЯ F4: запоминаем последний перетащенный F2-оверлей
-        # ============================================================
+        # Для F4: запоминаем последний перетащенный F2-оверлей
         self._last_dragged_f2_overlay = None
 
         # Поля для захвата
@@ -210,15 +213,6 @@ class ScreenshotTranslatorApp:
 
         # Запуск инициализации
         self.ui.root.after(100, self._init_translator_step)
-
-        # ============================================================
-        # УДАЛЯЕМ ГЛОБАЛЬНЫЙ СИСТЕМНЫЙ ХУК ESC - используем Tkinter
-        # ============================================================
-        # Вместо глобального хука - привязываем ESC к OverlayManager
-        # OverlayManager сам создаст обработчик на главном окне
-
-        # Запасной вариант через Tkinter (уже не нужен, но оставим для совместимости)
-        # self.ui.root.bind('<Escape>', self._on_escape_global)  # УДАЛИТЬ ЭТУ СТРОКУ
 
         self._force_log_flush()
         self.logger.info("✅ Приложение инициализировано успешно")
@@ -873,11 +867,16 @@ class ScreenshotTranslatorApp:
             self.logger.info(f"[APP] Движок изменен: {self._last_engine} -> {engine}")
             self._last_engine = engine
 
-        # <--- НОВОЕ: СОХРАНЯЕМ ТЕКУЩИЙ ЯЗЫК ДЛЯ ОТСЛЕЖИВАНИЯ ИЗМЕНЕНИЙ --->
+        # Сохраняем текущий язык для отслеживания изменений
         self._last_target_lang = self.settings.get_target_language()
         self.logger.info(f"[APP] Текущий целевой язык: {self._last_target_lang}")
 
+        # Если включен режим отладки - показываем браузер
         show_browser = self.settings.get_show_browser()
+        if self.debug_mode:
+            show_browser = True
+            self.logger.info("[DEBUG] Режим отладки: принудительный показ браузера при перезапуске")
+
         target_lang = self.settings.get_target_language()
 
         # Статус "starting browser"
@@ -2821,17 +2820,20 @@ class ScreenshotTranslatorApp:
 
         self._init_attempts += 1
         if self._init_attempts > self._max_init_attempts:
-            # Ошибка инициализации — убираем из статуса, только лог
             self.logger.error("[APP] Превышено количество попыток инициализации")
             self._init_attempts = 0
             self.ui.root.after(5000, self._init_translator_step)
             return
 
         self.initializing = True
-        # Статус "starting browser" — ОСТАВЛЯЕМ
         self.ui.update_status("● " + self.ui.get_string('starting_browser'), '#ff9800')
 
+        # Если включен режим отладки - показываем браузер
         show_browser = self.settings.get_show_browser()
+        if self.debug_mode:
+            show_browser = True
+            self.logger.info("[DEBUG] Режим отладки: принудительный показ браузера")
+
         target_lang = self.settings.get_target_language()
         engine = self.settings.get_translator_engine()
         self._last_engine = engine
@@ -2991,10 +2993,28 @@ class ScreenshotTranslatorApp:
             if self._last_target_lang != new_lang:
                 self._last_target_lang = new_lang
                 self.logger.info(
-                    f"[SETTINGS] Целевой язык изменен: {self._last_target_lang} -> {new_lang}, перезапускаем браузер"
+                    f"[SETTINGS] Целевой язык изменен: {self._last_target_lang} -> {new_lang}"
                 )
+
                 if self.ready:
-                    self._restart_translator()
+                    # Проверяем используемый движок
+                    engine = self.settings.get_translator_engine()
+                    if engine == "yandex":
+                        # Для Яндекс используем специальный метод обновления языка через интерфейс
+                        self.logger.info("[YANDEX] Обновление языка через интерфейс")
+                        self.browser_worker.update_yandex_language(new_lang)
+                        # Обновляем статус, но не перезапускаем браузер
+                        engine_name = "Яндекс.Переводчик (OCR)"
+                        self.ui.update_status(
+                            f"● {self.ui.get_string('ready')} ({engine_name}, {new_lang.upper()})",
+                            '#4CAF50'
+                        )
+                        # Обновляем язык в браузере
+                        if hasattr(self.browser_worker, 'translator') and self.browser_worker.translator:
+                            self.browser_worker.translator.target_lang = new_lang
+                    else:
+                        # Для Google перезапускаем браузер
+                        self._restart_translator()
                 else:
                     self.logger.info("[SETTINGS] Браузер не готов, перезапуск отложен")
                 return
@@ -3003,8 +3023,9 @@ class ScreenshotTranslatorApp:
         if self.ready:
             engine = self.settings.get_translator_engine()
             engine_name = "Google Translate" if engine == "google" else "Яндекс.Переводчик (OCR)"
+            target_lang = self.settings.get_target_language()
             self.ui.update_status(
-                f"● {self.ui.get_string('ready')} ({engine_name})",
+                f"● {self.ui.get_string('ready')} ({engine_name}, {target_lang.upper()})",
                 '#4CAF50'
             )
         elif hasattr(self, 'initializing') and self.initializing:

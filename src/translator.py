@@ -984,12 +984,12 @@ class YandexOcrTranslator:
                     "--disable-features=IsolateOrigins,site-per-process",
                 ],
                 ignore_default_args=["--enable-automation"],
-                timeout=60000,  # УВЕЛИЧЕНО: добавлен таймаут 60 секунд для запуска браузера
+                timeout=60000,
                 executable_path=browser_path,
             )
             self.logger.info("✅ Браузер запущен")
 
-            time.sleep(3)  # УВЕЛИЧЕНО: 2 -> 3
+            time.sleep(3)
 
             pages = self._context.pages
             if pages:
@@ -1012,6 +1012,13 @@ class YandexOcrTranslator:
             self.logger.info("Открытие Яндекс.Переводчика (OCR)...")
             self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=8000)
             self.logger.info(f"✅ Яндекс.Переводчик открыт: {self.base_url}")
+
+            # Применяем целевой язык, если он был указан и не русский
+            if self.target_lang and self.target_lang != "ru":
+                self.logger.info(f"[YANDEX] Применение начального языка: {self.target_lang}")
+                # Небольшая задержка для загрузки интерфейса
+                time.sleep(1)
+                self.update_target_language(self.target_lang)
 
             self._profile_dir = profile_dir
 
@@ -1351,10 +1358,55 @@ class YandexOcrTranslator:
             self.logger.error(f"Ошибка сброса страницы: {e}")
 
     def update_target_language(self, target_lang: str):
-        """Обновляет целевой язык перевода"""
+        """
+        Обновляет целевой язык перевода для Яндекс.Переводчика через интерфейс.
+        """
+        import time
+        self.logger.info(f"[YANDEX] Обновление целевого языка на: {target_lang}")
         self.target_lang = target_lang
-        self.base_url = f"https://translate.google.com/details?hl=ru&sl=auto&tl={target_lang}&op=images"
-        self.logger.info(f"Целевой язык обновлен на: {target_lang}")
+
+        if not self._page:
+            self.logger.warning("[YANDEX] Страница не инициализирована, язык не может быть обновлен")
+            return
+
+        try:
+            # 1. Кликаем по кнопке выбора целевого языка
+            self.logger.info("[YANDEX] Поиск кнопки выбора языка...")
+            dst_button = self._page.locator('button#dstLangButton')
+
+            if dst_button.count() == 0:
+                self.logger.warning("[YANDEX] Кнопка выбора языка не найдена")
+                return
+
+            dst_button.click()
+            self.logger.info("[YANDEX] Кнопка выбора языка нажата")
+            time.sleep(0.5)
+
+            # 2. Находим и кликаем по нужному языку в списке
+            self.logger.info(f"[YANDEX] Поиск языка '{target_lang}' в списке...")
+            # Ищем элемент с data-value, который точно соответствует коду языка
+            lang_item = self._page.locator(f'.langs-item[data-value="{target_lang}"]')
+
+            if lang_item.count() == 0:
+                self.logger.warning(f"[YANDEX] Язык '{target_lang}' не найден в списке")
+                # Попытка закрыть список, кликнув вне его
+                self._page.click('body')
+                return
+
+            # Прокручиваем и кликаем
+            lang_item.scroll_into_view_if_needed()
+            lang_item.click()
+            self.logger.info(f"[YANDEX] Выбран язык: {target_lang}")
+
+            # Небольшая задержка для применения языка
+            time.sleep(0.5)
+
+            # Закрываем список (если он вдруг не закрылся), кликнув по body
+            self._page.click('body')
+            self.logger.info("[YANDEX] Список языков закрыт")
+
+        except Exception as e:
+            self.logger.error(f"[YANDEX] Ошибка при обновлении языка: {e}")
 
     def update_interface_language(self, lang_code: str):
         """Обновляет язык интерфейса"""

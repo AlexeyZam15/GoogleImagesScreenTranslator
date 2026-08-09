@@ -42,6 +42,33 @@ class BrowserWorker:
         self._result_batch = []
         self._batch_max_size = 10
 
+    def update_yandex_language(self, target_lang: str, callback: Optional[Callable] = None) -> int:
+        """Отправляет команду обновления языка для Яндекс.Переводчика"""
+        cmd_id = id(self) + len(self._command_queue.queue)
+        self._command_queue.put({
+            'type': 'update_yandex_language',
+            'id': cmd_id,
+            'args': [target_lang],
+            'kwargs': {},
+            'callback': callback
+        })
+        return cmd_id
+
+    def _update_yandex_language(self, target_lang: str):
+        """Обновляет целевой язык для Яндекс.Переводчика через интерфейс"""
+        if not self.translator:
+            raise RuntimeError("Браузер не инициализирован")
+
+        # Проверяем, что используется именно Яндекс
+        from src.translator import YandexOcrTranslator
+        if not isinstance(self.translator, YandexOcrTranslator):
+            self.logger.warning("Попытка обновить язык Яндекс, но используется другой движок")
+            return {'success': False, 'error': 'Not a Yandex translator'}
+
+        self.logger.info(f"Обновление языка Яндекс.Переводчика на: {target_lang}")
+        self.translator.update_target_language(target_lang)
+        return {'success': True}
+
     def _worker_loop(self):
         """Главный цикл рабочего потока (оптимизированная версия)"""
         self.logger.info("Рабочий цикл BrowserWorker запущен")
@@ -317,6 +344,9 @@ class BrowserWorker:
                 return self._update_interface_language(*args, **kwargs)
             elif cmd_type == 'reset_page':
                 return self._reset_page()
+            # Новая команда для Yandex
+            elif cmd_type == 'update_yandex_language':
+                return self._update_yandex_language(*args, **kwargs)
             elif cmd_type == 'close':
                 return self._close_browser()
             else:
