@@ -218,6 +218,104 @@ class ScreenshotTranslatorApp:
         self.logger.info("✅ Приложение инициализировано успешно")
         self._force_log_flush()
 
+    def _restart_translator_with_callback(self, callback=None):
+        """
+        Перезапускает переводчик с колбэком для разблокировки кнопки настроек.
+
+        Args:
+            callback: Функция, которая будет вызвана после завершения перезапуска
+        """
+        self.logger.info("[APP] === _restart_translator_with_callback НАЧАЛО ===")
+
+        if not self.browser_worker:
+            self.logger.warning("[APP] browser_worker не инициализирован, пропускаем")
+            if callback:
+                callback()
+            return
+
+        # Сохраняем callback
+        self._restart_callback = callback
+
+        # 1. СОХРАНЯЕМ СОСТОЯНИЕ ОВЕРЛЕЕВ ПЕРЕД ОЧИСТКОЙ
+        if hasattr(self, 'overlay_manager') and self.overlay_manager:
+            try:
+                self.overlay_manager.save_overlay_state(immediate=True)
+                self.logger.info("[APP] Состояние оверлеев сохранено перед перезапуском")
+            except Exception as e:
+                self.logger.warning(f"[APP] Ошибка сохранения состояния: {e}")
+
+        # 2. ОЧИСТКА КОМПОНЕНТОВ
+        if hasattr(self, 'translation_monitor') and self.translation_monitor:
+            try:
+                self.translation_monitor.stop()
+                self.translation_monitor.templates.clear()
+                self.logger.info("[APP] TranslationMonitor остановлен и очищен")
+            except Exception as e:
+                self.logger.warning(f"[APP] Ошибка очистки TranslationMonitor: {e}")
+            self.translation_monitor = None
+
+        if hasattr(self, 'overlay_manager') and self.overlay_manager:
+            try:
+                count = len(self.overlay_manager.overlays)
+                self.overlay_manager.close_all()
+                self.logger.info(f"[APP] Закрыто {count} оверлеев (состояние сохранено)")
+            except Exception as e:
+                self.logger.warning(f"[APP] Ошибка закрытия оверлеев: {e}")
+            self.overlay_manager = None
+
+        if hasattr(self, 'window_list'):
+            try:
+                self.window_list.window_listbox.delete(0, 'end')
+                self.window_list._window_hwnd_map.clear()
+                self.window_list._window_app_map.clear()
+                self.logger.info("[APP] Список окон очищен")
+            except Exception as e:
+                self.logger.warning(f"[APP] Ошибка очистки списка окон: {e}")
+
+        self.ready = False
+        self.initializing = True
+        self._init_done = False
+        self._init_attempts = 0
+        self.logger.info("[APP] Флаги инициализации сброшены")
+
+        # 3. ПРОВЕРЯЕМ ДВИЖОК И ПЕРЕЗАПУСКАЕМ БРАУЗЕР
+        engine = self.settings.get_translator_engine()
+        if not hasattr(self, '_last_engine'):
+            self._last_engine = engine
+        elif self._last_engine != engine:
+            self.logger.info(f"[APP] Движок изменен: {self._last_engine} -> {engine}")
+            self._last_engine = engine
+
+        self._last_target_lang = self.settings.get_target_language()
+        self.logger.info(f"[APP] Текущий целевой язык: {self._last_target_lang}")
+
+        show_browser = self.settings.get_show_browser()
+        if self.debug_mode:
+            show_browser = True
+            self.logger.info("[DEBUG] Режим отладки: принудительный показ браузера при перезапуске")
+
+        target_lang = self.settings.get_target_language()
+
+        self.ui.update_status("● " + self.ui.get_string('starting_browser'), '#ff9800')
+
+        # Создаем обертку для колбэка, которая вызовет и наш callback
+        def on_init_wrapper(result, error):
+            # Вызываем оригинальный обработчик
+            self._on_init_complete(result, error)
+            # Вызываем callback для разблокировки кнопки
+            if hasattr(self, '_restart_callback') and self._restart_callback:
+                try:
+                    self._restart_callback()
+                except Exception as e:
+                    self.logger.warning(f"[APP] Ошибка в callback: {e}")
+                self._restart_callback = None
+
+        cmd_id = self.browser_worker.restart_browser(show_browser, target_lang, on_init_wrapper)
+        self._pending_command_ids[cmd_id] = 'restart'
+
+        self.logger.info(f"[APP] Команда перезапуска отправлена (id={cmd_id})")
+        self.logger.info("[APP] === _restart_translator_with_callback ЗАВЕРШЕН ===")
+
     def _clear_f2_overlays_for_current_app(self):
         """
         Удаляет все F2-оверлеи для текущего активного приложения.
@@ -2242,6 +2340,13 @@ class ScreenshotTranslatorApp:
         if error:
             self.logger.error(f"Ошибка инициализации: {error}")
             self.initializing = False
+
+            # РАЗБЛОКИРУЕМ КНОПКУ ПРИ ОШИБКЕ
+            if hasattr(self, 'ui'):
+                self.ui.settings_btn.config(state=tk.NORMAL, bg='#3c3c3c', fg='#cccccc')
+                self.ui.set_settings_menu_enabled(True)
+                self.logger.info("[APP] Кнопка настроек разблокирована (ошибка инициализации)")
+
             self.ui.root.after(self._init_retry_delay, self._init_translator_step)
             return
 
@@ -2288,6 +2393,7 @@ class ScreenshotTranslatorApp:
         # Разблокируем меню настроек
         if hasattr(self.ui, 'settings_btn'):
             self.ui.settings_btn.config(state=tk.NORMAL, bg='#3c3c3c', fg='#cccccc')
+            self.logger.info("[APP] Кнопка настроек разблокирована")
 
         self.ui.set_settings_menu_enabled(True)
 
@@ -2302,7 +2408,8 @@ class ScreenshotTranslatorApp:
 
         # Показываем уведомление о готовности
         self.show_notification(
-            f"✅ {self.ui.get_string('ready_notification')} ({engine_name}, {self._last_target_lang.upper()})", 2000)
+            f"✅ {self.ui.get_string('ready_notification')} ({engine_name}, {self._last_target_lang.upper()})", 2000
+        )
 
     def _on_window_switch(self, new_hwnd):
         """Обработчик переключения окон - показывает/скрывает оверлеи при переключении"""

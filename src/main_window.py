@@ -316,6 +316,11 @@ class MainWindow:
         )
         self.status.pack(anchor=tk.W)
 
+        # ============================================================
+        # БЛОК ВЫБОРА ЯЗЫКА УДАЛЕН
+        # Выбор языка теперь только в настройках, во вкладке "Движок"
+        # ============================================================
+
         windows_header = Frame(content_frame, bg='#1a1a1a')
         windows_header.pack(fill=tk.X, pady=(5, 5))
 
@@ -498,6 +503,15 @@ class MainWindow:
         """Блокирует/разблокирует меню настроек и хоткеев"""
         try:
             state = tk.NORMAL if enabled else DISABLED
+
+            # Блокируем/разблокируем кнопку шестеренку
+            if hasattr(self, 'settings_btn'):
+                if enabled:
+                    self.settings_btn.config(state=tk.NORMAL, bg='#3c3c3c', fg='#cccccc')
+                else:
+                    self.settings_btn.config(state=tk.DISABLED, bg='#2d2d2d', fg='#444444')
+
+            # Блокируем/разблокируем меню
             if hasattr(self, '_menubar') and self._menubar:
                 for index in range(self._menubar.index('end') + 1):
                     try:

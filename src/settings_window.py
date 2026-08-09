@@ -143,8 +143,62 @@ class SettingsWindow:
         )
         yandex_radio.pack(side=tk.LEFT)
 
-        # === УДАЛЯЕМ БЛОКИ С ОПИСАНИЯМИ ===
-        # google_info и yandex_info полностью удалены
+        # ============================================================
+        # НОВЫЙ БЛОК: ВЫБОР ЦЕЛЕВОГО ЯЗЫКА ПЕРЕВОДА
+        # ============================================================
+        tk.Label(
+            translator_inner,
+            text="🎯 " + self.get_string('target_language'),
+            bg='#1e1e1e',
+            fg='#cccccc',
+            font=('Segoe UI', 11, 'bold'),
+            anchor='w'
+        ).pack(anchor=tk.W, pady=(15, 5))
+
+        from src.main_window import LANGUAGES
+
+        lang_display_names = [f"{name} ({code})" for code, name in LANGUAGES.items()]
+        lang_display_names.sort()
+
+        self.target_lang_in_settings_var = tk.StringVar()
+
+        self.target_lang_in_settings_combo = ttk.Combobox(
+            translator_inner,
+            textvariable=self.target_lang_in_settings_var,
+            values=lang_display_names,
+            state='readonly',
+            font=('Segoe UI', 10),
+            width=50
+        )
+        self.target_lang_in_settings_combo.pack(anchor=tk.W, pady=(0, 15))
+
+        # Устанавливаем текущий язык
+        current_lang = self.settings.get_target_language()
+        for item in lang_display_names:
+            if f"({current_lang})" in item:
+                self.target_lang_in_settings_combo.set(item)
+                break
+
+        # Функция для блокировки/разблокировки выбора языка в зависимости от движка
+        def update_language_combo_state(*args):
+            engine = self.translator_engine_var.get()
+            if engine == "yandex":
+                # При выборе Яндекс - блокируем и устанавливаем русский
+                self.target_lang_in_settings_combo.config(state='disabled')
+                # Находим "Русский (ru)" в списке
+                for item in lang_display_names:
+                    if "(ru)" in item:
+                        self.target_lang_in_settings_combo.set(item)
+                        break
+            else:
+                # Для Google - разблокируем
+                self.target_lang_in_settings_combo.config(state='readonly')
+
+        # Привязываем функцию к изменению переменной движка
+        self.translator_engine_var.trace('w', update_language_combo_state)
+
+        # Вызываем один раз для установки начального состояния
+        update_language_combo_state()
 
         tk.Label(
             translator_inner,
@@ -273,40 +327,9 @@ class SettingsWindow:
         ui_inner.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         # ============================================================
-        # ВЫБОР ЦЕЛЕВОГО ЯЗЫКА ПЕРЕВОДА
+        # ВЫБОР ЦЕЛЕВОГО ЯЗЫКА ПЕРЕВОДА УДАЛЕН
+        # Теперь он находится во вкладке "Движок"
         # ============================================================
-        tk.Label(
-            ui_inner,
-            text="🎯 Целевой язык перевода:",
-            bg='#1e1e1e',
-            fg='#cccccc',
-            font=('Segoe UI', 11, 'bold'),
-            anchor='w'
-        ).pack(anchor=tk.W, pady=(0, 5))
-
-        # Импортируем словарь языков
-        from src.main_window import LANGUAGES
-
-        lang_display_names = [f"{name} ({code})" for code, name in LANGUAGES.items()]
-        lang_display_names.sort()
-
-        self.target_lang_var = tk.StringVar()
-        self.target_lang_combo = ttk.Combobox(
-            ui_inner,
-            textvariable=self.target_lang_var,
-            values=lang_display_names,
-            state='readonly',
-            font=('Segoe UI', 10),
-            width=40
-        )
-        self.target_lang_combo.pack(anchor=tk.W, pady=(0, 15))
-
-        # Устанавливаем текущий язык
-        current_lang = self.settings.get_target_language()
-        for item in lang_display_names:
-            if f"({current_lang})" in item:
-                self.target_lang_combo.set(item)
-                break
 
         # ============================================================
         # ОСТАЛЬНЫЕ НАСТРОЙКИ
@@ -705,6 +728,12 @@ class SettingsWindow:
         """Сохраняет настройки."""
         logger = logging.getLogger(__name__)
 
+        # БЛОКИРУЕМ КНОПКУ НАСТРОЕК И МЕНЮ
+        if hasattr(self, 'app') and hasattr(self.app, 'ui'):
+            self.app.ui.settings_btn.config(state=tk.DISABLED, bg='#2d2d2d', fg='#444444')
+            self.app.ui.set_settings_menu_enabled(False)
+            logger.info("[SETTINGS] Кнопка настроек и меню заблокированы")
+
         # Если идет захват горячей клавиши - отменяем его
         for action in self.hotkey_capture_manager.hotkey_capturing:
             if self.hotkey_capture_manager.hotkey_capturing[action]:
@@ -728,6 +757,10 @@ class SettingsWindow:
                 "Ошибка",
                 "Указанный файл не существует!\nПроверьте путь."
             )
+            # РАЗБЛОКИРУЕМ КНОПКУ ПРИ ОШИБКЕ
+            if hasattr(self, 'app') and hasattr(self.app, 'ui'):
+                self.app.ui.settings_btn.config(state=tk.NORMAL, bg='#3c3c3c', fg='#cccccc')
+                self.app.ui.set_settings_menu_enabled(True)
             return
 
         # Сохраняем старые значения для сравнения
@@ -735,12 +768,12 @@ class SettingsWindow:
         new_auto_hide = self.auto_hide_var.get()
 
         # ============================================================
-        # СОХРАНЯЕМ ЦЕЛЕВОЙ ЯЗЫК ПЕРЕВОДА
+        # СОХРАНЯЕМ ЦЕЛЕВОЙ ЯЗЫК ПЕРЕВОДА ИЗ НОВОГО КОМБОБОКСА В НАСТРОЙКАХ
         # ============================================================
         old_target_lang = self.settings.get_target_language()
         new_target_lang = old_target_lang
 
-        selected = self.target_lang_var.get()
+        selected = self.target_lang_in_settings_var.get()
         if selected and "(" in selected and ")" in selected:
             new_target_lang = selected.split("(")[-1].replace(")", "").strip()
             if old_target_lang != new_target_lang:
@@ -814,16 +847,42 @@ class SettingsWindow:
                 logger.info("[SETTINGS] Браузер активен, выполняем перезапуск...")
                 if hasattr(self.app, 'update_status'):
                     self.app.update_status("● " + self.app.get_string('starting_browser'), '#ff9800')
+
+                # Перезапускаем переводчик с колбэком для разблокировки
                 if hasattr(self.app, '_restart_translator'):
-                    self.app._restart_translator()
+                    # Сохраняем ссылку на self для колбэка
+                    settings_window = self
+
+                    # Создаем обертку для колбэка, которая разблокирует кнопку
+                    def on_restart_complete(*args, **kwargs):
+                        logger.info("[SETTINGS] Перезапуск завершен, разблокируем кнопку настроек")
+                        if hasattr(settings_window, 'app') and hasattr(settings_window.app, 'ui'):
+                            settings_window.app.ui.settings_btn.config(state=tk.NORMAL, bg='#3c3c3c', fg='#cccccc')
+                            settings_window.app.ui.set_settings_menu_enabled(True)
+                            logger.info("[SETTINGS] Кнопка настроек и меню разблокированы")
+
+                    # Передаем колбэк в перезапуск
+                    self.app._restart_translator_with_callback(on_restart_complete)
+                else:
+                    # Если нет _restart_translator - разблокируем сразу
+                    if hasattr(self, 'app') and hasattr(self.app, 'ui'):
+                        self.app.ui.settings_btn.config(state=tk.NORMAL, bg='#3c3c3c', fg='#cccccc')
+                        self.app.ui.set_settings_menu_enabled(True)
             else:
                 logger.info("[SETTINGS] Браузер не активен, перезапуск не требуется")
                 if hasattr(self.app, 'update_status'):
                     self.app.update_status("● Настройки сохранены", '#4CAF50')
+                # Разблокируем кнопку
+                if hasattr(self, 'app') and hasattr(self.app, 'ui'):
+                    self.app.ui.settings_btn.config(state=tk.NORMAL, bg='#3c3c3c', fg='#cccccc')
+                    self.app.ui.set_settings_menu_enabled(True)
         else:
-            # Если ничего не изменилось - просто показываем статус
+            # Если ничего не изменилось - просто показываем статус и разблокируем
             if hasattr(self.app, 'update_status'):
                 self.app.update_status("● Настройки сохранены", '#4CAF50')
+            if hasattr(self, 'app') and hasattr(self.app, 'ui'):
+                self.app.ui.settings_btn.config(state=tk.NORMAL, bg='#3c3c3c', fg='#cccccc')
+                self.app.ui.set_settings_menu_enabled(True)
 
         # Обновляем режим редактирования
         if hasattr(self, 'app') and hasattr(self.app, '_edit_mode_enabled'):
@@ -1492,16 +1551,16 @@ class SettingsWindow:
             self.edit_mode_var.set(self.settings.get_edit_mode_enabled())
 
         # ============================================================
-        # ЗАГРУЖАЕМ ЦЕЛЕВОЙ ЯЗЫК
+        # ЗАГРУЖАЕМ ЦЕЛЕВОЙ ЯЗЫК В НОВЫЙ КОМБОБОКС
         # ============================================================
-        if hasattr(self, 'target_lang_combo'):
+        if hasattr(self, 'target_lang_in_settings_combo'):
             current_lang = self.settings.get_target_language()
             from src.main_window import LANGUAGES
             lang_display_names = [f"{name} ({code})" for code, name in LANGUAGES.items()]
             lang_display_names.sort()
             for item in lang_display_names:
                 if f"({current_lang})" in item:
-                    self.target_lang_combo.set(item)
+                    self.target_lang_in_settings_combo.set(item)
                     break
 
         if hasattr(self, 'hotkey_capture_manager'):
