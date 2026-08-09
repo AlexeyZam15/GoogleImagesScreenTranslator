@@ -1825,7 +1825,7 @@ class ScreenshotTranslatorApp:
         return debug_dir, timestamp
 
     def _get_ocr_regions(self, translated_image_path: Path, debug_dir: Path, timestamp: str):
-        """Получает регионы через OCR с фильтрацией по уверенности (минимум 0.7)."""
+        """Получает регионы через OCR с фильтрацией по уверенности (минимум 0.6)."""
         import time
         step_start = time.time()
         self.logger.info("[TIMING] Этап 4: OCR-обработка (get_regions_from_image)...")
@@ -1853,9 +1853,9 @@ class ScreenshotTranslatorApp:
             )
 
         # ============================================================
-        # ФИЛЬТРУЕМ РЕГИОНЫ ПО УВЕРЕННОСТИ (МИНИМУМ 0.7)
+        # ФИЛЬТРУЕМ РЕГИОНЫ ПО УВЕРЕННОСТИ (МИНИМУМ 0.6)
         # ============================================================
-        MIN_CONFIDENCE = 0.7
+        MIN_CONFIDENCE = 0.6  # <-- ИЗМЕНЕНО С 0.7 НА 0.6
         regions = []
         rejected_count = 0
 
