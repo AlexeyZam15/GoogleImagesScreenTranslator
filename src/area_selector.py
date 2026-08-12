@@ -27,6 +27,42 @@ class AreaSelector:
         self.min_selection_size = self.config.get("min_selection_size", 10)
         self.logger = logging.getLogger(__name__)
 
+    def _close_capture(self, success):
+        """Закрывает окно захвата и восстанавливает состояние"""
+        self.logger.info(f"[DEBUG] AreaSelector._close_capture(success={success}) - начало")
+
+        # Сначала закрываем окно
+        if self.root and self.root.winfo_exists():
+            try:
+                self.root.grab_release()
+                self.root.destroy()
+                self.logger.info("[DEBUG] Окно захвата закрыто")
+            except Exception as ex:
+                self.logger.error(f"[DEBUG] Ошибка закрытия окна захвата: {ex}")
+
+        # Потом восстанавливаем состояние
+        try:
+            if self.parent and hasattr(self.parent, 'root'):
+                self.parent.root.deiconify()
+                self.parent.root.lift()
+                self.parent.root.focus_force()
+                self.logger.info("[DEBUG] Главное окно восстановлено")
+        except Exception as ex:
+            self.logger.error(f"[DEBUG] Ошибка восстановления главного окна: {ex}")
+
+        try:
+            if self.parent:
+                self.parent._capture_mode = False
+                self.parent._area_selector = None
+                self.parent.set_actions_blocked(False)
+                self.logger.info("[DEBUG] Флаги захвата сброшены, хоткеи разблокированы")
+        except Exception as ex:
+            self.logger.error(f"[DEBUG] Ошибка сброса флагов захвата: {ex}")
+
+        if success and self.callback and hasattr(self, '_selected_rect'):
+            self.logger.info(f"[DEBUG] Вызов callback с rect={self._selected_rect}")
+            self.callback(self._selected_rect)
+
     def on_escape(self, e):
         """Обработчик ESC"""
         self.logger.info("[DEBUG] AreaSelector.on_escape() вызван")
@@ -49,9 +85,8 @@ class AreaSelector:
         self.root = tk.Toplevel()
         self.root.attributes('-fullscreen', True)
         self.root.attributes('-alpha', self.selection_alpha)
-        # ВАЖНО: НЕ используем -topmost для окна выделения области,
-        # чтобы оверлей перевода мог быть поверх него
-        # self.root.attributes('-topmost', True)  # УБРАНО!
+        # ВАЖНО: Устанавливаем topmost чтобы окно было поверх всех и получало события клавиатуры
+        self.root.attributes('-topmost', True)
         self.root.focus_force()
         self.root.configure(bg='gray')
 
@@ -68,59 +103,27 @@ class AreaSelector:
         self.root.bind("<Escape>", on_escape)
         self.canvas.bind("<Escape>", on_escape)
 
+        # Принудительно захватываем фокус и все события
         self.canvas.focus_set()
         self.root.focus_force()
-
         self.root.grab_set()
         self.root.lift()
+
+        # Получаем локализованную строку через родительские настройки
+        instruction_text = "Выделите область для перевода (ESC для отмены)"
+        if self.parent and hasattr(self.parent, 'settings'):
+            instruction_text = self.parent.settings.get_string('area_selector_instruction')
 
         # Показываем инструкцию
         self.canvas.create_text(
             self.root.winfo_screenwidth() // 2,
             50,
-            text="Выделите область для перевода (ESC для отмены)",
+            text=instruction_text,
             fill="white",
             font=("Arial", 16, "bold")
         )
 
         self.logger.info("[DEBUG] AreaSelector.start_capture() - окно создано")
-
-    def _close_capture(self, success):
-        """Закрывает окно захвата и восстанавливает состояние"""
-        self.logger.info(f"[DEBUG] AreaSelector._close_capture(success={success}) - начало")
-
-        # Восстанавливаем главное окно
-        try:
-            if self.parent and hasattr(self.parent, 'root'):
-                self.parent.root.deiconify()
-                self.parent.root.lift()
-                self.parent.root.focus_force()
-                self.logger.info("[DEBUG] Главное окно восстановлено")
-        except Exception as ex:
-            self.logger.error(f"[DEBUG] Ошибка восстановления главного окна: {ex}")
-
-        # Выключаем режим захвата в родителе
-        try:
-            if self.parent:
-                self.parent._capture_mode = False
-                self.parent._area_selector = None
-                self.logger.info("[DEBUG] Флаги захвата сброшены")
-        except Exception as ex:
-            self.logger.error(f"[DEBUG] Ошибка сброса флагов захвата: {ex}")
-
-        # Закрываем окно захвата
-        try:
-            if self.root:
-                self.root.grab_release()
-                self.root.destroy()
-                self.logger.info("[DEBUG] Окно захвата закрыто")
-        except Exception as ex:
-            self.logger.error(f"[DEBUG] Ошибка закрытия окна захвата: {ex}")
-
-        # Если успешный захват - вызываем колбэк с координатами
-        if success and self.callback and hasattr(self, '_selected_rect'):
-            self.logger.info(f"[DEBUG] Вызов callback с rect={self._selected_rect}")
-            self.callback(self._selected_rect)
 
     def on_mouse_down(self, event):
         self.logger.debug(f"[DEBUG] on_mouse_down: ({event.x}, {event.y})")
@@ -158,7 +161,15 @@ class AreaSelector:
                 self._close_capture(True)
             else:
                 self.logger.warning(f"[DEBUG] Слишком маленькая область: {x2 - x1}x{y2 - y1}")
+                # Получаем локализованные строки
+                error_title = "Ошибка"
+                error_message = f"Выделите область размером больше {min_size}x{min_size} пикселей"
+                if self.parent and hasattr(self.parent, 'settings'):
+                    error_title = self.parent.settings.get_string('area_selector_error_title')
+                    error_message = self.parent.settings.get_string('area_selector_error_too_small').format(
+                        min_size=min_size)
+
                 messagebox.showwarning(
-                    "Ошибка",
-                    f"Выделите область размером больше {min_size}x{min_size} пикселей"
+                    error_title,
+                    error_message
                 )

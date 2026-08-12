@@ -1,13 +1,24 @@
-"""
-Утилиты для работы с окнами Windows
-"""
-
 import ctypes
 import time
 import logging
+import os
 from ctypes import wintypes
 
-# Константы Windows API
+# Windows API
+import win32api
+import win32con
+import win32process
+import win32gui
+import win32file
+from typing import Optional
+
+# Psutil (опционально)
+try:
+    import psutil
+except ImportError:
+    psutil = None
+
+# Windows API константы
 WS_OVERLAPPED = 0x00000000
 WS_POPUP = 0x80000000
 WS_CHILD = 0x40000000
@@ -64,6 +75,7 @@ RDW_ALLCHILDREN = 0x0080
 RDW_FRAME = 0x0400
 
 user32 = ctypes.windll.user32
+kernel32 = ctypes.windll.kernel32
 
 
 def get_screen_size():
@@ -191,3 +203,174 @@ def send_alt_enter_to_window(hwnd):
         import traceback
         logger.error(traceback.format_exc())
         return False
+
+
+def get_process_name_by_hwnd(hwnd: int, default_name: str = None) -> str:
+    """
+    Получает имя процесса (исполняемого файла) по HWND окна.
+    Возвращает имя процесса или default_name (или "Неизвестно") в случае ошибки.
+
+    Args:
+        hwnd: Дескриптор окна
+        default_name: Имя по умолчанию, если не удалось получить (если None - возвращается "Неизвестно")
+    """
+    logger = logging.getLogger(__name__)
+
+    # Проверяем, что HWND валидный
+    if not hwnd or not win32gui.IsWindow(hwnd):
+        # Если HWND невалидный, пробуем получить имя через последний известный процесс
+        # Но если default_name передан - используем его
+        if default_name and default_name != "Неизвестно":
+            logger.debug(f"get_process_name_by_hwnd: HWND {hwnd} невалидный, используем default_name={default_name}")
+            return default_name
+
+        logger.warning(f"get_process_name_by_hwnd: некорректный HWND: {hwnd}")
+        return default_name if default_name else "Неизвестно"
+
+    try:
+        # Получаем PID процесса, которому принадлежит окно
+        _, pid = win32process.GetWindowThreadProcessId(hwnd)
+
+        # Проверяем, что PID корректный (положительное число)
+        if not pid or pid <= 0:
+            logger.warning(f"get_process_name_by_hwnd: получен некорректный PID={pid} для HWND={hwnd}")
+            return default_name if default_name else "Неизвестно"
+
+        # === СПОСОБ 1: Через psutil (наиболее надёжный) ===
+        if psutil is not None:
+            try:
+                proc = psutil.Process(pid)
+                return proc.name()
+            except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+                logger.debug(f"psutil не смог получить имя для PID {pid}: {e}")
+
+        # === СПОСОБ 2: Через OpenProcess + GetModuleFileNameEx ===
+        try:
+            process_handle = win32api.OpenProcess(
+                win32con.PROCESS_QUERY_INFORMATION | win32con.PROCESS_VM_READ,
+                False,
+                pid
+            )
+            try:
+                exe_path = win32process.GetModuleFileNameEx(process_handle, 0)
+                if exe_path:
+                    return os.path.splitext(os.path.basename(exe_path))[0]
+            finally:
+                win32api.CloseHandle(process_handle)
+        except Exception as e:
+            logger.debug(f"GetModuleFileNameEx не сработал для PID {pid}: {e}")
+
+        # === СПОСОБ 3: Через EnumProcessModules ===
+        try:
+            PROCESS_QUERY_INFORMATION = 0x0400
+            PROCESS_VM_READ = 0x0010
+
+            process_handle = win32api.OpenProcess(
+                PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
+                False,
+                pid
+            )
+            if process_handle:
+                try:
+                    modules = ctypes.create_string_buffer(1024)
+                    cb_needed = ctypes.c_uint32()
+                    result = ctypes.windll.psapi.EnumProcessModules(
+                        process_handle,
+                        ctypes.byref(modules),
+                        ctypes.sizeof(modules),
+                        ctypes.byref(cb_needed)
+                    )
+                    if result:
+                        module_handle = ctypes.c_void_p()
+                        ctypes.memmove(ctypes.byref(module_handle), modules, ctypes.sizeof(ctypes.c_void_p))
+
+                        module_path = ctypes.create_string_buffer(1024)
+                        ctypes.windll.psapi.GetModuleFileNameExA(
+                            process_handle,
+                            module_handle,
+                            module_path,
+                            ctypes.sizeof(module_path)
+                        )
+                        if module_path.value:
+                            return \
+                                os.path.splitext(os.path.basename(module_path.value.decode('utf-8', errors='ignore')))[
+                                    0]
+                finally:
+                    win32api.CloseHandle(process_handle)
+        except Exception as e:
+            logger.debug(f"EnumProcessModules не сработал для PID {pid}: {e}")
+
+        # === СПОСОБ 4: QueryFullProcessImageName ===
+        try:
+            PROCESS_QUERY_INFORMATION = 0x0400
+            process_handle = win32api.OpenProcess(PROCESS_QUERY_INFORMATION, False, pid)
+            if process_handle:
+                try:
+                    exe_path = ctypes.create_unicode_buffer(1024)
+                    size = ctypes.c_uint32(ctypes.sizeof(exe_path))
+                    if kernel32.QueryFullProcessImageNameW(process_handle, 0, exe_path, ctypes.byref(size)):
+                        if exe_path.value:
+                            return os.path.splitext(os.path.basename(exe_path.value))[0]
+                finally:
+                    win32api.CloseHandle(process_handle)
+        except Exception as e:
+            logger.debug(f"QueryFullProcessImageName не сработал для PID {pid}: {e}")
+
+        # === СПОСОБ 5: Через Toolhelp32Snapshot ===
+        try:
+            snapshot = win32api.CreateToolhelp32Snapshot(win32con.TH32CS_SNAPPROCESS, 0)
+            try:
+                process_entry = win32process.Process32First(snapshot)
+                while process_entry:
+                    if process_entry.th32ProcessID == pid:
+                        return os.path.splitext(process_entry.szExeFile)[0]
+                    process_entry = win32process.Process32Next(snapshot)
+            finally:
+                win32api.CloseHandle(snapshot)
+        except Exception as e:
+            logger.debug(f"Toolhelp32Snapshot не сработал для PID {pid}: {e}")
+
+        # === ПОСЛЕДНИЙ FALLBACK ===
+        logger.warning(f"Не удалось получить имя процесса для PID {pid}, возвращаем default_name")
+        return default_name if default_name else f"PID {pid}"
+
+    except Exception as e:
+        logger.error(f"Ошибка в get_process_name_by_hwnd для HWND {hwnd}: {e}")
+        return default_name if default_name else "Неизвестно"
+
+
+def find_window_by_app_name(app_name: str) -> Optional[int]:
+    """
+    Находит HWND окна по имени приложения (процесса).
+
+    Args:
+        app_name: Имя исполняемого файла (например, "LIBM.exe")
+
+    Returns:
+        HWND окна или None, если окно не найдено
+    """
+    logger = logging.getLogger(__name__)
+
+    if not app_name or app_name == "Неизвестно":
+        return None
+
+    try:
+        import win32gui
+
+        def enum_callback(hwnd, hwnds):
+            if win32gui.IsWindowVisible(hwnd):
+                try:
+                    if get_process_name_by_hwnd(hwnd) == app_name:
+                        hwnds.append(hwnd)
+                        return False  # Останавливаем поиск
+                except Exception:
+                    pass
+            return True
+
+        hwnds = []
+        win32gui.EnumWindows(enum_callback, hwnds)
+        return hwnds[0] if hwnds else None
+
+    except Exception as e:
+        logger.warning(f"Ошибка поиска окна по имени {app_name}: {e}")
+        return None

@@ -9,6 +9,7 @@ import logging
 from typing import Optional, Callable, Any
 from pathlib import Path
 
+# Локальные импорты
 from src.translator import GoogleTranslateDebug
 from src.settings import Settings
 
@@ -17,6 +18,12 @@ class BrowserWorker:
     """
     Управляет браузером в отдельном потоке с очередью команд
     """
+
+    __slots__ = (
+        'logger', 'settings', 'translator', '_command_queue', '_result_queue',
+        '_running', '_thread', '_ready', '_initializing', '_cancel_flag',
+        '_last_result_time', '_result_batch', '_batch_max_size'
+    )
 
     def __init__(self, settings: Settings):
         self.logger = logging.getLogger(__name__)
@@ -28,10 +35,153 @@ class BrowserWorker:
         self._thread: Optional[threading.Thread] = None
         self._ready = False
         self._initializing = False
-        self._cancel_flag = False  # НОВЫЙ ФЛАГ
+        self._cancel_flag = False
+
+        # Оптимизация обработки результатов
+        self._last_result_time = 0
+        self._result_batch = []
+        self._batch_max_size = 10
+
+    def update_yandex_language(self, target_lang: str, callback: Optional[Callable] = None) -> int:
+        """Отправляет команду обновления языка для Яндекс.Переводчика"""
+        cmd_id = id(self) + len(self._command_queue.queue)
+        self._command_queue.put({
+            'type': 'update_yandex_language',
+            'id': cmd_id,
+            'args': [target_lang],
+            'kwargs': {},
+            'callback': callback
+        })
+        return cmd_id
+
+    def _update_yandex_language(self, target_lang: str):
+        """Обновляет целевой язык для Яндекс.Переводчика через интерфейс"""
+        if not self.translator:
+            raise RuntimeError("Браузер не инициализирован")
+
+        # Проверяем, что используется именно Яндекс
+        from src.translator import YandexOcrTranslator
+        if not isinstance(self.translator, YandexOcrTranslator):
+            self.logger.warning("Попытка обновить язык Яндекс, но используется другой движок")
+            return {'success': False, 'error': 'Not a Yandex translator'}
+
+        self.logger.info(f"Обновление языка Яндекс.Переводчика на: {target_lang}")
+        self.translator.update_target_language(target_lang)
+        return {'success': True}
+
+    def _worker_loop(self):
+        """Главный цикл рабочего потока (оптимизированная версия)"""
+        self.logger.info("Рабочий цикл BrowserWorker запущен")
+
+        while self._running:
+            try:
+                # Уменьшаем таймаут для более быстрой реакции
+                try:
+                    command = self._command_queue.get(timeout=0.1)
+                except queue.Empty:
+                    # Обрабатываем накопленные результаты
+                    self._flush_results()
+                    continue
+
+                if command is None:
+                    break
+
+                cmd_type = command.get('type')
+                cmd_id = command.get('id')
+                args = command.get('args', [])
+                kwargs = command.get('kwargs', {})
+                callback = command.get('callback')
+
+                self.logger.info(f"Выполнение команды: {cmd_type} (id={cmd_id})")
+
+                try:
+                    result = self._execute_command(cmd_type, *args, **kwargs)
+                    # Добавляем результат в пакет для оптимизации
+                    self._result_batch.append({
+                        'id': cmd_id,
+                        'success': True,
+                        'result': result,
+                        'error': None,
+                        'callback': callback
+                    })
+
+                    # Если набралось достаточно результатов - отправляем пакет
+                    if len(self._result_batch) >= self._batch_max_size:
+                        self._flush_results()
+
+                except Exception as e:
+                    self.logger.error(f"Ошибка выполнения команды {cmd_type}: {e}")
+                    self._result_batch.append({
+                        'id': cmd_id,
+                        'success': False,
+                        'result': None,
+                        'error': str(e),
+                        'callback': callback
+                    })
+
+            except Exception as e:
+                self.logger.error(f"Ошибка в рабочем цикле: {e}")
+                time.sleep(0.05)
+
+        # Очищаем оставшиеся результаты при завершении
+        self._flush_results()
+
+        if self.translator:
+            try:
+                self.translator.close_browser()
+            except:
+                pass
+            self.translator = None
+
+        self.logger.info("Рабочий цикл BrowserWorker завершен")
+
+    def _flush_results(self):
+        """Отправляет накопленные результаты одним пакетом"""
+        if not self._result_batch:
+            return
+
+        # Отправляем все результаты в очередь
+        for result in self._result_batch:
+            self._result_queue.put(result)
+
+        self.logger.debug(f"Отправлено {len(self._result_batch)} результатов")
+        self._result_batch.clear()
+
+    def process_results(self):
+        """Обрабатывает полученные результаты (оптимизированная версия)"""
+        processed = 0
+
+        try:
+            # Обрабатываем все накопленные результаты за один раз
+            results = []
+            while True:
+                try:
+                    result = self._result_queue.get_nowait()
+                    results.append(result)
+                    processed += 1
+                except queue.Empty:
+                    break
+
+            if not results:
+                return 0
+
+            self.logger.info(f"Обработка {len(results)} результатов...")
+
+            for result in results:
+                callback = result.get('callback')
+                if callback:
+                    if result['success']:
+                        callback(result['result'], None)
+                    else:
+                        callback(None, result['error'])
+
+        except Exception as e:
+            self.logger.error(f"Ошибка обработки результатов: {e}")
+
+        return processed
 
     def _init_browser(self, show_browser: bool, target_lang: str):
-        """Инициализация браузера с полной очисткой при ошибке."""
+        """Инициализация браузера с выбором движка"""
         self.logger.info("Инициализация браузера...")
         self._initializing = True
         try:
@@ -44,21 +194,32 @@ class BrowserWorker:
                 self.translator = None
 
             import time
-            time.sleep(0.5)
+            time.sleep(2.0)  # УВЕЛИЧЕНО: 0.5 -> 2.0
 
-            self.logger.info("Создаем новый экземпляр GoogleTranslateDebug...")
-            self.translator = GoogleTranslateDebug(
-                headless=not show_browser,
-                target_lang=target_lang,
-                settings=self.settings
-            )
+            engine = self.settings.get_translator_engine()
+            self.logger.info(f"Используемый движок перевода: {engine}")
+
+            if engine == "yandex":
+                from src.translator import YandexOcrTranslator
+                self.translator = YandexOcrTranslator(
+                    headless=not show_browser,
+                    target_lang=target_lang,
+                    settings=self.settings
+                )
+            else:
+                from src.translator import GoogleTranslateDebug
+                self.translator = GoogleTranslateDebug(
+                    headless=not show_browser,
+                    target_lang=target_lang,
+                    settings=self.settings
+                )
 
             self.logger.info("Запускаем браузер...")
             self.translator.start_browser()
 
             self._ready = True
             self._initializing = False
-            self.logger.info("Браузер инициализирован успешно")
+            self.logger.info(f"Браузер инициализирован успешно (движок: {engine})")
             return {'ready': True}
 
         except Exception as e:
@@ -67,16 +228,12 @@ class BrowserWorker:
             self.logger.error(f"Ошибка инициализации браузера: {e}")
             if self.translator:
                 try:
-                    self.logger.info("Закрываем браузер после ошибки...")
                     self.translator.close_browser()
                 except Exception as e2:
                     self.logger.warning(f"Ошибка при закрытии браузера после ошибки: {e2}")
-                # === ВАЖНО: полностью освобождаем translator ===
                 self.translator = None
-            # === НЕМНОГО ЖДЕМ ПЕРЕД ПОВТОРНОЙ ПОПЫТКОЙ ===
             import time
             time.sleep(0.5)
-            # Пробрасываем исключение для перезапуска через app
             raise
 
     def _restart_browser(self, show_browser: bool, target_lang: str):
@@ -92,7 +249,7 @@ class BrowserWorker:
         self._ready = False
 
         import time
-        time.sleep(1.0)
+        time.sleep(2.0)  # УВЕЛИЧЕНО: 1.0 -> 2.0
 
         return self._init_browser(show_browser, target_lang)
 
@@ -123,63 +280,53 @@ class BrowserWorker:
         self.logger.info("BrowserWorker запущен")
 
     def stop(self):
-        """Останавливает рабочий поток"""
+        """Останавливает рабочий поток с таймаутом и принудительным завершением"""
+        import time
+        import threading
+
+        self.logger.info("[BROWSER_WORKER] Остановка...")
+
+        # 1. Устанавливаем флаг остановки
         self._running = False
+
+        # 2. Отправляем сигнал в очередь
         if self._command_queue:
             try:
                 self._command_queue.put_nowait(None)
-            except:
-                pass
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=2.0)
-        self.logger.info("BrowserWorker остановлен")
-
-    def _worker_loop(self):
-        """Главный цикл рабочего потока"""
-        self.logger.info("Рабочий цикл BrowserWorker запущен")
-        while self._running:
-            try:
-                try:
-                    command = self._command_queue.get(timeout=0.5)
-                except queue.Empty:
-                    continue
-                if command is None:
-                    break
-                cmd_type = command.get('type')
-                cmd_id = command.get('id')
-                args = command.get('args', [])
-                kwargs = command.get('kwargs', {})
-                callback = command.get('callback')
-                self.logger.info(f"Выполнение команды: {cmd_type} (id={cmd_id})")
-                try:
-                    result = self._execute_command(cmd_type, *args, **kwargs)
-                    self._result_queue.put({
-                        'id': cmd_id,
-                        'success': True,
-                        'result': result,
-                        'error': None,
-                        'callback': callback
-                    })
-                    self.logger.info(f"Команда {cmd_type} выполнена успешно, результат в очереди")
-                except Exception as e:
-                    self.logger.error(f"Ошибка выполнения команды {cmd_type}: {e}")
-                    self._result_queue.put({
-                        'id': cmd_id,
-                        'success': False,
-                        'result': None,
-                        'error': str(e),
-                        'callback': callback
-                    })
+                self.logger.info("[BROWSER_WORKER] Сигнал остановки отправлен в очередь")
             except Exception as e:
-                self.logger.error(f"Ошибка в рабочем цикле: {e}")
-                time.sleep(0.1)
-        if self.translator:
+                self.logger.warning(f"[BROWSER_WORKER] Ошибка отправки сигнала: {e}")
+
+        # 3. Отменяем текущий перевод
+        if hasattr(self, 'translator') and self.translator:
             try:
-                self.translator.close_browser()
+                self.translator.cancel_translation()
             except:
                 pass
+
+        # 4. Закрываем браузер (это может занять время)
+        if hasattr(self, 'translator') and self.translator:
+            try:
+                self.logger.info("[BROWSER_WORKER] Закрытие браузера...")
+                close_start = time.time()
+                self.translator.close_browser()
+                close_elapsed = time.time() - close_start
+                self.logger.info(f"[BROWSER_WORKER] Браузер закрыт за {close_elapsed:.2f}с")
+            except Exception as e:
+                self.logger.warning(f"[BROWSER_WORKER] Ошибка закрытия браузера: {e}")
             self.translator = None
-        self.logger.info("Рабочий цикл BrowserWorker завершен")
+
+        # 5. Ждем завершения потока с таймаутом (уменьшено до 0.5 секунды)
+        if self._thread and self._thread.is_alive():
+            self.logger.info("[BROWSER_WORKER] Ожидание завершения потока...")
+            self._thread.join(timeout=0.5)  # УМЕНЬШЕНО: 3.0 -> 0.5
+
+            if self._thread.is_alive():
+                self.logger.warning("[BROWSER_WORKER] Поток не завершился за 0.5 секунды, продолжаем закрытие.")
+                # Не пытаемся сделать поток демоном - просто продолжаем
+                # Поток будет завершен при выходе из процесса
+
+        self.logger.info("[BROWSER_WORKER] Остановлен")
 
     def _execute_command(self, cmd_type: str, *args, **kwargs):
         """Выполняет команду в рабочем потоке"""
@@ -197,6 +344,9 @@ class BrowserWorker:
                 return self._update_interface_language(*args, **kwargs)
             elif cmd_type == 'reset_page':
                 return self._reset_page()
+            # Новая команда для Yandex
+            elif cmd_type == 'update_yandex_language':
+                return self._update_yandex_language(*args, **kwargs)
             elif cmd_type == 'close':
                 return self._close_browser()
             else:
@@ -314,27 +464,6 @@ class BrowserWorker:
             'callback': callback
         })
         return cmd_id
-
-    def process_results(self):
-        """Обрабатывает полученные результаты (вызывать из основного потока)"""
-        processed = 0
-        try:
-            while True:
-                result = self._result_queue.get_nowait()
-                processed += 1
-                self.logger.info(f"Обработка результата: id={result.get('id')}, success={result.get('success')}")
-                callback = result.get('callback')
-                if callback:
-                    self.logger.info(f"Вызов колбэка для id={result.get('id')}")
-                    if result['success']:
-                        callback(result['result'], None)
-                    else:
-                        callback(None, result['error'])
-                else:
-                    self.logger.warning(f"Нет колбэка для результата id={result.get('id')}")
-        except queue.Empty:
-            pass
-        return processed
 
     @property
     def is_ready(self) -> bool:

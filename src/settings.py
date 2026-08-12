@@ -19,12 +19,16 @@ class Settings:
         "hide_delay": 1500,
         "always_on_top": True,
         "current_profile": "default",
-        "show_browser": True,
+        "show_browser": False,  # <-- ИЗМЕНЕНО: по умолчанию браузер скрыт
         "show_translation_indicator": True,
         "browser_path": "",
         "auto_hide_overlay": True,
         "auto_windowed_fullscreen": True,
-        "edit_mode_enabled": False
+        "edit_mode_enabled": False,
+        "auto_replace_translated": True,
+        "temporary_lifetime": 180,
+        "translator_engine": "google",  # "google" или "yandex"
+        "target_language": "ru",
     }
 
     # Значения горячих клавиш по умолчанию
@@ -33,7 +37,9 @@ class Settings:
         "area": "f3",
         "toggle_overlay": "f1",
         "clear_all": "f4",
-        "edit_mode": "f5"
+        "edit_mode": "f5",
+        "auto_replace": "f6",
+        "fullscreen_ocr": "f3",  # Это же F3, но с длительным зажатием
     }
 
     def __init__(self):
@@ -43,6 +49,25 @@ class Settings:
         self._config_dir = Path.home() / "Documents" / "GoogleScreenTranslate" / "config"
         self._config_file = self._config_dir / "settings.json"
         self.load()
+
+    def get_translator_engine(self) -> str:
+        """Возвращает выбранный движок перевода ('google' или 'yandex')"""
+        return self.settings.get("translator_engine", "google")
+
+    def set_translator_engine(self, engine: str):
+        """Устанавливает движок перевода ('google' или 'yandex')"""
+        if engine in ["google", "yandex"]:
+            self.settings["translator_engine"] = engine
+            self.save()
+
+    def get_auto_replace_translated(self) -> bool:
+        """Возвращает настройку автозамены уже переведенных областей."""
+        return self.settings.get("auto_replace_translated", True)
+
+    def set_auto_replace_translated(self, enabled: bool):
+        """Устанавливает настройку автозамены уже переведенных областей."""
+        self.settings["auto_replace_translated"] = enabled
+        self.save()
 
     def get_edit_mode_enabled(self) -> bool:
         """Возвращает настройку режима редактирования."""
@@ -62,6 +87,74 @@ class Settings:
         self.settings["auto_windowed_fullscreen"] = enabled
         self.save()
 
+    def get_confidence_threshold(self) -> float:
+        """Возвращает порог уверенности для поиска областей."""
+        return self.settings.get("confidence_threshold", 0.8)
+
+    def set_confidence_threshold(self, value: float):
+        """Устанавливает порог уверенности для поиска областей."""
+        self.settings["confidence_threshold"] = max(0.5, min(1.0, value))
+        self.save()
+
+    def get_monitor_delay(self) -> float:
+        """Возвращает задержку между сканированиями."""
+        return self.settings.get("monitor_delay", 0.3)
+
+    def set_monitor_delay(self, value: float):
+        """Устанавливает задержку между сканированиями."""
+        self.settings["monitor_delay"] = max(0.1, value)
+        self.save()
+
+    def get_temporary_lifetime(self) -> int:
+        """Возвращает время жизни временного оверлея в секундах."""
+        return self.settings.get("temporary_lifetime", 180)
+
+    def set_temporary_lifetime(self, seconds: int):
+        """Устанавливает время жизни временного оверлея в секундах."""
+        self.settings["temporary_lifetime"] = max(10, min(600, seconds))
+        self.save()
+
+    # === МЕТОДЫ ДЛЯ ГОРЯЧИХ КЛАВИШ ===
+
+    def get_hotkey(self, action: str) -> str:
+        """
+        Возвращает назначенную горячую клавишу для действия.
+        Если клавиша не назначена, возвращает значение по умолчанию.
+        """
+        return self.settings.get(f"hotkey_{action}", self.DEFAULT_HOTKEYS.get(action, ""))
+
+    def set_hotkey(self, action: str, key: str):
+        """Устанавливает горячую клавишу для действия. Нормализует строку."""
+        normalized = key.lower().strip()
+        parts = normalized.split('+')
+        unique_parts = []
+        seen = set()
+        for p in parts:
+            p = p.strip()
+            if p and p not in seen:
+                unique_parts.append(p)
+                seen.add(p)
+        normalized = '+'.join(unique_parts)
+        self.settings[f"hotkey_{action}"] = normalized
+        self.save()
+
+    def get_all_hotkeys(self) -> dict:
+        return {
+            "screenshot": self.get_hotkey("screenshot"),
+            "area": self.get_hotkey("area"),
+            "toggle_overlay": self.get_hotkey("toggle_overlay"),
+            "clear_all": self.get_hotkey("clear_all"),
+            "edit_mode": self.get_hotkey("edit_mode"),
+            "auto_replace": self.get_hotkey("auto_replace"),
+            "fullscreen_ocr": self.get_hotkey("fullscreen_ocr"),
+        }
+
+    def reset_hotkeys_to_default(self):
+        """Сбрасывает все горячие клавиши к значениям по умолчанию."""
+        for action, default_key in self.DEFAULT_HOTKEYS.items():
+            self.settings[f"hotkey_{action}"] = default_key
+        self.save()
+
     def load_values(self):
         """Загружает текущие настройки в поля"""
         current_path = self.settings.get_browser_path()
@@ -72,6 +165,8 @@ class Settings:
             self.auto_hide_var.set(self.settings.get_auto_hide_overlay())
         if hasattr(self, 'auto_windowed_fullscreen_var'):
             self.auto_windowed_fullscreen_var.set(self.settings.get_auto_windowed_fullscreen())
+        if hasattr(self, 'auto_replace_translated_var'):
+            self.auto_replace_translated_var.set(self.settings.get_auto_replace_translated())
         if hasattr(self, 'hotkey_vars'):
             for action, var in self.hotkey_vars.items():
                 var.set(self.settings.get_hotkey(action))
@@ -167,7 +262,7 @@ class Settings:
 
     def get_show_browser(self):
         """Возвращает настройку показа браузера"""
-        return self.settings.get("show_browser", True)
+        return self.settings.get("show_browser", False)  # <-- ИЗМЕНЕНО: по умолчанию False
 
     def set_show_browser(self, show):
         """Устанавливает настройку показа браузера"""
@@ -234,45 +329,3 @@ class Settings:
             self.save()
             return True
         return False
-
-    # ========== МЕТОДЫ ДЛЯ ГОРЯЧИХ КЛАВИШ ==========
-
-    def get_hotkey(self, action: str) -> str:
-        """
-        Возвращает назначенную горячую клавишу для действия.
-        Если клавиша не назначена, возвращает значение по умолчанию.
-        """
-        return self.settings.get(f"hotkey_{action}", self.DEFAULT_HOTKEYS.get(action, ""))
-
-    def set_hotkey(self, action: str, key: str):
-        """Устанавливает горячую клавишу для действия. Нормализует строку."""
-        # Нормализуем: приводим к нижнему регистру, убираем лишние пробелы
-        normalized = key.lower().strip()
-        # Убираем дублирующиеся модификаторы
-        parts = normalized.split('+')
-        unique_parts = []
-        seen = set()
-        for p in parts:
-            p = p.strip()
-            if p and p not in seen:
-                unique_parts.append(p)
-                seen.add(p)
-        normalized = '+'.join(unique_parts)
-        self.settings[f"hotkey_{action}"] = normalized
-        self.save()
-
-    def get_all_hotkeys(self) -> dict:
-        """Возвращает словарь всех горячих клавиш."""
-        return {
-            "screenshot": self.get_hotkey("screenshot"),
-            "area": self.get_hotkey("area"),
-            "toggle_overlay": self.get_hotkey("toggle_overlay"),
-            "clear_all": self.get_hotkey("clear_all"),
-            "edit_mode": self.get_hotkey("edit_mode")
-        }
-
-    def reset_hotkeys_to_default(self):
-        """Сбрасывает все горячие клавиши к значениям по умолчанию."""
-        for action, default_key in self.DEFAULT_HOTKEYS.items():
-            self.settings[f"hotkey_{action}"] = default_key
-        self.save()
