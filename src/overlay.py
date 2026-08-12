@@ -523,19 +523,13 @@ class OverlayWindow:
         except Exception as e:
             self.logger.warning(f"[DEBUG][hide] Ошибка сохранения позиции: {e}")
 
-        # ============================================================
-        # НЕ БЛОКИРУЕМ ПОКАЗ ПРИ F1
-        # by_user=True означает, что пользователь нажал F1 или ПКМ
-        # ============================================================
         if by_user:
             self._hidden_by_user = True
             self._is_visible_by_user = False
         else:
-            # При системном скрытии (переключение окон) НЕ сбрасываем _is_visible_by_user
             self._hidden_by_user = False
 
         self.visible = False
-
         self._stop_visibility_monitor()
 
         try:
@@ -543,6 +537,14 @@ class OverlayWindow:
             self.logger.info("[DEBUG][hide] оверлей скрыт")
         except Exception as e:
             self.logger.error(f"[DEBUG][hide] ОШИБКА: {e}")
+
+        # ============================================================
+        # СООБЩАЕМ РОДИТЕЛЮ, ЧТО ОВЕРЛЕЙ СКРЫТ
+        # ============================================================
+        if hasattr(self, '_overlay_manager') and self._overlay_manager:
+            parent = self._overlay_manager.parent
+            if parent and hasattr(parent, '_on_overlay_hidden'):
+                parent._on_overlay_hidden(self)
 
     def show(self):
         """Показывает оверлей."""
@@ -612,13 +614,20 @@ class OverlayWindow:
             self._is_visible_by_user = True
 
             # ============================================================
+            # ДОБАВЛЯЕМ ОВЕРЛЕЙ В СПИСОК НЕДАВНО АКТИВНЫХ
+            # ============================================================
+            if hasattr(self, '_overlay_manager') and self._overlay_manager:
+                parent = self._overlay_manager.parent
+                if parent and hasattr(parent, '_add_recent_overlay'):
+                    parent._add_recent_overlay(self)
+
+            # ============================================================
             # ПОДНИМАЕМ МИНИ-БАР ПОВЕРХ ОВЕРЛЕЯ ПОСЛЕ ПОКАЗА
             # ============================================================
             if hasattr(self, '_overlay_manager') and self._overlay_manager:
                 parent = self._overlay_manager.parent
                 if parent and hasattr(parent, '_ensure_mini_bar_on_top'):
                     if hasattr(parent, 'root') and parent.root:
-                        # Даём оверлею время полностью отрисоваться
                         parent.root.after(50, parent._ensure_mini_bar_on_top)
 
             if self.auto_hide_enabled:

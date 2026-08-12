@@ -29,6 +29,7 @@ from src.utils import ensure_app_temp_dir
 from src.window_list import WindowListManager
 from PIL import Image, ImageTk
 
+
 def cleanup_old_logs(log_dir, keep_count=5):
     """Очищает старые логи"""
     try:
@@ -131,12 +132,9 @@ class ScreenshotTranslatorApp:
         # ============================================================
         # ИСПРАВЛЕНИЕ: отключаем debug-режим в .exe по умолчанию
         # ============================================================
-        # Если приложение собрано в .exe и debug_mode не передан явно,
-        # отключаем debug-режим
         if getattr(sys, 'frozen', False) and not debug_mode:
             debug_mode = False
 
-        # Сохраняем флаг отладки
         self.debug_mode = debug_mode
 
         # Настройка логирования
@@ -186,6 +184,12 @@ class ScreenshotTranslatorApp:
         # Для F4: запоминаем последний перетащенный F2-оверлей
         self._last_dragged_f2_overlay = None
 
+        # ============================================================
+        # ХРАНЕНИЕ НЕДАВНО АКТИВНЫХ ОВЕРЛЕЕВ
+        # ============================================================
+        self._recent_overlays = {}  # app_name -> список (overlay, время_скрытия или None)
+        self._recent_overlays_timeout = 4.0  # 4 секунды после скрытия
+
         # Поля для захвата
         self._area_target_hwnd = None
         self._area_is_fullscreen = False
@@ -222,6 +226,56 @@ class ScreenshotTranslatorApp:
         self._force_log_flush()
         self.logger.info("✅ Приложение инициализировано успешно")
         self._force_log_flush()
+
+    def _on_overlay_hidden(self, overlay):
+        """Вызывается когда оверлей скрывается — запоминаем время скрытия."""
+        if not overlay:
+            return
+
+        app_name = overlay._app_name or "Неизвестно"
+        current_time = time.time()
+
+        if app_name in self._recent_overlays:
+            for i, (existing_overlay, _) in enumerate(self._recent_overlays[app_name]):
+                if existing_overlay is overlay:
+                    self._recent_overlays[app_name][i] = (overlay, current_time)
+                    self.logger.info(f"[RECENT] Оверлей для {app_name} скрыт, время: {current_time}")
+                    return
+
+    def _cleanup_recent_overlays(self, app_name: str = None):
+        """Удаляет оверлеи, которые были скрыты более 4 секунд назад."""
+        current_time = time.time()
+
+        if app_name:
+            if app_name in self._recent_overlays:
+                self._recent_overlays[app_name] = [
+                    (overlay, hide_time) for overlay, hide_time in self._recent_overlays[app_name]
+                    if hide_time is None or current_time - hide_time <= self._recent_overlays_timeout
+                ]
+                if not self._recent_overlays[app_name]:
+                    del self._recent_overlays[app_name]
+        else:
+            for app_name in list(self._recent_overlays.keys()):
+                self._cleanup_recent_overlays(app_name)
+
+    def _add_recent_overlay(self, overlay):
+        """Добавляет оверлей в список недавно активных при его показе."""
+        if not overlay:
+            return
+
+        app_name = overlay._app_name or "Неизвестно"
+
+        if app_name not in self._recent_overlays:
+            self._recent_overlays[app_name] = []
+
+        # Проверяем, есть ли уже такой оверлей в списке
+        for i, (existing_overlay, _) in enumerate(self._recent_overlays[app_name]):
+            if existing_overlay is overlay:
+                return  # Уже есть, не дублируем
+
+        # Добавляем новый оверлей с временем скрытия None (ещё не скрыт)
+        self._recent_overlays[app_name].append((overlay, None))
+        self.logger.info(f"[RECENT] Добавлен оверлей для {app_name}, всего: {len(self._recent_overlays[app_name])}")
 
     def _show_continuous_area_selection_window(self, screenshot_path):
         """
@@ -659,7 +713,6 @@ class ScreenshotTranslatorApp:
 
         self.set_actions_blocked(True)
 
-        # === ПОЛУЧАЕМ РЕАЛЬНОЕ АКТИВНОЕ ОКНО ===
         target_hwnd = self._get_real_active_window()
 
         if not target_hwnd:
@@ -672,6 +725,7 @@ class ScreenshotTranslatorApp:
 
         from src.window_utils import get_process_name_by_hwnd
         self._f2_target_app_name = get_process_name_by_hwnd(target_hwnd)
+        self._last_processed_app_name = self._f2_target_app_name
         self.logger.info(f"[F2] Целевое окно: HWND={target_hwnd}, приложение={self._f2_target_app_name}")
 
         self.translating = True
@@ -681,7 +735,6 @@ class ScreenshotTranslatorApp:
         def capture_task():
             try:
                 from PIL import Image
-                # Передаём найденный HWND в метод захвата
                 img = self.screenshot.capture_active_window(hwnd=target_hwnd)
                 if not img:
                     self.logger.error("[F2] Ошибка захвата окна")
@@ -1110,7 +1163,11 @@ class ScreenshotTranslatorApp:
             self._restore_mini_bar_after_area()
             return
 
-        self.logger.info(f"[F3] Целевое окно: HWND={target_hwnd}")
+        from src.window_utils import get_process_name_by_hwnd
+        self._area_target_app_name = get_process_name_by_hwnd(target_hwnd)
+        self._last_processed_app_name = self._area_target_app_name
+        self.logger.info(f"[F3] Целевое окно: HWND={target_hwnd}, приложение={self._area_target_app_name}")
+
         self._area_target_hwnd = target_hwnd
 
         # ============================================================
@@ -1130,6 +1187,18 @@ class ScreenshotTranslatorApp:
         except:
             pass
         self.ui.root.after(300, self._capture_window_for_area)
+
+        def ensure_esc_capture():
+            try:
+                if hasattr(self, '_area_selector') and self._area_selector:
+                    if self._area_selector.root and self._area_selector.root.winfo_exists():
+                        self._area_selector.root.focus_force()
+                        self._area_selector.root.grab_set()
+                        self.logger.info("[F3] Принудительный захват фокуса для ESC")
+            except:
+                pass
+
+        self.ui.root.after(500, ensure_esc_capture)
 
     def process_fullscreen_with_ocr(self):
         """
@@ -1158,7 +1227,10 @@ class ScreenshotTranslatorApp:
             self.set_actions_blocked(False)
             return
 
-        self.logger.info(f"[F3_HOLD] Целевое окно: HWND={current_hwnd}")
+        from src.window_utils import get_process_name_by_hwnd
+        self._f3_hold_target_app_name = get_process_name_by_hwnd(current_hwnd)
+        self._last_processed_app_name = self._f3_hold_target_app_name
+        self.logger.info(f"[F3_HOLD] Целевое окно: HWND={current_hwnd}, приложение={self._f3_hold_target_app_name}")
 
         # Сохраняем HWND для последующего использования
         self.screenshot._last_hwnd = current_hwnd
@@ -1198,9 +1270,9 @@ class ScreenshotTranslatorApp:
 
         def capture_and_translate_task():
             import time
+            from PIL import Image
 
             try:
-                # Передаём найденный HWND в метод захвата
                 img = self.screenshot.capture_active_window(hwnd=current_hwnd)
                 if not img:
                     self.logger.error("[F3_HOLD] Ошибка захвата окна")
@@ -2324,8 +2396,8 @@ class ScreenshotTranslatorApp:
 
     def clear_all_overlays(self):
         """
-        Удаляет последний перетащенный F2-оверлей.
-        Если такого нет - удаляет оверлеи для текущего приложения.
+        Удаляет все активные (видимые) оверлеи + недавно скрытые (в течение 4 секунд)
+        для текущего приложения.
         """
         self.logger.info("[CLEAR_ALL] Начинаем удаление оверлеев")
 
@@ -2334,23 +2406,28 @@ class ScreenshotTranslatorApp:
             self.show_notification(self.get_string('notification_remove_no_app'))
             return
 
+        # Очищаем устаревшие записи (скрытые более 4 секунд назад)
+        self._cleanup_recent_overlays()
+
         # ============================================================
-        # 1. ПРОВЕРЯЕМ: ЕСТЬ ЛИ ПОСЛЕДНИЙ ПЕРЕТАЩЕННЫЙ F2-ОВЕРЛЕЙ
+        # 1. ПРОВЕРЯЕМ ПОСЛЕДНИЙ ПЕРЕТАЩЕННЫЙ F2-ОВЕРЛЕЙ
         # ============================================================
         if hasattr(self, '_last_dragged_f2_overlay') and self._last_dragged_f2_overlay:
             overlay = self._last_dragged_f2_overlay
-
             try:
                 if overlay and overlay.root and overlay.root.winfo_exists():
                     app_name = overlay._app_name or "Неизвестно"
                     self.logger.info(f"[CLEAR_ALL] Удаляем последний перетащенный F2-оверлей для {app_name}")
                     self._clear_single_overlay(overlay)
                     self._last_dragged_f2_overlay = None
+                    if app_name in self._recent_overlays:
+                        self._recent_overlays[app_name] = [
+                            (ov, ts) for ov, ts in self._recent_overlays[app_name] if ov is not overlay
+                        ]
                     self.show_notification(f"🗑️ Удалён перетащенный оверлей для {app_name}")
                     return
                 else:
                     self._last_dragged_f2_overlay = None
-                    self.logger.info("[CLEAR_ALL] Последний перетащенный оверлей уже удалён")
             except Exception as e:
                 self.logger.warning(f"[CLEAR_ALL] Ошибка проверки перетащенного оверлея: {e}")
                 self._last_dragged_f2_overlay = None
@@ -2359,79 +2436,102 @@ class ScreenshotTranslatorApp:
         # 2. ПРОВЕРЯЕМ ОВЕРЛЕЙ ПОД КУРСОРОМ
         # ============================================================
         overlay_under_cursor = self._get_overlay_under_cursor()
-
         if overlay_under_cursor:
             self.logger.info(f"[CLEAR_ALL] Найден оверлей под курсором, удаляем")
             app_name = overlay_under_cursor._app_name or "Неизвестно"
             self._clear_single_overlay(overlay_under_cursor)
+            if app_name in self._recent_overlays:
+                self._recent_overlays[app_name] = [
+                    (ov, ts) for ov, ts in self._recent_overlays[app_name] if ov is not overlay_under_cursor
+                ]
             self.show_notification(f"🗑️ Удалён оверлей для {app_name}")
             return
 
         # ============================================================
-        # 3. ПОЛУЧАЕМ ТЕКУЩЕЕ ПРИЛОЖЕНИЕ ЧЕРЕЗ _get_real_active_window
+        # 3. ОПРЕДЕЛЯЕМ ПРИЛОЖЕНИЕ
         # ============================================================
-        target_hwnd = self._get_real_active_window()
-        if not target_hwnd:
-            self.logger.warning("[CLEAR_ALL] Не удалось определить текущее приложение")
-            self.show_notification(self.get_string('notification_remove_no_app'))
-            return
+        target_app = None
 
-        from src.window_utils import get_process_name_by_hwnd
-        current_app = get_process_name_by_hwnd(target_hwnd)
+        if hasattr(self, '_last_processed_app_name') and self._last_processed_app_name:
+            target_app = self._last_processed_app_name
+            self.logger.info(f"[CLEAR_ALL] Используем приложение из последней операции: {target_app}")
+        else:
+            target_hwnd = self._get_real_active_window()
+            if target_hwnd:
+                from src.window_utils import get_process_name_by_hwnd
+                target_app = get_process_name_by_hwnd(target_hwnd)
+                self.logger.info(f"[CLEAR_ALL] Используем текущее активное окно: {target_app}")
 
-        self.logger.info(f"[CLEAR_ALL] Текущее приложение (из реального окна): {current_app}")
-
-        if not current_app or current_app == "Неизвестно":
-            self.logger.warning("[CLEAR_ALL] Не удалось определить имя приложения")
+        if not target_app or target_app == "Неизвестно":
+            self.logger.warning("[CLEAR_ALL] Не удалось определить приложение")
             self.show_notification(self.get_string('clear_all_no_app'))
             return
 
-        overlays_for_app = self.overlay_manager.get_overlays_by_app_name(current_app)
+        # ============================================================
+        # 4. СОБИРАЕМ ВСЕ ОВЕРЛЕИ ДЛЯ УДАЛЕНИЯ
+        # ============================================================
+        overlays_to_remove = []
 
-        if not overlays_for_app:
-            self.logger.info(f"[CLEAR_ALL] Нет оверлеев для приложения {current_app}")
+        # 4.1 Все активные (видимые) оверлеи для этого приложения
+        visible_overlays = []
+        for overlay in self.overlay_manager.get_overlays_by_app_name(target_app):
+            if overlay and overlay.visible:
+                visible_overlays.append(overlay)
+                overlays_to_remove.append(overlay)
 
-            # Проверяем, есть ли вообще оверлеи
-            total_overlays = len(self.overlay_manager.overlays)
-            if total_overlays > 0:
-                self.show_notification(f"ℹ️ Нет оверлеев для {current_app} (есть для других приложений)")
-            else:
-                self.show_notification(f"ℹ️ Нет оверлеев для удаления")
+        if visible_overlays:
+            self.logger.info(f"[CLEAR_ALL] Найдено {len(visible_overlays)} активных оверлеев для {target_app}")
+
+        # 4.2 Недавно скрытые оверлеи для этого приложения (в течение 4 секунд)
+        recent_overlays = self._recent_overlays.get(target_app, [])
+        recent_to_remove = []
+
+        for overlay, hide_time in recent_overlays:
+            if hide_time is not None:  # Был скрыт
+                try:
+                    if overlay and overlay.root and overlay.root.winfo_exists():
+                        # Проверяем, не входит ли уже в список активных
+                        if overlay not in overlays_to_remove:
+                            recent_to_remove.append(overlay)
+                            overlays_to_remove.append(overlay)
+                except:
+                    pass
+
+        if recent_to_remove:
+            self.logger.info(f"[CLEAR_ALL] Найдено {len(recent_to_remove)} недавно скрытых оверлеев для {target_app}")
+
+        if not overlays_to_remove:
+            self.logger.info(f"[CLEAR_ALL] Нет оверлеев для удаления для {target_app}")
+            self.show_notification(f"ℹ️ Нет оверлеев для {target_app}")
             return
 
-        overlays_count = len(overlays_for_app)
-        self.logger.info(f"[CLEAR_ALL] Найдено {overlays_count} оверлеев для приложения {current_app}")
+        self.logger.info(f"[CLEAR_ALL] Всего к удалению: {len(overlays_to_remove)} оверлеев для {target_app}")
 
-        # Останавливаем сохранение состояния во время массового удаления
-        if hasattr(self.overlay_manager, '_suppress_save'):
-            self.overlay_manager._suppress_save = True
+        # ============================================================
+        # 5. УДАЛЯЕМ
+        # ============================================================
+        old_suppress = self.overlay_manager._suppress_save
+        self.overlay_manager._suppress_save = True
 
+        removed_count = 0
         try:
-            if hasattr(self.overlay_manager, 'remove_all_overlays_for_app'):
-                self.overlay_manager.remove_all_overlays_for_app(current_app, force=True)
-            else:
-                for overlay in overlays_for_app[:]:
-                    try:
-                        self.overlay_manager.remove_overlay(overlay, force=True)
-                    except Exception as e:
-                        self.logger.error(f"[CLEAR_ALL] Ошибка удаления оверлея: {e}")
+            for overlay in overlays_to_remove:
+                try:
+                    self.overlay_manager.remove_overlay(overlay, force=True)
+                    removed_count += 1
+                    self.logger.info(f"[CLEAR_ALL] Удалён оверлей для {target_app}")
+                except Exception as e:
+                    self.logger.error(f"[CLEAR_ALL] Ошибка удаления оверлея: {e}")
         finally:
-            if hasattr(self.overlay_manager, '_suppress_save'):
-                self.overlay_manager._suppress_save = False
+            self.overlay_manager._suppress_save = old_suppress
+            # Очищаем список недавно скрытых для этого приложения
+            if target_app in self._recent_overlays:
+                self._recent_overlays[target_app] = []
+            self.overlay_manager.save_overlay_state(immediate=True)
 
-        # Удаляем состояние из файла
-        self._remove_app_state_from_file(current_app)
-
-        # Принудительно сохраняем состояние
-        self.overlay_manager.save_overlay_state(immediate=True)
-
-        # Обновляем список окон
         self.ui.root.after(100, lambda: self.window_list.refresh(skip_restore=True))
-
-        self.show_notification(
-            self.get_string('clear_all_completed').format(app_name=current_app, count=overlays_count)
-        )
-        self.logger.info(f"[CLEAR_ALL] Очистка завершена для {current_app}")
+        self.show_notification(f"🗑️ Удалено {removed_count} оверлеев для {target_app}")
+        self.logger.info(f"[CLEAR_ALL] Очистка завершена, удалено {removed_count} оверлеев для {target_app}")
 
     def get_string(self, key: str) -> str:
         """Возвращает локализованную строку"""
@@ -2933,6 +3033,10 @@ class ScreenshotTranslatorApp:
                             overlay._hidden_by_user = False
                             if not overlay.visible:
                                 overlay.show()
+                                # ============================================================
+                                # ДОБАВЛЯЕМ ОВЕРЛЕЙ В СПИСОК НЕДАВНО АКТИВНЫХ
+                                # ============================================================
+                                self._add_recent_overlay(overlay)
                             self.ui.root.after(100, self.window_list.refresh)
                             overlay_created = True
 
@@ -2942,7 +3046,6 @@ class ScreenshotTranslatorApp:
                 # ПОДНИМАЕМ МИНИ-БАР ПОВЕРХ ОВЕРЛЕЯ С ЗАДЕРЖКОЙ
                 # ============================================================
                 if overlay_created:
-                    # Даём оверлею время полностью показаться, затем поднимаем мини-бар
                     self.ui.root.after(150, self._ensure_mini_bar_on_top)
 
             else:

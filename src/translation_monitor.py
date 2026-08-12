@@ -836,9 +836,6 @@ class TranslationMonitor:
                 if active_hwnd:
                     active_app_name = get_process_name_by_hwnd(active_hwnd)
 
-                    # ============================================================
-                    # ЕСЛИ АКТИВНОЕ ОКНО - НАШЕ ПРИЛОЖЕНИЕ, ПРОПУСКАЕМ ПРОВЕРКУ
-                    # ============================================================
                     if active_app_name and active_app_name.lower() == self._our_app_name:
                         self.logger.debug(f"[MONITOR] Активное окно {active_app_name} (наше приложение), не скрываем")
                     elif target_app_name and target_app_name != "Неизвестно":
@@ -915,6 +912,11 @@ class TranslationMonitor:
 
                         if not overlay.visible:
                             overlay.show()
+                            # ============================================================
+                            # ДОБАВЛЯЕМ ОВЕРЛЕЙ В СПИСОК НЕДАВНО АКТИВНЫХ
+                            # ============================================================
+                            if self.parent and hasattr(self.parent, '_add_recent_overlay'):
+                                self.parent._add_recent_overlay(overlay)
                             self.logger.info(f"[MONITOR] Показан оверлей #{pair_index}")
                         else:
                             if position_changed:
@@ -978,6 +980,11 @@ class TranslationMonitor:
 
                         if not new_overlay.visible:
                             new_overlay.show()
+                            # ============================================================
+                            # ДОБАВЛЯЕМ ОВЕРЛЕЙ В СПИСОК НЕДАВНО АКТИВНЫХ
+                            # ============================================================
+                            if self.parent and hasattr(self.parent, '_add_recent_overlay'):
+                                self.parent._add_recent_overlay(new_overlay)
 
                         template_data['overlay_width'] = final_w
                         template_data['overlay_height'] = final_h
