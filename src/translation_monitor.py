@@ -483,10 +483,8 @@ class TranslationMonitor:
             pair_index = self._template_counter
             self._template_counter += 1
 
-            # === ПОЛУЧАЕМ ТЕКСТ ШАБЛОНА ДЛЯ ЛОГОВ ===
             template_text = "Шаблон"
             try:
-                # Пробуем получить текст из имени файла
                 template_text = region_image.stem
                 if template_text.startswith("ocr_region_"):
                     template_text = f"Область {template_text.replace('ocr_region_', '')}"
@@ -512,15 +510,20 @@ class TranslationMonitor:
                 'overlay_height': 0,
                 'is_temporary': is_temporary,
                 'lifetime_seconds': lifetime_seconds,
-                # === НОВОЕ ПОЛЕ: ТЕКСТ ШАБЛОНА ДЛЯ ЛОГОВ ===
                 'template_text': template_text
             }
 
             self.templates.append(template_data)
-            self.logger.info(
-                f"Добавлен шаблон #{pair_index} (хеш: {file_hash[:8]}) для приложения {target_app_name}, "
-                f"временный: {is_temporary}, время жизни: {lifetime_seconds}с"
-            )
+
+            # Локализованное сообщение о добавлении шаблона
+            if is_temporary:
+                self.logger.info(
+                    f"Добавлен временный шаблон #{pair_index} (хеш: {file_hash[:8]}) для приложения {target_app_name}, время жизни: {lifetime_seconds}с"
+                )
+            else:
+                self.logger.info(
+                    f"Добавлен шаблон #{pair_index} (хеш: {file_hash[:8]}) для приложения {target_app_name}"
+                )
 
             self._frame_cache = None
             self._frame_cache_hwnd = None

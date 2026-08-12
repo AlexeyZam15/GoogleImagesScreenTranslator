@@ -416,7 +416,7 @@ def get_english_tab_strings():
 
 
 def get_russian_additional_strings():
-    """Дополнительные русские строки (область выбора, оверлеи, уведомления, мини-бар)"""
+    """Дополнительные русские строки (область выбора, оверлеи, уведомления, мини-бар, удаление)"""
     return {
         # Область выбора
         'area_selector_instruction': "Выделите область (ПКМ/ESC/Enter - выход)",
@@ -440,11 +440,35 @@ def get_russian_additional_strings():
         # Очистка
         'clear_all_no_app': "Не удалось определить текущее приложение",
         'clear_all_no_overlays': "Нет оверлеев для {app_name}",
+        'clear_all_no_overlays_recent': "ℹ️ Нет оверлеев, созданных в последние 30 секунд для {app_name}",
         'clear_all_completed': "✅ Оверлеи для {app_name} удалены ({count} шт.)",
+
+        # Удаление оверлеев
+        'clear_all_deleted_dragged': "🗑️ Удалён перетащенный оверлей для {app_name}",
+        'clear_all_deleted_under_cursor': "🗑️ Удалён оверлей для {app_name}",
+        'clear_all_deleted_count': "🗑️ Удалено {count} оверлеев для {app_name}",
+        'clear_all_deleted_single': "🗑️ Удалён оверлей для {app_name}",
+
+        # Создание оверлеев
+        'overlay_created': "✅ Оверлей создан",
+        'overlay_created_single': "✅ Создан оверлей для {app_name}",
+        'overlay_created_count': "✅ Создано {count} оверлеев для {app_name}",
+        'overlay_creation_failed': "❌ Не удалось создать оверлей",
+        'overlay_creation_error': "❌ Ошибка создания оверлея: {error}",
+
+        # Шаблоны и мониторинг
+        'template_added': "✅ Шаблон #{index} добавлен",
+        'template_added_for_app': "✅ Шаблон #{index} добавлен для {app_name}",
+        'template_added_temporary': "⏱ Временный шаблон #{index} добавлен, время жизни: {lifetime}с",
+        'template_removed': "🗑️ Шаблон #{index} удалён",
+        'templates_cleared': "🗑️ Все шаблоны очищены",
+        'monitor_started': "🔍 Мониторинг запущен для {count} шаблонов",
+        'monitor_stopped': "🔍 Мониторинг остановлен",
 
         # Перевод и уведомления
         'translation_status_translating': "Перевод...",
         'translation_status_ready': "✅ Готово!",
+        'translation_error': "❌ Ошибка перевода",
         'notification_capturing': "Скриншот...",
         'notification_select_area': "Выберите область...",
         'notification_select_area_temporary': "Выберите область (временный перевод)...",
@@ -476,7 +500,7 @@ def get_russian_additional_strings():
 
 
 def get_english_additional_strings():
-    """Additional English strings (area selector, overlays, notifications, mini-bar)"""
+    """Additional English strings (area selector, overlays, notifications, mini-bar, removal)"""
     return {
         # Area selector
         'area_selector_instruction': "Select area (RMB/ESC/Enter - exit)",
@@ -500,11 +524,35 @@ def get_english_additional_strings():
         # Clear
         'clear_all_no_app': "Failed to determine current application",
         'clear_all_no_overlays': "No overlays for {app_name}",
+        'clear_all_no_overlays_recent': "ℹ️ No overlays created in the last 30 seconds for {app_name}",
         'clear_all_completed': "✅ Overlays for {app_name} removed ({count} pcs.)",
+
+        # Overlay removal
+        'clear_all_deleted_dragged': "🗑️ Removed dragged overlay for {app_name}",
+        'clear_all_deleted_under_cursor': "🗑️ Removed overlay for {app_name}",
+        'clear_all_deleted_count': "🗑️ Removed {count} overlays for {app_name}",
+        'clear_all_deleted_single': "🗑️ Removed overlay for {app_name}",
+
+        # Overlay creation
+        'overlay_created': "✅ Overlay created",
+        'overlay_created_single': "✅ Created overlay for {app_name}",
+        'overlay_created_count': "✅ Created {count} overlays for {app_name}",
+        'overlay_creation_failed': "❌ Failed to create overlay",
+        'overlay_creation_error': "❌ Overlay creation error: {error}",
+
+        # Templates and monitoring
+        'template_added': "✅ Template #{index} added",
+        'template_added_for_app': "✅ Template #{index} added for {app_name}",
+        'template_added_temporary': "⏱ Temporary template #{index} added, lifetime: {lifetime}s",
+        'template_removed': "🗑️ Template #{index} removed",
+        'templates_cleared': "🗑️ All templates cleared",
+        'monitor_started': "🔍 Monitoring started for {count} templates",
+        'monitor_stopped': "🔍 Monitoring stopped",
 
         # Translation and notifications
         'translation_status_translating': "Translating...",
         'translation_status_ready': "✅ Ready!",
+        'translation_error': "❌ Translation error",
         'notification_capturing': "Screenshotting...",
         'notification_select_area': "Select area...",
         'notification_select_area_temporary': "Select area (temporary translation)...",

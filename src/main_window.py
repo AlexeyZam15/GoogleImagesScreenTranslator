@@ -76,6 +76,11 @@ class MainWindow:
         # ============================================================
         self.root.bind('<F1>', lambda e: 'break')
 
+        # ============================================================
+        # БЛОКИРУЕМ МЕНЮ ДО ИНИЦИАЛИЗАЦИИ
+        # ============================================================
+        self.set_settings_menu_enabled(False)
+
         self.root.deiconify()
         self.root.lift()
         self.root.focus_force()
@@ -107,8 +112,8 @@ class MainWindow:
 
             # Проверяем, что view_menu - это объект Menu, а не строка
             if not isinstance(view_menu, Menu):
-                self.logger.warning("[MENU] view_menu не является объектом Menu, пересоздаём меню")
-                self.create_menu()
+                # Если это не Menu, пересоздаём только меню "Вид"
+                self._rebuild_view_menu()
                 return
 
             # Очищаем меню
@@ -126,14 +131,66 @@ class MainWindow:
                     command=self.app.toggle_mini_bar
                 )
 
+            # Сохраняем состояние меню (разблокировано, если приложение готово)
+            if hasattr(self.app, 'ready') and self.app.ready:
+                self.set_settings_menu_enabled(True)
+
             self.logger.info("[MENU] Пункт 'Вид' обновлён")
         except Exception as e:
             self.logger.warning(f"[MENU] Ошибка обновления меню 'Вид': {e}")
-            # В случае ошибки пересоздаём меню полностью
+            # В случае ошибки пересоздаём полностью
             try:
                 self.create_menu()
+                # Если приложение готово, разблокируем меню
+                if hasattr(self.app, 'ready') and self.app.ready:
+                    self.set_settings_menu_enabled(True)
             except:
                 pass
+
+    def _rebuild_view_menu(self):
+        """Пересоздаёт только меню 'Вид' без пересоздания всего меню."""
+        try:
+            if not hasattr(self, '_menubar') or not self._menubar:
+                return
+
+            # Ищем индекс пункта "Вид"
+            view_index = None
+            for index in range(self._menubar.index('end') + 1):
+                try:
+                    label = self._menubar.entrycget(index, 'label')
+                    if label == self.get_string('menu_view'):
+                        view_index = index
+                        break
+                except:
+                    pass
+
+            if view_index is None:
+                return
+
+            # Удаляем старый пункт и создаём новый
+            self._menubar.delete(view_index)
+
+            view_menu = Menu(self._menubar, tearoff=0, bg='#1e1e1e', fg='white',
+                             activebackground='#333333', activeforeground='white')
+
+            if hasattr(self.app, '_mini_bar_window') and self.app._mini_bar_window:
+                view_menu.add_command(
+                    label=self.get_string('mini_bar_hide'),
+                    command=self.app.toggle_mini_bar
+                )
+            else:
+                view_menu.add_command(
+                    label=self.get_string('mini_bar_show'),
+                    command=self.app.toggle_mini_bar
+                )
+
+            self._menubar.insert_cascade(view_index, label=self.get_string('menu_view'), menu=view_menu)
+            self._view_menu = view_menu
+
+        except Exception as e:
+            self.logger.warning(f"[MENU] Ошибка пересоздания меню 'Вид': {e}")
+            # Fallback
+            self.create_menu()
 
     def create_menu(self):
         """Создает главное меню"""
@@ -151,7 +208,7 @@ class MainWindow:
         # === МЕНЮ ВИД ===
         view_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
                          activeforeground='white')
-        menubar.add_cascade(label=self.get_string('menu_view'), menu=view_menu)
+        menubar.add_cascade(label=self.get_string('menu_view'), menu=view_menu, state=DISABLED)
 
         if hasattr(self.app, '_mini_bar_window') and self.app._mini_bar_window:
             view_menu.add_command(
@@ -168,7 +225,7 @@ class MainWindow:
         # === МЕНЮ НАСТРОЕК ===
         settings_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
                              activeforeground='white')
-        menubar.add_cascade(label=self.get_string('menu_settings'), menu=settings_menu)
+        menubar.add_cascade(label=self.get_string('menu_settings'), menu=settings_menu, state=DISABLED)
         settings_menu.add_command(label=self.get_string('menu_settings_item'), command=self.app.open_settings)
         settings_menu.add_separator()
         settings_menu.add_command(label=self.get_string('menu_reset_settings'), command=self.app.reset_settings)
@@ -176,7 +233,7 @@ class MainWindow:
         # === МЕНЮ ГОРЯЧИХ КЛАВИШ ===
         hotkeys_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
                             activeforeground='white')
-        menubar.add_cascade(label=self.get_string('menu_hotkeys'), menu=hotkeys_menu)
+        menubar.add_cascade(label=self.get_string('menu_hotkeys'), menu=hotkeys_menu, state=DISABLED)
         hotkeys_menu.add_command(label=self.get_string('menu_hotkeys_show'), command=self.show_hotkeys_window)
 
         # === МЕНЮ ПОМОЩИ ===
@@ -587,7 +644,7 @@ class MainWindow:
                             self._menubar.entryconfig(index, state=state)
                         elif label == self.get_string('menu_hotkeys'):
                             self._menubar.entryconfig(index, state=state)
-                        elif label == self.get_string('menu_view'):  # <-- ДОБАВЛЯЕМ
+                        elif label == self.get_string('menu_view'):
                             self._menubar.entryconfig(index, state=state)
                     except:
                         pass
