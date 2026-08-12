@@ -170,13 +170,37 @@ class OverlayWindow:
         self.root.bind('<Leave>', self._on_mouse_leave)
 
         # ============================================================
-        # ДОБАВЛЯЕМ ЛОКАЛЬНЫЙ ОБРАБОТЧИК ESC ДЛЯ ОВЕРЛЕЯ
+        # ДОБАВЛЯЕМ ПРИВЯЗКИ ДЛЯ ПОДНЯТИЯ МИНИ-БАРА
+        # ============================================================
+        self.canvas.bind('<ButtonPress-1>', self._on_click_raise_mini_bar, add='+')
+        self.root.bind('<ButtonPress-1>', self._on_click_raise_mini_bar, add='+')
+        self.root.bind('<FocusIn>', self._on_focus_raise_mini_bar, add='+')
+
+        # ============================================================
+        # ЛОКАЛЬНЫЙ ОБРАБОТЧИК ESC
         # ============================================================
         self.root.bind('<Escape>', self._on_escape_local)
         self.canvas.bind('<Escape>', self._on_escape_local)
         self.logger.info("[OVERLAY] Локальный обработчик ESC добавлен")
 
         self.logger.info("OverlayWindow инициализирован")
+
+    def _on_click_raise_mini_bar(self, event):
+        """Обработчик клика по оверлею — поднимает мини-бар поверх."""
+        self._raise_mini_bar()
+
+    def _on_focus_raise_mini_bar(self, event):
+        """Обработчик получения фокуса оверлеем — поднимает мини-бар поверх."""
+        self._raise_mini_bar()
+
+    def _raise_mini_bar(self):
+        """Поднимает мини-бар поверх оверлея."""
+        if hasattr(self, '_overlay_manager') and self._overlay_manager:
+            parent = self._overlay_manager.parent
+            if parent and hasattr(parent, '_ensure_mini_bar_on_top'):
+                if hasattr(parent, 'root') and parent.root:
+                    parent.root.after(10, parent._ensure_mini_bar_on_top)
+                    self.logger.debug("[OVERLAY] Мини-бар поднят после клика/фокуса")
 
     def _on_escape_local(self, event):
         """Локальный обработчик ESC для оверлея."""
@@ -588,8 +612,14 @@ class OverlayWindow:
             self._is_visible_by_user = True
 
             # ============================================================
-            # УБРАН АВТОФОКУС НА ОВЕРЛЕЙ
+            # ПОДНИМАЕМ МИНИ-БАР ПОВЕРХ ОВЕРЛЕЯ ПОСЛЕ ПОКАЗА
             # ============================================================
+            if hasattr(self, '_overlay_manager') and self._overlay_manager:
+                parent = self._overlay_manager.parent
+                if parent and hasattr(parent, '_ensure_mini_bar_on_top'):
+                    if hasattr(parent, 'root') and parent.root:
+                        # Даём оверлею время полностью отрисоваться
+                        parent.root.after(50, parent._ensure_mini_bar_on_top)
 
             if self.auto_hide_enabled:
                 self._start_visibility_monitor()
@@ -1153,8 +1183,14 @@ class OverlayWindow:
                 self._enable_esc_hook()
 
                 # ============================================================
-                # УБРАН АВТОФОКУС НА ОВЕРЛЕЙ
+                # ПОДНИМАЕМ МИНИ-БАР ПОВЕРХ ОВЕРЛЕЯ ПОСЛЕ ПОКАЗА
                 # ============================================================
+                if hasattr(self, '_overlay_manager') and self._overlay_manager:
+                    parent = self._overlay_manager.parent
+                    if parent and hasattr(parent, '_ensure_mini_bar_on_top'):
+                        if hasattr(parent, 'root') and parent.root:
+                            # Даём оверлею время полностью отрисоваться
+                            parent.root.after(80, parent._ensure_mini_bar_on_top)
 
                 if self._edit_frame_visible:
                     self._update_edit_frame_position()

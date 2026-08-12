@@ -3,6 +3,145 @@
 """
 
 
+def get_russian_all_strings():
+    """Объединяет все русские строки в один словарь"""
+    strings = {}
+    strings.update(get_russian_main_strings())
+    strings.update(get_russian_button_strings())
+    strings.update(get_russian_settings_strings())
+    strings.update(get_russian_menu_strings())
+    strings.update(get_russian_settings_window_strings())
+    strings.update(get_russian_about_strings())
+    strings.update(get_russian_shortcuts_strings())
+    strings.update(get_russian_help_strings())
+    strings.update(get_russian_hotkeys_strings())
+    strings.update(get_russian_translator_engine_strings())
+    strings.update(get_russian_tab_strings())
+
+    # Дополнительные строки
+    strings['area_selector_instruction'] = "Выделите область (ПКМ/ESC/Enter - выход)"
+    strings['area_selector_counter'] = "Выделено: {}"
+    strings['area_selector_error_title'] = "Ошибка"
+    strings['area_selector_error_too_small'] = "Выделите область размером больше {min_size}x{min_size} пикселей"
+    strings['context_menu_remove_overlays'] = "🗑️ Удалить оверлеи"
+    strings['temporary_lifetime'] = "⏱ Время жизни временного оверлея:"
+    strings['temporary_lifetime_tooltip'] = "Время в секундах, через которое временный оверлей автоматически удалится"
+    strings[
+        'temporary_lifetime_tooltip_new'] = "Время в секундах, через которое временный оверлей, созданный через ПКМ в режиме F3, автоматически удалится"
+    strings['overlay_toggle_no_overlays'] = "Нет оверлеев для переключения"
+    strings['overlay_toggle_unknown_app'] = "Не удалось определить текущее приложение"
+    strings['overlay_toggle_no_overlays_for_app'] = "Нет оверлеев для {app_name}"
+    strings['overlay_toggle_status_shown'] = "показаны"
+    strings['overlay_toggle_status_hidden'] = "скрыты"
+    strings['overlay_toggle_notification'] = "Оверлеи для {app_name} {status}"
+    strings['overlay_toggle_no_templates_found'] = "Не найдено шаблонов на экране"
+    strings['clear_all_no_app'] = "Не удалось определить текущее приложение"
+    strings['clear_all_no_overlays'] = "Нет оверлеев для {app_name}"
+    strings['clear_all_completed'] = "✅ Оверлеи для {app_name} удалены ({count} шт.)"
+    strings['translation_status_translating'] = "Перевод..."
+    strings['translation_status_ready'] = "✅ Готово!"
+    strings['notification_capturing'] = "Скриншот..."
+    strings['notification_select_area'] = "Выберите область..."
+    strings['notification_select_area_temporary'] = "Выберите область (временный перевод)..."
+    strings['notification_translation_ready'] = "Перевод готов"
+    strings['notification_remove_no_app'] = "Не удалось определить текущее приложение"
+    strings[
+        'hotkey_area_temporary_hint'] = "💡 Временный перевод: ПКМ в режиме F3 — оверлей автоматически удалится через заданное время (настраивается в Настройках → Интерфейс)"
+    strings['f3_hold_notification'] = "📸 Захват окна для OCR..."
+    strings['f3_hold_ocr_processing'] = "🔄 Выполняется OCR анализ..."
+    strings['f3_hold_no_text'] = "ℹ️ Текст не обнаружен на переведённом изображении"
+    strings['f3_hold_overlays_created'] = "✅ Создано {count} оверлеев"
+    strings['f3_hold_error_ocr'] = "❌ Ошибка OCR: {error}"
+    strings['f3_hold_missing_easyocr'] = "❌ EasyOCR не установлен. Установите: pip install easyocr"
+    strings['f3_hold_creating_overlays'] = "📝 Создание {count} оверлеев..."
+
+    # Строки для мини-бара
+    strings['menu_view'] = "Вид"
+    strings['mini_bar_show'] = "Показать мини-бар"
+    strings['mini_bar_hide'] = "Скрыть мини-бар"
+    strings['mini_bar_title'] = "Мини-бар"
+    strings['mini_bar_tooltip_f1'] = "F1 - Показать/скрыть оверлей"
+    strings['mini_bar_tooltip_f2'] = "F2 - Скриншот окна"
+    strings['mini_bar_tooltip_f3'] = "F3 - Выделение области"
+    strings['mini_bar_tooltip_f3_hold'] = "F3 (зажатый) - OCR всего окна"
+    strings['mini_bar_tooltip_f4'] = "F4 - Удалить все оверлеи"
+    strings['mini_bar_tooltip_f5'] = "F5 - Режим редактирования"
+    strings['mini_bar_tooltip_f6'] = "F6 - Автозамена областей"
+    strings['mini_bar_close'] = "Закрыть мини-бар (ESC)"
+
+    return strings
+
+
+def get_english_all_strings():
+    """Объединяет все английские строки в один словарь"""
+    strings = {}
+    strings.update(get_english_main_strings())
+    strings.update(get_english_button_strings())
+    strings.update(get_english_settings_strings())
+    strings.update(get_english_menu_strings())
+    strings.update(get_english_settings_window_strings())
+    strings.update(get_english_about_strings())
+    strings.update(get_english_shortcuts_strings())
+    strings.update(get_english_help_strings())
+    strings.update(get_english_hotkeys_strings())
+    strings.update(get_english_translator_engine_strings())
+    strings.update(get_english_tab_strings())
+
+    # Additional strings
+    strings['area_selector_instruction'] = "Select area (RMB/ESC/Enter - exit)"
+    strings['area_selector_counter'] = "Selected: {}"
+    strings['area_selector_error_title'] = "Error"
+    strings['area_selector_error_too_small'] = "Select an area larger than {min_size}x{min_size} pixels"
+    strings['context_menu_remove_overlays'] = "🗑️ Remove overlays"
+    strings['temporary_lifetime'] = "⏱ Temporary overlay lifetime:"
+    strings[
+        'temporary_lifetime_tooltip'] = "Time in seconds after which the temporary overlay will be automatically removed"
+    strings[
+        'temporary_lifetime_tooltip_new'] = "Time in seconds after which the temporary overlay created via RMB in F3 mode will be automatically removed"
+    strings['overlay_toggle_no_overlays'] = "No overlays to toggle"
+    strings['overlay_toggle_unknown_app'] = "Failed to determine current application"
+    strings['overlay_toggle_no_overlays_for_app'] = "No overlays for {app_name}"
+    strings['overlay_toggle_status_shown'] = "shown"
+    strings['overlay_toggle_status_hidden'] = "hidden"
+    strings['overlay_toggle_notification'] = "Overlays for {app_name} {status}"
+    strings['overlay_toggle_no_templates_found'] = "No templates found on screen"
+    strings['clear_all_no_app'] = "Failed to determine current application"
+    strings['clear_all_no_overlays'] = "No overlays for {app_name}"
+    strings['clear_all_completed'] = "✅ Overlays for {app_name} removed ({count} pcs.)"
+    strings['translation_status_translating'] = "Translating..."
+    strings['translation_status_ready'] = "✅ Ready!"
+    strings['notification_capturing'] = "Screenshotting..."
+    strings['notification_select_area'] = "Select area..."
+    strings['notification_select_area_temporary'] = "Select area (temporary translation)..."
+    strings['notification_translation_ready'] = "Translation ready"
+    strings['notification_remove_no_app'] = "Failed to determine current application"
+    strings[
+        'hotkey_area_temporary_hint'] = "💡 Temporary translation: RMB in F3 mode — overlay will be automatically removed after specified time (adjustable in Settings → Interface)"
+    strings['f3_hold_notification'] = "📸 Capturing window for OCR..."
+    strings['f3_hold_ocr_processing'] = "🔄 Running OCR analysis..."
+    strings['f3_hold_no_text'] = "ℹ️ No text detected on translated image"
+    strings['f3_hold_overlays_created'] = "✅ Created {count} overlays"
+    strings['f3_hold_error_ocr'] = "❌ OCR error: {error}"
+    strings['f3_hold_missing_easyocr'] = "❌ EasyOCR not installed. Install: pip install easyocr"
+    strings['f3_hold_creating_overlays'] = "📝 Creating {count} overlays..."
+
+    # Strings for mini-bar
+    strings['menu_view'] = "View"
+    strings['mini_bar_show'] = "Show Mini Bar"
+    strings['mini_bar_hide'] = "Hide Mini Bar"
+    strings['mini_bar_title'] = "Mini Bar"
+    strings['mini_bar_tooltip_f1'] = "F1 - Show/Hide overlay"
+    strings['mini_bar_tooltip_f2'] = "F2 - Window screenshot"
+    strings['mini_bar_tooltip_f3'] = "F3 - Select area"
+    strings['mini_bar_tooltip_f3_hold'] = "F3 (held) - OCR full window"
+    strings['mini_bar_tooltip_f4'] = "F4 - Clear all overlays"
+    strings['mini_bar_tooltip_f5'] = "F5 - Edit mode"
+    strings['mini_bar_tooltip_f6'] = "F6 - Auto-replace areas"
+    strings['mini_bar_close'] = "Close Mini Bar (ESC)"
+
+    return strings
+
+
 def get_russian_translator_engine_strings():
     return {
         'settings_translator_engine_tab': "Движок перевода",
@@ -50,36 +189,6 @@ def get_english_tab_strings():
         'settings_engine_tab': "Engine",
         'settings_monitor_tab': "Monitor",
         'settings_hotkeys_tab': "Hotkeys",
-    }
-
-
-def get_russian_translator_engine_strings():
-    return {
-        'settings_translator_engine_tab': "Движок перевода",
-        'settings_translator_engine_header': "Выберите сервис для перевода изображений:",
-        'settings_translator_engine_description': "При смене движка браузер будет перезапущен автоматически.",
-        'settings_translator_engine_google': "Google Translate",
-        'settings_translator_engine_yandex': "Яндекс.Переводчик (OCR)",
-        'settings_translator_engine_google_desc': "Перевод через Google Images. Требует стабильного интернет-соединения.",
-        'settings_translator_engine_yandex_desc': "Перевод через Яндекс.Переводчик с OCR. Хорошо распознаёт текст на изображениях.",
-        'settings_translator_engine_warning': "⚠️ При переключении движка текущий браузер будет закрыт и перезапущен с новыми настройками.",
-        'settings_translator_engine': "Движок перевода:",
-        'settings_translator_engine_tooltip': "Выберите сервис для перевода изображений",
-    }
-
-
-def get_english_translator_engine_strings():
-    return {
-        'settings_translator_engine_tab': "Engine",
-        'settings_translator_engine_header': "Select the service for image translation:",
-        'settings_translator_engine_description': "The browser will be restarted automatically when changing the engine.",
-        'settings_translator_engine_google': "Google Translate",
-        'settings_translator_engine_yandex': "Yandex.Translator (OCR)",
-        'settings_translator_engine_google_desc': "Translation via Google Images. Requires stable internet connection.",
-        'settings_translator_engine_yandex_desc': "Translation via Yandex.Translator with OCR. Good at recognizing text in images.",
-        'settings_translator_engine_warning': "⚠️ When switching the engine, the current browser will be closed and restarted with new settings.",
-        'settings_translator_engine': "Translation engine:",
-        'settings_translator_engine_tooltip': "Select the service for image translation",
     }
 
 
@@ -437,117 +546,6 @@ def get_english_settings_window_strings():
         'browser_find_warning_title': "Warning",
         'browser_find_warning_message': "Select a browser from the list",
     }
-
-
-def get_russian_all_strings():
-    """Объединяет все русские строки в один словарь"""
-    strings = {}
-    strings.update(get_russian_main_strings())
-    strings.update(get_russian_button_strings())
-    strings.update(get_russian_settings_strings())
-    strings.update(get_russian_menu_strings())
-    strings.update(get_russian_settings_window_strings())
-    strings.update(get_russian_about_strings())
-    strings.update(get_russian_shortcuts_strings())
-    strings.update(get_russian_help_strings())
-    strings.update(get_russian_hotkeys_strings())
-    strings.update(get_russian_translator_engine_strings())
-    strings.update(get_russian_tab_strings())
-
-    # Дополнительные строки
-    strings['area_selector_instruction'] = "Выделите область (ПКМ/ESC/Enter - выход)"
-    strings['area_selector_counter'] = "Выделено: {}"
-    strings['area_selector_error_title'] = "Ошибка"
-    strings['area_selector_error_too_small'] = "Выделите область размером больше {min_size}x{min_size} пикселей"
-    strings['context_menu_remove_overlays'] = "🗑️ Удалить оверлеи"
-    strings['temporary_lifetime'] = "⏱ Время жизни временного оверлея:"
-    strings['temporary_lifetime_tooltip'] = "Время в секундах, через которое временный оверлей автоматически удалится"
-    strings[
-        'temporary_lifetime_tooltip_new'] = "Время в секундах, через которое временный оверлей, созданный через ПКМ в режиме F3, автоматически удалится"
-    strings['overlay_toggle_no_overlays'] = "Нет оверлеев для переключения"
-    strings['overlay_toggle_unknown_app'] = "Не удалось определить текущее приложение"
-    strings['overlay_toggle_no_overlays_for_app'] = "Нет оверлеев для {app_name}"
-    strings['overlay_toggle_status_shown'] = "показаны"
-    strings['overlay_toggle_status_hidden'] = "скрыты"
-    strings['overlay_toggle_notification'] = "Оверлеи для {app_name} {status}"
-    strings['overlay_toggle_no_templates_found'] = "Не найдено шаблонов на экране"
-    strings['clear_all_no_app'] = "Не удалось определить текущее приложение"
-    strings['clear_all_no_overlays'] = "Нет оверлеев для {app_name}"
-    strings['clear_all_completed'] = "✅ Оверлеи для {app_name} удалены ({count} шт.)"
-    strings['translation_status_translating'] = "Перевод..."
-    strings['translation_status_ready'] = "✅ Готово!"
-    strings['notification_capturing'] = "Скриншот..."
-    strings['notification_select_area'] = "Выберите область..."
-    strings['notification_select_area_temporary'] = "Выберите область (временный перевод)..."
-    strings['notification_translation_ready'] = "Перевод готов"
-    strings['notification_remove_no_app'] = "Не удалось определить текущее приложение"
-    strings[
-        'hotkey_area_temporary_hint'] = "💡 Временный перевод: ПКМ в режиме F3 — оверлей автоматически удалится через заданное время (настраивается в Настройках → Интерфейс)"
-    strings['f3_hold_notification'] = "📸 Захват окна для OCR..."
-    strings['f3_hold_ocr_processing'] = "🔄 Выполняется OCR анализ..."
-    strings['f3_hold_no_text'] = "ℹ️ Текст не обнаружен на переведённом изображении"
-    strings['f3_hold_overlays_created'] = "✅ Создано {count} оверлеев"
-    strings['f3_hold_error_ocr'] = "❌ Ошибка OCR: {error}"
-    strings['f3_hold_missing_easyocr'] = "❌ EasyOCR не установлен. Установите: pip install easyocr"
-    strings['f3_hold_creating_overlays'] = "📝 Создание {count} оверлеев..."
-
-    return strings
-
-
-def get_english_all_strings():
-    """Объединяет все английские строки в один словарь"""
-    strings = {}
-    strings.update(get_english_main_strings())
-    strings.update(get_english_button_strings())
-    strings.update(get_english_settings_strings())
-    strings.update(get_english_menu_strings())
-    strings.update(get_english_settings_window_strings())
-    strings.update(get_english_about_strings())
-    strings.update(get_english_shortcuts_strings())
-    strings.update(get_english_help_strings())
-    strings.update(get_english_hotkeys_strings())
-    strings.update(get_english_translator_engine_strings())
-    strings.update(get_english_tab_strings())
-
-    # Дополнительные строки
-    strings['area_selector_instruction'] = "Select area (RMB/ESC/Enter - exit)"
-    strings['area_selector_counter'] = "Selected: {}"
-    strings['area_selector_error_title'] = "Error"
-    strings['area_selector_error_too_small'] = "Select an area larger than {min_size}x{min_size} pixels"
-    strings['context_menu_remove_overlays'] = "🗑️ Remove overlays"
-    strings['temporary_lifetime'] = "⏱ Temporary overlay lifetime:"
-    strings[
-        'temporary_lifetime_tooltip'] = "Time in seconds after which the temporary overlay will be automatically removed"
-    strings[
-        'temporary_lifetime_tooltip_new'] = "Time in seconds after which the temporary overlay created via RMB in F3 mode will be automatically removed"
-    strings['overlay_toggle_no_overlays'] = "No overlays to toggle"
-    strings['overlay_toggle_unknown_app'] = "Failed to determine current application"
-    strings['overlay_toggle_no_overlays_for_app'] = "No overlays for {app_name}"
-    strings['overlay_toggle_status_shown'] = "shown"
-    strings['overlay_toggle_status_hidden'] = "hidden"
-    strings['overlay_toggle_notification'] = "Overlays for {app_name} {status}"
-    strings['overlay_toggle_no_templates_found'] = "No templates found on screen"
-    strings['clear_all_no_app'] = "Failed to determine current application"
-    strings['clear_all_no_overlays'] = "No overlays for {app_name}"
-    strings['clear_all_completed'] = "✅ Overlays for {app_name} removed ({count} pcs.)"
-    strings['translation_status_translating'] = "Translating..."
-    strings['translation_status_ready'] = "✅ Ready!"
-    strings['notification_capturing'] = "Screenshotting..."
-    strings['notification_select_area'] = "Select area..."
-    strings['notification_select_area_temporary'] = "Select area (temporary translation)..."
-    strings['notification_translation_ready'] = "Translation ready"
-    strings['notification_remove_no_app'] = "Failed to determine current application"
-    strings[
-        'hotkey_area_temporary_hint'] = "💡 Temporary translation: RMB in F3 mode — overlay will be automatically removed after specified time (adjustable in Settings → Interface)"
-    strings['f3_hold_notification'] = "📸 Capturing window for OCR..."
-    strings['f3_hold_ocr_processing'] = "🔄 Running OCR analysis..."
-    strings['f3_hold_no_text'] = "ℹ️ No text detected on translated image"
-    strings['f3_hold_overlays_created'] = "✅ Created {count} overlays"
-    strings['f3_hold_error_ocr'] = "❌ OCR error: {error}"
-    strings['f3_hold_missing_easyocr'] = "❌ EasyOCR not installed. Install: pip install easyocr"
-    strings['f3_hold_creating_overlays'] = "📝 Creating {count} overlays..."
-
-    return strings
 
 
 def get_strings(language_code='ru'):

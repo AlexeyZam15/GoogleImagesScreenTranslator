@@ -19,7 +19,7 @@ class Settings:
         "hide_delay": 1500,
         "always_on_top": True,
         "current_profile": "default",
-        "show_browser": False,  # <-- ИЗМЕНЕНО: по умолчанию браузер скрыт
+        "show_browser": False,
         "show_translation_indicator": True,
         "browser_path": "",
         "auto_hide_overlay": True,
@@ -27,8 +27,10 @@ class Settings:
         "edit_mode_enabled": False,
         "auto_replace_translated": True,
         "temporary_lifetime": 180,
-        "translator_engine": "google",  # "google" или "yandex"
-        "target_language": "ru",
+        "translator_engine": "google",
+        # Позиция мини-бара (сохраняется между запусками)
+        "mini_bar_x": None,
+        "mini_bar_y": None,
     }
 
     # Значения горячих клавиш по умолчанию
@@ -49,6 +51,20 @@ class Settings:
         self._config_dir = Path.home() / "Documents" / "GoogleScreenTranslate" / "config"
         self._config_file = self._config_dir / "settings.json"
         self.load()
+
+    def get_mini_bar_position(self) -> tuple:
+        """Возвращает сохранённую позицию мини-бара (x, y) или None."""
+        x = self.settings.get("mini_bar_x")
+        y = self.settings.get("mini_bar_y")
+        if x is not None and y is not None:
+            return (x, y)
+        return None
+
+    def set_mini_bar_position(self, x: int, y: int):
+        """Сохраняет позицию мини-бара."""
+        self.settings["mini_bar_x"] = x
+        self.settings["mini_bar_y"] = y
+        self.save()
 
     def get_translator_engine(self) -> str:
         """Возвращает выбранный движок перевода ('google' или 'yandex')"""

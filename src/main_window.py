@@ -80,6 +80,59 @@ class MainWindow:
         self.root.lift()
         self.root.focus_force()
 
+    def create_menu(self):
+        """Создает главное меню"""
+        menubar = Menu(self.root, bg='#1e1e1e', fg='white', activebackground='#333333', activeforeground='white')
+        self.root.config(menu=menubar)
+
+        # === МЕНЮ ФАЙЛ ===
+        file_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
+                         activeforeground='white')
+        menubar.add_cascade(label=self.get_string('menu_file'), menu=file_menu)
+        file_menu.add_command(label=self.get_string('menu_open_folder'), command=self.app.open_app_folder)
+        file_menu.add_separator()
+        file_menu.add_command(label=self.get_string('menu_exit'), command=self.app.on_close)
+
+        # === МЕНЮ ВИД (НОВОЕ) ===
+        view_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
+                         activeforeground='white')
+        menubar.add_cascade(label=self.get_string('menu_view'), menu=view_menu)
+
+        # Динамический текст в зависимости от состояния мини-бара
+        if hasattr(self.app, '_mini_bar_window') and self.app._mini_bar_window:
+            view_menu.add_command(
+                label=self.get_string('mini_bar_hide'),
+                command=self.app.toggle_mini_bar
+            )
+        else:
+            view_menu.add_command(
+                label=self.get_string('mini_bar_show'),
+                command=self.app.toggle_mini_bar
+            )
+        # === КОНЕЦ МЕНЮ ВИД ===
+
+        # === МЕНЮ НАСТРОЕК ===
+        settings_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
+                             activeforeground='white')
+        menubar.add_cascade(label=self.get_string('menu_settings'), menu=settings_menu, state=DISABLED)
+        settings_menu.add_command(label=self.get_string('menu_settings_item'), command=self.app.open_settings)
+        settings_menu.add_separator()
+        settings_menu.add_command(label=self.get_string('menu_reset_settings'), command=self.app.reset_settings)
+
+        # === МЕНЮ ГОРЯЧИХ КЛАВИШ ===
+        hotkeys_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
+                            activeforeground='white')
+        menubar.add_cascade(label=self.get_string('menu_hotkeys'), menu=hotkeys_menu, state=DISABLED)
+        hotkeys_menu.add_command(label=self.get_string('menu_hotkeys_show'), command=self.show_hotkeys_window)
+
+        # === МЕНЮ ПОМОЩИ ===
+        help_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
+                         activeforeground='white')
+        menubar.add_cascade(label=self.get_string('menu_help'), menu=help_menu)
+        help_menu.add_command(label=self.get_string('menu_help_instruction'), command=self.app.show_help)
+
+        self._menubar = menubar
+
     def _on_window_configure(self, event):
         """
         Обработчик изменения размера/состояния окна.
@@ -166,37 +219,6 @@ class MainWindow:
             traceback.print_exc()
         finally:
             self.context_menu.grab_release()
-
-    def create_menu(self):
-        """Создает главное меню"""
-        menubar = Menu(self.root, bg='#1e1e1e', fg='white', activebackground='#333333', activeforeground='white')
-        self.root.config(menu=menubar)
-
-        file_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
-                         activeforeground='white')
-        menubar.add_cascade(label=self.get_string('menu_file'), menu=file_menu)
-        file_menu.add_command(label=self.get_string('menu_open_folder'), command=self.app.open_app_folder)
-        file_menu.add_separator()
-        file_menu.add_command(label=self.get_string('menu_exit'), command=self.app.on_close)
-
-        settings_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
-                             activeforeground='white')
-        menubar.add_cascade(label=self.get_string('menu_settings'), menu=settings_menu, state=DISABLED)
-        settings_menu.add_command(label=self.get_string('menu_settings_item'), command=self.app.open_settings)
-        settings_menu.add_separator()
-        settings_menu.add_command(label=self.get_string('menu_reset_settings'), command=self.app.reset_settings)
-
-        hotkeys_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
-                            activeforeground='white')
-        menubar.add_cascade(label=self.get_string('menu_hotkeys'), menu=hotkeys_menu, state=DISABLED)
-        hotkeys_menu.add_command(label=self.get_string('menu_hotkeys_show'), command=self.show_hotkeys_window)
-
-        help_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
-                         activeforeground='white')
-        menubar.add_cascade(label=self.get_string('menu_help'), menu=help_menu)
-        help_menu.add_command(label=self.get_string('menu_help_instruction'), command=self.app.show_help)
-
-        self._menubar = menubar
 
     def create_widgets(self):
         """Создает все виджеты главного окна - упрощенный интерфейс"""

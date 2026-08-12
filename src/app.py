@@ -226,6 +226,336 @@ class ScreenshotTranslatorApp:
         self.logger.info("✅ Приложение инициализировано успешно")
         self._force_log_flush()
 
+    def _ensure_mini_bar_on_top(self):
+        """
+        Поднимает мини-бар поверх всех окон, включая оверлеи перевода.
+        Использует Windows API для гарантированного Z-порядка.
+        """
+        if not hasattr(self, '_mini_bar_window') or not self._mini_bar_window:
+            return
+
+        try:
+            import win32gui
+            import win32con
+
+            mini_bar = self._mini_bar_window
+            if not mini_bar.window or not mini_bar.window.winfo_exists():
+                return
+
+            hwnd = int(mini_bar.window.winfo_id())
+
+            # 1. Устанавливаем TOPMOST
+            win32gui.SetWindowPos(
+                hwnd,
+                win32con.HWND_TOPMOST,
+                0, 0, 0, 0,
+                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW
+            )
+
+            # 2. Поднимаем на самый верх среди TOPMOST окон
+            win32gui.SetWindowPos(
+                hwnd,
+                win32con.HWND_TOP,
+                0, 0, 0, 0,
+                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
+            )
+
+            # 3. BringWindowToTop
+            win32gui.BringWindowToTop(hwnd)
+
+            # 4. SetForegroundWindow (без захвата фокуса)
+            win32gui.SetForegroundWindow(hwnd)
+
+            # 5. Через Tkinter
+            mini_bar.window.lift()
+            mini_bar.window.attributes('-topmost', True)
+            mini_bar.window.update_idletasks()
+
+            self.logger.debug("[MINI_BAR] Мини-бар поднят поверх всех окон")
+        except Exception as e:
+            self.logger.warning(f"[MINI_BAR] Ошибка поднятия мини-бара: {e}")
+            # Fallback
+            try:
+                if self._mini_bar_window and self._mini_bar_window.window:
+                    self._mini_bar_window.window.lift()
+                    self._mini_bar_window.window.attributes('-topmost', True)
+            except:
+                pass
+
+    def process(self):
+        """Скриншот окна (F2)"""
+        if self.translating or not self.ready:
+            return
+
+        self.set_actions_blocked(True)
+
+        # === ПОЛУЧАЕМ РЕАЛЬНОЕ АКТИВНОЕ ОКНО ===
+        target_hwnd = self._get_real_active_window()
+
+        if not target_hwnd:
+            self.logger.error("[F2] Не удалось определить целевое окно")
+            self.set_actions_blocked(False)
+            return
+
+        self.screenshot._last_hwnd = target_hwnd
+        self.screenshot._is_fullscreen = self.screenshot.is_window_fullscreen(target_hwnd)
+
+        from src.window_utils import get_process_name_by_hwnd
+        self._f2_target_app_name = get_process_name_by_hwnd(target_hwnd)
+        self.logger.info(f"[F2] Целевое окно: HWND={target_hwnd}, приложение={self._f2_target_app_name}")
+
+        self.translating = True
+        self.logger.info("[F2] Захват скриншота...")
+        self.show_notification(self.get_string('notification_capturing'))
+
+        def capture_task():
+            try:
+                from PIL import Image
+                # Передаём найденный HWND в метод захвата
+                img = self.screenshot.capture_active_window(hwnd=target_hwnd)
+                if not img:
+                    self.logger.error("[F2] Ошибка захвата окна")
+                    self.translating = False
+                    self.set_actions_blocked(False)
+                    return
+
+                self.ui.root.after(0, self._show_translation_overlay)
+                path = self.temp_dir / f"scr_{int(time.time())}.png"
+                img.save(path)
+
+                task = {'type': 'screenshot', 'image_path': path, 'area_rect': None}
+                self.translation_queue.append(task)
+                self.translating = False
+
+                if not self.is_processing_queue:
+                    self._process_next_in_queue()
+            except Exception as e:
+                self.logger.error(f"Ошибка захвата: {e}")
+                self.translating = False
+                self.set_actions_blocked(False)
+
+        threading.Thread(target=capture_task, daemon=True).start()
+
+    def _get_real_active_window(self) -> Optional[int]:
+        """
+        Возвращает реальное активное окно, игнорируя окна нашего приложения.
+        Используется для F2 и F3, чтобы не переводить собственное окно.
+
+        Улучшенная версия: запоминает последнее активное окно и фильтрует системные окна.
+        """
+        import win32gui
+        import win32api
+        import os
+        import psutil
+        from src.window_utils import get_process_name_by_hwnd
+
+        # Получаем имя нашего процесса
+        our_pid = os.getpid()
+        try:
+            our_process = psutil.Process(our_pid)
+            our_app_name = our_process.name().lower()
+        except:
+            our_app_name = "python.exe"
+
+        # Получаем текущее активное окно
+        foreground_hwnd = win32gui.GetForegroundWindow()
+
+        if not foreground_hwnd:
+            self.logger.warning("[F2] Нет активного окна")
+            # Возвращаем последнее сохранённое окно, если есть
+            if hasattr(self, '_last_real_active_hwnd') and self._last_real_active_hwnd:
+                return self._last_real_active_hwnd
+            return None
+
+        # Проверяем, принадлежит ли активное окно нашему приложению
+        foreground_app = get_process_name_by_hwnd(foreground_hwnd)
+
+        # Если активное окно НЕ наше — сохраняем его и возвращаем
+        if foreground_app and foreground_app.lower() != our_app_name:
+            self._last_real_active_hwnd = foreground_hwnd
+            self.logger.info(f"[F2] Активное окно: {foreground_app} (HWND={foreground_hwnd})")
+            return foreground_hwnd
+
+        # Если активное окно наше — ищем другое
+        self.logger.info(f"[F2] Активное окно принадлежит нашему приложению ({our_app_name}), ищем другое окно")
+
+        # Сначала пробуем вернуть последнее сохранённое окно
+        if hasattr(self, '_last_real_active_hwnd') and self._last_real_active_hwnd:
+            last_hwnd = self._last_real_active_hwnd
+            # Проверяем, что окно всё ещё существует и видимо
+            if win32gui.IsWindow(last_hwnd) and win32gui.IsWindowVisible(last_hwnd):
+                last_app = get_process_name_by_hwnd(last_hwnd)
+                if last_app and last_app.lower() != our_app_name:
+                    self.logger.info(f"[F2] Используем сохранённое окно: {last_app} (HWND={last_hwnd})")
+                    return last_hwnd
+            else:
+                self._last_real_active_hwnd = None
+
+        # Ищем окно с фокусом ввода (через GetGUIThreadInfo)
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            GUITHREADINFO = ctypes.Structure()
+            GUITHREADINFO._fields_ = [
+                ('cbSize', wintypes.DWORD),
+                ('flags', wintypes.DWORD),
+                ('hwndActive', wintypes.HWND),
+                ('hwndFocus', wintypes.HWND),
+                ('hwndCapture', wintypes.HWND),
+                ('hwndMenuOwner', wintypes.HWND),
+                ('hwndMoveSize', wintypes.HWND),
+                ('hwndCaret', wintypes.HWND),
+                ('rcCaret', wintypes.RECT),
+            ]
+
+            user32 = ctypes.windll.user32
+            gti = GUITHREADINFO()
+            gti.cbSize = ctypes.sizeof(GUITHREADINFO)
+
+            # Получаем ID текущего потока
+            thread_id = user32.GetWindowThreadProcessId(foreground_hwnd, None)
+
+            if user32.GetGUIThreadInfo(thread_id, ctypes.byref(gti)):
+                if gti.hwndFocus:
+                    focus_app = get_process_name_by_hwnd(gti.hwndFocus)
+                    if focus_app and focus_app.lower() != our_app_name:
+                        self._last_real_active_hwnd = gti.hwndFocus
+                        self.logger.info(f"[F2] Найдено окно с фокусом ввода: {focus_app} (HWND={gti.hwndFocus})")
+                        return gti.hwndFocus
+        except Exception as e:
+            self.logger.debug(f"[F2] GetGUIThreadInfo не сработал: {e}")
+
+        # Ищем окно под курсором (если оно не наше)
+        try:
+            cursor_pos = win32api.GetCursorPos()
+            hwnd_under_cursor = win32gui.WindowFromPoint(cursor_pos)
+            if hwnd_under_cursor:
+                app_under = get_process_name_by_hwnd(hwnd_under_cursor)
+                if app_under and app_under.lower() != our_app_name:
+                    # Проверяем, что это не системное окно
+                    if not self._is_system_window(hwnd_under_cursor):
+                        self._last_real_active_hwnd = hwnd_under_cursor
+                        self.logger.info(f"[F2] Используем окно под курсором: {app_under} (HWND={hwnd_under_cursor})")
+                        return hwnd_under_cursor
+        except Exception as e:
+            self.logger.debug(f"[F2] Ошибка получения окна под курсором: {e}")
+
+        # Ищем любое видимое окно другого приложения (с фильтрацией системных)
+        def enum_callback(hwnd, hwnds):
+            if not win32gui.IsWindowVisible(hwnd):
+                return True
+            if hwnd == foreground_hwnd:
+                return True
+
+            try:
+                app_name = get_process_name_by_hwnd(hwnd)
+                if not app_name or app_name.lower() == our_app_name:
+                    return True
+
+                # Пропускаем системные окна
+                if self._is_system_window(hwnd):
+                    return True
+
+                # Проверяем, что окно имеет нормальный размер
+                rect = win32gui.GetWindowRect(hwnd)
+                if rect and rect[2] > rect[0] and rect[3] > rect[1]:
+                    hwnds.append(hwnd)
+                    return False
+            except:
+                pass
+            return True
+
+        hwnds = []
+        win32gui.EnumWindows(enum_callback, hwnds)
+
+        if hwnds:
+            found_hwnd = hwnds[0]
+            found_app = get_process_name_by_hwnd(found_hwnd)
+            self._last_real_active_hwnd = found_hwnd
+            self.logger.info(f"[F2] Найдено окно другого приложения: HWND={found_hwnd}, приложение={found_app}")
+            return found_hwnd
+
+        # Если ничего не нашли — используем последнее захваченное окно
+        last_hwnd = self.screenshot.get_last_hwnd()
+        if last_hwnd:
+            last_app = get_process_name_by_hwnd(last_hwnd)
+            if last_app and last_app.lower() != our_app_name:
+                self.logger.info(f"[F2] Используем последнее захваченное окно: HWND={last_hwnd}, приложение={last_app}")
+                return last_hwnd
+
+        self.logger.warning("[F2] Не удалось найти подходящее окно")
+        return None
+
+    def _is_system_window(self, hwnd: int) -> bool:
+        """
+        Проверяет, является ли окно системным (нежелательным для скриншота).
+        """
+        try:
+            import win32gui
+            app_name = self._get_app_name_by_hwnd(hwnd)
+
+            # Список системных приложений, которые не нужно переводить
+            system_apps = [
+                'explorer.exe', 'searchapp.exe', 'taskhostw.exe',
+                'svchost.exe', 'dwm.exe', 'csrss.exe', 'winlogon.exe',
+                'systemsettings.exe', 'startmenuexperiencehost.exe',
+                'windows.internal.shellhost.exe', 'applicationframehost.exe'
+            ]
+
+            if app_name and app_name.lower() in system_apps:
+                return True
+
+            # Проверяем класс окна
+            class_name = win32gui.GetClassName(hwnd)
+            system_classes = [
+                'Progman', 'WorkerW', 'Shell_TrayWnd', 'SysListView32',
+                'TaskManagerWindow', 'MultitaskingViewFrame'
+            ]
+            if class_name in system_classes:
+                return True
+
+            # Проверяем заголовок окна
+            window_text = win32gui.GetWindowText(hwnd)
+            if window_text and (
+                    'Start' in window_text or
+                    'Taskbar' in window_text or
+                    'Cortana' in window_text or
+                    'Search' in window_text
+            ):
+                return True
+
+            return False
+        except Exception as e:
+            self.logger.debug(f"[F2] Ошибка проверки системного окна: {e}")
+            return False
+
+    def toggle_mini_bar(self):
+        """Показывает или скрывает мини-бар с кнопками функций."""
+        if hasattr(self, '_mini_bar_window') and self._mini_bar_window:
+            try:
+                self._mini_bar_window.on_close()
+                self._mini_bar_window = None
+                self.logger.info("[MINI_BAR] Мини-бар скрыт")
+            except Exception as e:
+                self.logger.warning(f"[MINI_BAR] Ошибка при закрытии мини-бара: {e}")
+                self._mini_bar_window = None
+        else:
+            try:
+                from src.mini_bar import MiniBarWindow
+                self._mini_bar_window = MiniBarWindow(self)
+                # Поднимаем мини-бар после создания
+                self._ensure_mini_bar_on_top()
+                self.logger.info("[MINI_BAR] Мини-бар показан")
+            except Exception as e:
+                self.logger.error(f"[MINI_BAR] Ошибка при создании мини-бара: {e}")
+                import traceback
+                traceback.print_exc()
+
+        # Обновляем меню
+        if hasattr(self, 'ui') and hasattr(self.ui, 'create_menu'):
+            self.ui.create_menu()
+
     def _restart_translator_with_callback(self, callback=None):
         """
         Перезапускает переводчик с колбэком для разблокировки кнопки настроек.
@@ -386,7 +716,21 @@ class ScreenshotTranslatorApp:
         self._clear_f2_overlays_for_current_app()
 
         # ============================================================
-        # 2. ПРОДОЛЖАЕМ ОБЫЧНУЮ ЛОГИКУ ЗАХВАТА ОБЛАСТИ
+        # 2. ПОЛУЧАЕМ РЕАЛЬНОЕ АКТИВНОЕ ОКНО
+        # ============================================================
+        target_hwnd = self._get_real_active_window()
+        if not target_hwnd:
+            self.logger.error("[F3] Не удалось получить целевое окно")
+            self.set_actions_blocked(False)
+            return
+
+        self.logger.info(f"[F3] Целевое окно: HWND={target_hwnd}")
+
+        # Сохраняем HWND для использования в _capture_window_for_area
+        self._area_target_hwnd = target_hwnd
+
+        # ============================================================
+        # 3. ПРОДОЛЖАЕМ ОБЫЧНУЮ ЛОГИКУ ЗАХВАТА ОБЛАСТИ
         # ============================================================
 
         # Убеждаемся, что ESC не заблокирован перед открытием окна выбора области
@@ -436,10 +780,20 @@ class ScreenshotTranslatorApp:
         self.logger.info("[F3_HOLD] Начало обработки с OCR (OCR готов)")
         self.set_actions_blocked(True)
 
-        current_hwnd = win32gui.GetForegroundWindow()
-        if current_hwnd:
-            self.screenshot._last_hwnd = current_hwnd
-            self.screenshot._is_fullscreen = self.screenshot.is_window_fullscreen(current_hwnd)
+        # ============================================================
+        # ПОЛУЧАЕМ РЕАЛЬНОЕ АКТИВНОЕ ОКНО
+        # ============================================================
+        current_hwnd = self._get_real_active_window()
+        if not current_hwnd:
+            self.logger.error("[F3_HOLD] Не удалось получить целевое окно")
+            self.set_actions_blocked(False)
+            return
+
+        self.logger.info(f"[F3_HOLD] Целевое окно: HWND={current_hwnd}")
+
+        # Сохраняем HWND для последующего использования
+        self.screenshot._last_hwnd = current_hwnd
+        self.screenshot._is_fullscreen = self.screenshot.is_window_fullscreen(current_hwnd)
 
         # ============================================================
         # 1. УДАЛЯЕМ F2-ОВЕРЛЕИ ДЛЯ ТЕКУЩЕГО ПРИЛОЖЕНИЯ
@@ -478,7 +832,8 @@ class ScreenshotTranslatorApp:
             from PIL import Image
 
             try:
-                img = self.screenshot.capture_active_window()
+                # Передаём найденный HWND в метод захвата
+                img = self.screenshot.capture_active_window(hwnd=current_hwnd)
                 if not img:
                     self.logger.error("[F3_HOLD] Ошибка захвата окна")
                     self.translating = False
@@ -2203,14 +2558,22 @@ class ScreenshotTranslatorApp:
             return
 
         # ============================================================
-        # 3. УДАЛЯЕМ ПО ИМЕНИ ПРИЛОЖЕНИЯ
+        # 3. ПОЛУЧАЕМ ТЕКУЩЕЕ ПРИЛОЖЕНИЕ ЧЕРЕЗ _get_real_active_window
         # ============================================================
-        current_app = self._get_current_app_name()
-        self.logger.info(f"[CLEAR_ALL] Текущее приложение: {current_app}")
-
-        if not current_app:
+        target_hwnd = self._get_real_active_window()
+        if not target_hwnd:
             self.logger.warning("[CLEAR_ALL] Не удалось определить текущее приложение")
             self.show_notification(self.get_string('notification_remove_no_app'))
+            return
+
+        from src.window_utils import get_process_name_by_hwnd
+        current_app = get_process_name_by_hwnd(target_hwnd)
+
+        self.logger.info(f"[CLEAR_ALL] Текущее приложение (из реального окна): {current_app}")
+
+        if not current_app or current_app == "Неизвестно":
+            self.logger.warning("[CLEAR_ALL] Не удалось определить имя приложения")
+            self.show_notification(self.get_string('clear_all_no_app'))
             return
 
         overlays_for_app = self.overlay_manager.get_overlays_by_app_name(current_app)
@@ -2440,10 +2803,38 @@ class ScreenshotTranslatorApp:
         old_hwnd = self._current_active_hwnd
         self._current_active_hwnd = new_hwnd
 
+        # ============================================================
+        # СОХРАНЯЕМ ПОСЛЕДНЕЕ РЕАЛЬНОЕ АКТИВНОЕ ОКНО
+        # ============================================================
         if new_hwnd:
             try:
                 from src.window_utils import get_process_name_by_hwnd
+                import os
+                import psutil
+
                 app_name = get_process_name_by_hwnd(new_hwnd, default_name="Неизвестно")
+
+                # Получаем имя нашего процесса
+                our_pid = os.getpid()
+                try:
+                    our_process = psutil.Process(our_pid)
+                    our_app_name = our_process.name().lower()
+                except:
+                    our_app_name = "python.exe"
+
+                # Если переключились на наше приложение — запоминаем предыдущее окно
+                if app_name and app_name.lower() == our_app_name:
+                    # Если у нас есть сохранённое окно и оно ещё существует
+                    if hasattr(self, '_last_real_active_hwnd') and self._last_real_active_hwnd:
+                        last_hwnd = self._last_real_active_hwnd
+                        if win32gui.IsWindow(last_hwnd) and win32gui.IsWindowVisible(last_hwnd):
+                            self.logger.info(f"[WINDOW] Сохранено последнее активное окно: HWND={last_hwnd}")
+                        else:
+                            self._last_real_active_hwnd = None
+                else:
+                    # Если переключились на другое приложение — сохраняем его
+                    self._last_real_active_hwnd = new_hwnd
+
                 self._auto_switch_fullscreen_window(new_hwnd, app_name)
             except Exception as e:
                 self.logger.warning(f"[WINDOW] Ошибка авто-переключения: {e}")
@@ -2455,11 +2846,14 @@ class ScreenshotTranslatorApp:
             return
 
         # ============================================================
-        # ИСПРАВЛЕНИЕ: Используем _get_current_app_name() для получения активного приложения
+        # ПОЛУЧАЕМ АКТИВНОЕ ПРИЛОЖЕНИЕ
         # ============================================================
         active_app_name = self._get_current_app_name()
 
         auto_hide_enabled = self.settings.get_auto_hide_overlay() if hasattr(self, 'settings') else True
+
+        # Флаг, были ли показаны F2-оверлеи
+        f2_overlays_shown = False
 
         if active_app_name:
             f2_overlays = []
@@ -2478,6 +2872,7 @@ class ScreenshotTranslatorApp:
                                 overlay._is_visible_by_user = True
                                 if not overlay.visible:
                                     overlay.show()
+                                    f2_overlays_shown = True
                                     self.logger.info(
                                         f"[WINDOW] Показан F2-оверлей для {active_app_name} (auto-hide OFF)")
                         except Exception as e:
@@ -2490,6 +2885,7 @@ class ScreenshotTranslatorApp:
                                 overlay._is_visible_by_user = True
                                 if not overlay.visible:
                                     overlay.show()
+                                    f2_overlays_shown = True
                                     self.logger.info(
                                         f"[WINDOW] Показан F2-оверлей для {active_app_name} (auto-hide ON)")
                         except Exception as e:
@@ -2532,6 +2928,13 @@ class ScreenshotTranslatorApp:
                         except Exception as e:
                             self.logger.warning(f"[WINDOW] Ошибка скрытия оверлея: {e}")
 
+        # ============================================================
+        # ПОДНИМАЕМ МИНИ-БАР ПОВЕРХ ОВЕРЛЕЕВ, ЕСЛИ ОНИ БЫЛИ ПОКАЗАНЫ
+        # ============================================================
+        if f2_overlays_shown:
+            self._ensure_mini_bar_on_top()
+            self.logger.info("[WINDOW] Мини-бар поднят поверх F2-оверлеев")
+
         self.logger.info(
             f"[WINDOW] Переключение на {active_app_name}, оверлеи будут показаны монитором при нахождении шаблонов"
         )
@@ -2572,50 +2975,6 @@ class ScreenshotTranslatorApp:
                         overlay._start_visibility_monitor()
                 except Exception as e:
                     self.logger.warning(f"[EDIT_MODE] Ошибка настройки оверлея: {e}")
-
-    def process(self):
-        """Скриншот окна (F2)"""
-        if self.translating or not self.ready:
-            return
-
-        self.set_actions_blocked(True)
-        current_hwnd = win32gui.GetForegroundWindow()
-        if current_hwnd:
-            self.screenshot._last_hwnd = current_hwnd
-            self.screenshot._is_fullscreen = self.screenshot.is_window_fullscreen(current_hwnd)
-
-        self.translating = True
-        # Убираем статус "translating" — только лог
-        self.logger.info("[F2] Захват скриншота...")
-        self.show_notification(self.get_string('notification_capturing'))
-
-        def capture_task():
-            try:
-                from PIL import Image
-                img = self.screenshot.capture_active_window()
-                if not img:
-                    # Ошибка захвата — только лог
-                    self.logger.error("[F2] Ошибка захвата окна")
-                    self.translating = False
-                    self.set_actions_blocked(False)
-                    return
-
-                self.ui.root.after(0, self._show_translation_overlay)
-                path = self.temp_dir / f"scr_{int(time.time())}.png"
-                img.save(path)
-
-                task = {'type': 'screenshot', 'image_path': path, 'area_rect': None}
-                self.translation_queue.append(task)
-                self.translating = False
-
-                if not self.is_processing_queue:
-                    self._process_next_in_queue()
-            except Exception as e:
-                self.logger.error(f"Ошибка захвата: {e}")
-                self.translating = False
-                self.set_actions_blocked(False)
-
-        threading.Thread(target=capture_task, daemon=True).start()
 
     def _on_translate_finished(self, result, error):
         self.logger.info(f"[DEBUG] === _on_translate_finished НАЧАЛО ===")
@@ -2695,7 +3054,7 @@ class ScreenshotTranslatorApp:
                             is_temporary=is_temporary,
                             lifetime_seconds=lifetime_seconds,
                             app_name=app_name,
-                            force_edit_mode=True  # <-- ВСЕГДА ВКЛЮЧАЕМ РЕЖИМ РЕДАКТИРОВАНИЯ ДЛЯ F2
+                            force_edit_mode=True
                         )
 
                         if overlay:
@@ -2707,6 +3066,13 @@ class ScreenshotTranslatorApp:
                             overlay_created = True
 
                     self._pending_region_path = None
+
+                # ============================================================
+                # ПОДНИМАЕМ МИНИ-БАР ПОВЕРХ ОВЕРЛЕЯ С ЗАДЕРЖКОЙ
+                # ============================================================
+                if overlay_created:
+                    # Даём оверлею время полностью показаться, затем поднимаем мини-бар
+                    self.ui.root.after(150, self._ensure_mini_bar_on_top)
 
             else:
                 self.logger.warning("Результат перевода пустой")
@@ -2777,15 +3143,16 @@ class ScreenshotTranslatorApp:
         self.set_actions_blocked(False)
 
     def _capture_window_for_area(self):
-        """Захват окна для области"""
+        """Захват окна для области (F3)"""
         try:
             from PIL import ImageGrab
             from src.window_utils import make_windowed_fullscreen
             import time
 
-            current_hwnd = win32gui.GetForegroundWindow()
+            # === ПОЛУЧАЕМ РЕАЛЬНОЕ АКТИВНОЕ ОКНО, ИГНОРИРУЯ НАШЕ ПРИЛОЖЕНИЕ ===
+            current_hwnd = self._get_real_active_window()
+
             if not current_hwnd:
-                # Ошибка захвата — только лог
                 self.logger.error("[F3] Не удалось получить активное окно")
                 self._capture_mode = False
                 self.set_actions_blocked(False)
@@ -2814,7 +3181,6 @@ class ScreenshotTranslatorApp:
 
             img = ImageGrab.grab()
             if not img:
-                # Ошибка захвата — только лог
                 self.logger.error("[F3] Ошибка захвата экрана")
                 self._capture_mode = False
                 self.set_actions_blocked(False)
@@ -2827,7 +3193,6 @@ class ScreenshotTranslatorApp:
             self._show_continuous_area_selection_window(screenshot_path)
         except Exception as e:
             self.logger.error(f"Ошибка захвата области: {e}")
-            # Ошибка — только лог
             self._capture_mode = False
             self.set_actions_blocked(False)
             self.ui.root.deiconify()
