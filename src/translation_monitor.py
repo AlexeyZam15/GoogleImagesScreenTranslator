@@ -106,26 +106,17 @@ class TranslationMonitor:
 
         self.logger.info(f"TranslationMonitor инициализирован, имя приложения: {self._our_app_name}")
 
-    def _get_our_app_name(self) -> str:
-        """Определяет имя текущего приложения один раз при инициализации."""
-        try:
-            import os
-            import psutil
-            current_pid = os.getpid()
-            current_process = psutil.Process(current_pid)
-            return current_process.name().lower()
-        except Exception as e:
-            self.logger.warning(f"Не удалось определить имя приложения: {e}")
-            return "python.exe"
-
     def _monitor_loop(self):
-        """Основной цикл мониторинга — оптимизированная версия с логированием точности"""
+        """Основной цикл мониторинга — оптимизированная версия."""
         import win32gui
         from src.window_utils import get_process_name_by_hwnd
 
-        last_time = time.time()
         self.logger.info("[MONITOR] Цикл мониторинга запущен (оптимизированный)")
 
+        # Определяем имя нашего приложения
+        our_app_name = self._get_our_app_name()
+
+        last_time = time.time()
         iteration_count = 0
         last_found_time = {}
         debug_counter = 0
@@ -158,29 +149,20 @@ class TranslationMonitor:
                     time.sleep(0.02)
                     continue
 
-                try:
-                    active_hwnd = win32gui.GetForegroundWindow()
-                    if not active_hwnd:
-                        time.sleep(0.02)
-                        continue
-                except:
+                # ============================================================
+                # ПОЛУЧАЕМ АКТИВНОЕ ОКНО (С УЧЁТОМ НАШЕГО ПРИЛОЖЕНИЯ)
+                # ============================================================
+                active_hwnd, active_app_name = self._get_active_window_for_scan(our_app_name)
+                if active_hwnd is None:
                     time.sleep(0.02)
                     continue
 
                 debug_counter += 1
                 if debug_counter % 100 == 0:
-                    active_app_name = get_process_name_by_hwnd(active_hwnd)
                     self.logger.info(
                         f"[MONITOR_DEBUG] Активное окно: HWND={active_hwnd}, App='{active_app_name}', "
                         f"шаблонов: {len([t for t in self.templates if t.get('target_app_name') == active_app_name])}"
                     )
-
-                active_app_name = self._get_cached_app_name(active_hwnd)
-
-                if self._last_active_hwnd != active_hwnd:
-                    self._first_scan_after_switch = True
-                    self._last_active_hwnd = active_hwnd
-                    # УБРАНО: self.logger.info(f"[MONITOR] Переключение на окно: {active_app_name} (HWND={active_hwnd})")
 
                 self._last_active_app_name = active_app_name
 
@@ -189,43 +171,13 @@ class TranslationMonitor:
                         time.sleep(0.02)
                         continue
 
-                active_templates = []
-                inactive_templates = []
-
-                for template_data in self.templates:
-                    if not template_data.get('enabled', True):
-                        continue
-                    target_app_name = template_data.get('target_app_name')
-
-                    if target_app_name and target_app_name != "Неизвестно":
-                        if target_app_name == active_app_name:
-                            active_templates.append(template_data)
-                        else:
-                            inactive_templates.append(template_data)
-                    else:
-                        active_templates.append(template_data)
-
-                # === ПЕРВОЕ СКАНИРОВАНИЕ ПОСЛЕ ПЕРЕКЛЮЧЕНИЯ ОКНА (УПРОЩЕННО) ===
-                # УДАЛЕН ВЕСЬ БЛОК СО СПАМНЫМИ СООБЩЕНИЯМИ:
-                # - разделители =====
-                # - 🔍 ПЕРВОЕ СКАНИРОВАНИЕ для ...
-                # - 📋 ПРОПУЩЕННЫЕ ШАБЛОНЫ (для других приложений)
-                # - ⏭️ Шаблон #... — пропущен (для ...)
-                # - ⚠️ Нет активных шаблонов для ...
+                # ============================================================
+                # ПОЛУЧАЕМ АКТИВНЫЕ ШАБЛОНЫ
+                # ============================================================
+                active_templates, inactive_templates = self._get_active_templates(active_app_name)
 
                 if self._first_scan_after_switch:
-                    total_templates = len(self.templates)
-                    active_count = len(active_templates)
-
-                    if not active_templates:
-                        self._first_scan_after_switch = False
-                        time.sleep(0.02)
-                        continue
-
-                    # Только краткое сообщение
-                    self.logger.info(
-                        f"[MONITOR] Сканирование для {active_app_name} (активных: {active_count}/{total_templates})"
-                    )
+                    self._handle_first_scan(active_templates, active_app_name)
 
                 if not active_templates:
                     if debug_counter % 50 == 0:
@@ -236,126 +188,238 @@ class TranslationMonitor:
                     time.sleep(0.02)
                     continue
 
-                if (self._frame_cache_hwnd != active_hwnd or
-                        current_time - self._frame_cache_time > self._frame_cache_ttl):
-                    image = self._capture_window(active_hwnd)
-                    if image is not None:
-                        h, w = image.shape[:2]
-                        new_w = int(w * SEARCH_SCALE)
-                        new_h = int(h * SEARCH_SCALE)
-                        resized = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
-
-                        self._frame_cache = resized
-                        self._frame_cache_original_size = (w, h)
-                        self._frame_cache_scale = SEARCH_SCALE
-                        self._frame_cache_hwnd = active_hwnd
-                        self._frame_cache_time = current_time
-
-                        if debug_counter % 100 == 0:
-                            self.logger.info(
-                                f"[MONITOR_DEBUG] Захвачено окно: {w}x{h} -> уменьшено до {new_w}x{new_h}, HWND={active_hwnd}"
-                            )
-                    else:
-                        image = self._frame_cache
-                        if debug_counter % 100 == 0:
-                            self.logger.warning(f"[MONITOR_DEBUG] НЕ удалось захватить окно HWND={active_hwnd}")
-                else:
-                    resized = self._frame_cache
-
+                # ============================================================
+                # ЗАХВАТ И УМЕНЬШЕНИЕ ИЗОБРАЖЕНИЯ
+                # ============================================================
+                resized = self._get_scaled_frame(active_hwnd, current_time, SEARCH_SCALE, debug_counter)
                 if resized is None:
                     time.sleep(0.02)
                     continue
 
-                img_h, img_w = resized.shape[:2]
+                # ============================================================
+                # ПОИСК ШАБЛОНОВ И ОБНОВЛЕНИЕ ОВЕРЛЕЕВ
+                # ============================================================
+                self._search_templates_and_update_overlays(
+                    resized, active_templates, active_app_name,
+                    SEARCH_SCALE, current_time, last_found_time, debug_counter
+                )
 
-                for template_data in active_templates:
-                    if not self.monitoring:
-                        break
-
-                    if not template_data.get('enabled', True):
-                        continue
-
-                    pair_index = template_data.get('pair_index', 0)
-                    overlay = template_data.get('overlay')
-                    template_text = template_data.get('template_text', f"Шаблон #{pair_index}")
-
-                    if pair_index in last_found_time:
-                        time_since_found = current_time - last_found_time[pair_index]
-                        if template_data.get('found', False) and overlay and overlay.visible and time_since_found < 1.0:
-                            continue
-
-                    template = template_data.get('template')
-                    if template is None:
-                        continue
-
-                    t_h, t_w = template.shape[:2]
-                    scaled_t_w = int(t_w * SEARCH_SCALE)
-                    scaled_t_h = int(t_h * SEARCH_SCALE)
-
-                    if scaled_t_h > img_h or scaled_t_w > img_w:
-                        continue
-
-                    if 'template_scaled' not in template_data or template_data.get('template_scale') != SEARCH_SCALE:
-                        template_data['template_scaled'] = cv2.resize(template, (scaled_t_w, scaled_t_h),
-                                                                      interpolation=cv2.INTER_AREA)
-                        template_data['template_scale'] = SEARCH_SCALE
-
-                    scaled_template = template_data['template_scaled']
-
-                    try:
-                        result = cv2.matchTemplate(resized, scaled_template, cv2.TM_CCOEFF_NORMED)
-                        _, max_val, _, max_loc = cv2.minMaxLoc(result)
-                    except Exception as e:
-                        self.logger.warning(f"[MONITOR] Ошибка matchTemplate для шаблона #{pair_index}: {e}")
-                        continue
-
-                    scaled_x = max_loc[0]
-                    scaled_y = max_loc[1]
-                    original_x = int(scaled_x / SEARCH_SCALE)
-                    original_y = int(scaled_y / SEARCH_SCALE)
-                    original_w = int(scaled_t_w / SEARCH_SCALE)
-                    original_h = int(scaled_t_h / SEARCH_SCALE)
-
-                    # === ЛОГИРОВАНИЕ ДЛЯ ПЕРВОГО СКАНИРОВАНИЯ (УПРОЩЕННО) ===
-                    if self._first_scan_after_switch:
-                        if max_val >= self.confidence_threshold:
-                            self.logger.info(
-                                f"[MONITOR] ✅ Шаблон #{pair_index} найден (точность {max_val:.3f})"
-                            )
-                        # УБРАНО: сообщение для ненайденных шаблонов
-
-                    if max_val >= self.confidence_threshold:
-                        if not template_data.get('found', False):
-                            template_data['found'] = True
-                            if debug_counter % 20 == 0:
-                                self.logger.info(f"✅ Шаблон #{pair_index} найден с точностью {max_val:.3f}")
-
-                        template_data['last_position'] = (original_x, original_y, original_w, original_h)
-                        self._update_overlay(template_data, original_x, original_y, original_w, original_h)
-                        last_found_time[pair_index] = current_time
-                    else:
-                        if template_data.get('found', False):
-                            template_data['found'] = False
-                            overlay = template_data.get('overlay')
-                            if overlay and overlay.visible and not self.overlay_manager.is_dragging():
-                                self._hide_overlay_in_main_thread(overlay, pair_index)
-
-                    time.sleep(0.01)
-
-                # === ЗАВЕРШЕНИЕ ПЕРВОГО СКАНИРОВАНИЯ (УПРОЩЕННО) ===
+                # ============================================================
+                # ЗАВЕРШЕНИЕ ПЕРВОГО СКАНИРОВАНИЯ
+                # ============================================================
                 if self._first_scan_after_switch:
-                    found_count = sum(1 for t in active_templates if t.get('found', False))
-                    total_count = len(active_templates)
-                    self.logger.info(
-                        f"[MONITOR] Сканирование завершено: найдено {found_count}/{total_count}"
-                    )
-                    self._first_scan_after_switch = False
+                    self._finish_first_scan(active_templates)
 
             except Exception as e:
                 self.logger.error(f"[MONITOR] Ошибка: {e}")
                 time.sleep(0.1)
 
         self.logger.info("[MONITOR] Цикл мониторинга завершен")
+
+    def _get_our_app_name(self) -> str:
+        """Определяет имя текущего приложения."""
+        try:
+            import os
+            import psutil
+            current_pid = os.getpid()
+            current_process = psutil.Process(current_pid)
+            return current_process.name().lower()
+        except Exception as e:
+            self.logger.warning(f"Не удалось определить имя приложения: {e}")
+            return "python.exe"
+
+    def _get_active_window_for_scan(self, our_app_name: str) -> tuple:
+        """
+        Возвращает (HWND, app_name) для сканирования.
+        Если активное окно принадлежит нашему приложению, использует сохранённое окно.
+        """
+        import win32gui
+        from src.window_utils import get_process_name_by_hwnd
+
+        try:
+            active_hwnd = win32gui.GetForegroundWindow()
+            if not active_hwnd:
+                return None, None
+        except:
+            return None, None
+
+        active_app_name = self._get_cached_app_name(active_hwnd)
+
+        # Проверяем, является ли активное окно нашим приложением
+        if active_app_name and active_app_name.lower() == our_app_name:
+            if hasattr(self, 'parent') and self.parent:
+                if hasattr(self.parent, '_last_real_active_hwnd') and self.parent._last_real_active_hwnd:
+                    last_hwnd = self.parent._last_real_active_hwnd
+                    if win32gui.IsWindow(last_hwnd) and win32gui.IsWindowVisible(last_hwnd):
+                        last_app_name = get_process_name_by_hwnd(last_hwnd)
+                        # Логируем только при первом сканировании
+                        if self._first_scan_after_switch:
+                            self.logger.info(
+                                f"[MONITOR] Активно наше приложение, сканируем сохранённое окно: {last_app_name}")
+                        return last_hwnd, last_app_name
+                    else:
+                        self.parent._last_real_active_hwnd = None
+            return None, None
+
+        return active_hwnd, active_app_name
+
+    def _get_active_templates(self, active_app_name: str) -> tuple:
+        """Возвращает (active_templates, inactive_templates)."""
+        active_templates = []
+        inactive_templates = []
+
+        for template_data in self.templates:
+            if not template_data.get('enabled', True):
+                continue
+            target_app_name = template_data.get('target_app_name')
+
+            if target_app_name and target_app_name != "Неизвестно":
+                if target_app_name == active_app_name:
+                    active_templates.append(template_data)
+                else:
+                    inactive_templates.append(template_data)
+            else:
+                active_templates.append(template_data)
+
+        return active_templates, inactive_templates
+
+    def _handle_first_scan(self, active_templates: List, active_app_name: str):
+        """Обрабатывает первый скан после переключения окна."""
+        total_templates = len(self.templates)
+        active_count = len(active_templates)
+
+        if not active_templates:
+            self._first_scan_after_switch = False
+            return
+
+        self.logger.info(
+            f"[MONITOR] Сканирование для {active_app_name} (активных: {active_count}/{total_templates})"
+        )
+
+    def _get_scaled_frame(self, active_hwnd: int, current_time: float, scale: float, debug_counter: int):
+        """Захватывает и уменьшает изображение окна."""
+        import cv2
+
+        if (self._frame_cache_hwnd != active_hwnd or
+                current_time - self._frame_cache_time > self._frame_cache_ttl):
+            image = self._capture_window(active_hwnd)
+            if image is not None:
+                h, w = image.shape[:2]
+                new_w = int(w * scale)
+                new_h = int(h * scale)
+                resized = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+                self._frame_cache = resized
+                self._frame_cache_original_size = (w, h)
+                self._frame_cache_scale = scale
+                self._frame_cache_hwnd = active_hwnd
+                self._frame_cache_time = current_time
+
+                if debug_counter % 100 == 0:
+                    self.logger.info(
+                        f"[MONITOR_DEBUG] Захвачено окно: {w}x{h} -> уменьшено до {new_w}x{new_h}, HWND={active_hwnd}"
+                    )
+                return resized
+            else:
+                if debug_counter % 100 == 0:
+                    self.logger.warning(f"[MONITOR_DEBUG] НЕ удалось захватить окно HWND={active_hwnd}")
+                return self._frame_cache
+
+        return self._frame_cache
+
+    def _search_templates_and_update_overlays(self, resized, active_templates: List, active_app_name: str,
+                                              search_scale: float, current_time: float,
+                                              last_found_time: Dict, debug_counter: int):
+        """
+        Ищет шаблоны в изображении и обновляет оверлеи.
+        """
+        import cv2
+
+        if resized is None:
+            return
+
+        img_h, img_w = resized.shape[:2]
+
+        for template_data in active_templates:
+            if not self.monitoring:
+                break
+
+            if not template_data.get('enabled', True):
+                continue
+
+            pair_index = template_data.get('pair_index', 0)
+            overlay = template_data.get('overlay')
+
+            # Пропускаем часто найденные шаблоны
+            if pair_index in last_found_time:
+                time_since_found = current_time - last_found_time[pair_index]
+                if template_data.get('found', False) and overlay and overlay.visible and time_since_found < 1.0:
+                    continue
+
+            template = template_data.get('template')
+            if template is None:
+                continue
+
+            t_h, t_w = template.shape[:2]
+            scaled_t_w = int(t_w * search_scale)
+            scaled_t_h = int(t_h * search_scale)
+
+            if scaled_t_h > img_h or scaled_t_w > img_w:
+                continue
+
+            # Кэшируем уменьшенный шаблон
+            if 'template_scaled' not in template_data or template_data.get('template_scale') != search_scale:
+                template_data['template_scaled'] = cv2.resize(template, (scaled_t_w, scaled_t_h),
+                                                              interpolation=cv2.INTER_AREA)
+                template_data['template_scale'] = search_scale
+
+            scaled_template = template_data['template_scaled']
+
+            try:
+                result = cv2.matchTemplate(resized, scaled_template, cv2.TM_CCOEFF_NORMED)
+                _, max_val, _, max_loc = cv2.minMaxLoc(result)
+            except Exception as e:
+                self.logger.warning(f"[MONITOR] Ошибка matchTemplate для шаблона #{pair_index}: {e}")
+                continue
+
+            scaled_x = max_loc[0]
+            scaled_y = max_loc[1]
+            original_x = int(scaled_x / search_scale)
+            original_y = int(scaled_y / search_scale)
+            original_w = int(scaled_t_w / search_scale)
+            original_h = int(scaled_t_h / search_scale)
+
+            # Логирование для первого сканирования
+            if self._first_scan_after_switch:
+                if max_val >= self.confidence_threshold:
+                    self.logger.info(f"[MONITOR] ✅ Шаблон #{pair_index} найден (точность {max_val:.3f})")
+
+            if max_val >= self.confidence_threshold:
+                if not template_data.get('found', False):
+                    template_data['found'] = True
+                    if debug_counter % 20 == 0:
+                        self.logger.info(f"✅ Шаблон #{pair_index} найден с точностью {max_val:.3f}")
+
+                template_data['last_position'] = (original_x, original_y, original_w, original_h)
+                self._update_overlay(template_data, original_x, original_y, original_w, original_h)
+                last_found_time[pair_index] = current_time
+            else:
+                if template_data.get('found', False):
+                    template_data['found'] = False
+                    overlay = template_data.get('overlay')
+                    if overlay and overlay.visible and not self.overlay_manager.is_dragging():
+                        self._hide_overlay_in_main_thread(overlay, pair_index)
+
+            time.sleep(0.01)
+
+    def _finish_first_scan(self, active_templates: List):
+        """Завершает первый скан после переключения окна."""
+        found_count = sum(1 for t in active_templates if t.get('found', False))
+        total_count = len(active_templates)
+        self.logger.info(
+            f"[MONITOR] Сканирование завершено: найдено {found_count}/{total_count}"
+        )
+        self._first_scan_after_switch = False
 
     def _get_cached_app_name(self, hwnd: int) -> str:
         """Получает имя приложения с кэшированием."""

@@ -80,6 +80,61 @@ class MainWindow:
         self.root.lift()
         self.root.focus_force()
 
+    def update_view_menu(self):
+        """Обновляет только пункт меню 'Вид' без пересоздания всего меню."""
+        try:
+            if not hasattr(self, '_menubar') or not self._menubar:
+                return
+
+            # Ищем индекс пункта "Вид" в меню
+            view_index = None
+            for index in range(self._menubar.index('end') + 1):
+                try:
+                    label = self._menubar.entrycget(index, 'label')
+                    if label == self.get_string('menu_view'):
+                        view_index = index
+                        break
+                except:
+                    pass
+
+            if view_index is None:
+                return
+
+            # Получаем меню "Вид"
+            view_menu = self._menubar.entrycget(view_index, 'menu')
+            if not view_menu:
+                return
+
+            # Проверяем, что view_menu - это объект Menu, а не строка
+            if not isinstance(view_menu, Menu):
+                self.logger.warning("[MENU] view_menu не является объектом Menu, пересоздаём меню")
+                self.create_menu()
+                return
+
+            # Очищаем меню
+            view_menu.delete(0, 'end')
+
+            # Добавляем актуальный пункт
+            if hasattr(self.app, '_mini_bar_window') and self.app._mini_bar_window:
+                view_menu.add_command(
+                    label=self.get_string('mini_bar_hide'),
+                    command=self.app.toggle_mini_bar
+                )
+            else:
+                view_menu.add_command(
+                    label=self.get_string('mini_bar_show'),
+                    command=self.app.toggle_mini_bar
+                )
+
+            self.logger.info("[MENU] Пункт 'Вид' обновлён")
+        except Exception as e:
+            self.logger.warning(f"[MENU] Ошибка обновления меню 'Вид': {e}")
+            # В случае ошибки пересоздаём меню полностью
+            try:
+                self.create_menu()
+            except:
+                pass
+
     def create_menu(self):
         """Создает главное меню"""
         menubar = Menu(self.root, bg='#1e1e1e', fg='white', activebackground='#333333', activeforeground='white')
@@ -93,12 +148,11 @@ class MainWindow:
         file_menu.add_separator()
         file_menu.add_command(label=self.get_string('menu_exit'), command=self.app.on_close)
 
-        # === МЕНЮ ВИД (НОВОЕ) ===
+        # === МЕНЮ ВИД ===
         view_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
                          activeforeground='white')
         menubar.add_cascade(label=self.get_string('menu_view'), menu=view_menu)
 
-        # Динамический текст в зависимости от состояния мини-бара
         if hasattr(self.app, '_mini_bar_window') and self.app._mini_bar_window:
             view_menu.add_command(
                 label=self.get_string('mini_bar_hide'),
@@ -109,12 +163,12 @@ class MainWindow:
                 label=self.get_string('mini_bar_show'),
                 command=self.app.toggle_mini_bar
             )
-        # === КОНЕЦ МЕНЮ ВИД ===
+        self._view_menu = view_menu
 
         # === МЕНЮ НАСТРОЕК ===
         settings_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
                              activeforeground='white')
-        menubar.add_cascade(label=self.get_string('menu_settings'), menu=settings_menu, state=DISABLED)
+        menubar.add_cascade(label=self.get_string('menu_settings'), menu=settings_menu)
         settings_menu.add_command(label=self.get_string('menu_settings_item'), command=self.app.open_settings)
         settings_menu.add_separator()
         settings_menu.add_command(label=self.get_string('menu_reset_settings'), command=self.app.reset_settings)
@@ -122,7 +176,7 @@ class MainWindow:
         # === МЕНЮ ГОРЯЧИХ КЛАВИШ ===
         hotkeys_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
                             activeforeground='white')
-        menubar.add_cascade(label=self.get_string('menu_hotkeys'), menu=hotkeys_menu, state=DISABLED)
+        menubar.add_cascade(label=self.get_string('menu_hotkeys'), menu=hotkeys_menu)
         hotkeys_menu.add_command(label=self.get_string('menu_hotkeys_show'), command=self.show_hotkeys_window)
 
         # === МЕНЮ ПОМОЩИ ===
@@ -389,31 +443,23 @@ class MainWindow:
                 bg='#4CAF50' if is_enabled else '#3c3c3c'
             )
 
-        # === НОВЫЙ КОД: ОБНОВЛЕНИЕ СТАТУСА ПРИ СМЕНЕ ЯЗЫКА ===
-        # Проверяем, есть ли статусная строка и приложение инициализировано
+        # Обновляем статус
         if self.status and hasattr(self.app, 'ready'):
             current_text = self.status.cget('text')
-
-            # Получаем текущий цвет статуса, чтобы определить состояние
             current_color = self.status.cget('fg')
 
-            # Если приложение ещё не готово (инициализация)
             if not self.app.ready:
-                # Обновляем статус на локализованную версию "Запуск браузера..."
                 if hasattr(self.app, 'initializing') and self.app.initializing:
                     self.status.config(
                         text="● " + self.get_string('starting_browser'),
                         fg='#ff9800'
                     )
                 else:
-                    # Если приложение не инициализируется, но и не готово
                     self.status.config(
                         text="● " + self.get_string('starting'),
                         fg='#ff9800'
                     )
             else:
-                # Приложение готово — обновляем статус с учётом языка
-                # Получаем текущий движок для отображения в статусе
                 engine = self.app.settings.get_translator_engine()
                 engine_name = "Google Translate" if engine == "google" else "Яндекс.Переводчик (OCR)"
                 ready_text = self.get_string('ready')
@@ -427,6 +473,7 @@ class MainWindow:
         if hasattr(self.app, 'ready') and self.app.ready:
             is_ready = True
 
+        # Пересоздаем меню для обновления текста
         self.create_menu()
 
         if is_ready:
@@ -520,7 +567,7 @@ class MainWindow:
             self.logger.warning("[STATUS_UI] self.status отсутствует!")
 
     def set_settings_menu_enabled(self, enabled):
-        """Блокирует/разблокирует меню настроек и хоткеев"""
+        """Блокирует/разблокирует меню настроек, хоткеев и вид."""
         try:
             state = tk.NORMAL if enabled else DISABLED
 
@@ -539,6 +586,8 @@ class MainWindow:
                         if label == self.get_string('menu_settings'):
                             self._menubar.entryconfig(index, state=state)
                         elif label == self.get_string('menu_hotkeys'):
+                            self._menubar.entryconfig(index, state=state)
+                        elif label == self.get_string('menu_view'):  # <-- ДОБАВЛЯЕМ
                             self._menubar.entryconfig(index, state=state)
                     except:
                         pass

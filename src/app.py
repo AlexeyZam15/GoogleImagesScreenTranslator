@@ -4,33 +4,30 @@
 
 # Стандартные библиотеки
 import logging
-import tempfile
-import time
-import threading
 import os
 import sys
+import threading
+import time
 import tkinter as tk
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
+from typing import Optional
 
 # Сторонние библиотеки
 import win32gui
 
+from src.browser_worker import BrowserWorker
+from src.hotkeys import HotkeyManager
+from src.main_window import MainWindow
+from src.notification_overlay import NotificationOverlay
+from src.overlay_manager import OverlayManager
+from src.screenshot import ScreenshotCapturer
 # Локальные импорты
 from src.settings import Settings
-from src.browser_worker import BrowserWorker
-from src.screenshot import ScreenshotCapturer
-from src.overlay_manager import OverlayManager
 from src.translation_monitor import TranslationMonitor
-from src.translator import GoogleTranslateDebug
-from src.main_window import MainWindow
-from src.hotkeys import HotkeyManager
-from src.window_list import WindowListManager
 from src.utils import ensure_app_temp_dir
-from src.notification_overlay import NotificationOverlay
-from typing import Optional
-import win32con
-
+from src.window_list import WindowListManager
+from PIL import Image, ImageTk
 
 def cleanup_old_logs(log_dir, keep_count=5):
     """Очищает старые логи"""
@@ -225,6 +222,379 @@ class ScreenshotTranslatorApp:
         self._force_log_flush()
         self.logger.info("✅ Приложение инициализировано успешно")
         self._force_log_flush()
+
+    def _show_continuous_area_selection_window(self, screenshot_path):
+        """
+        Показывает окно выделения области с поддержкой:
+        - ЛКМ — постоянный оверлей (красная рамка)
+        - ПКМ — временный оверлей (синяя рамка)
+        - ESC — выход
+        """
+        from PIL import Image, ImageTk  # <-- ДОБАВЛЕН ИМПОРТ
+        import win32gui
+        import win32con
+        import time
+        import keyboard
+
+        # 1. Создаём окно и canvas
+        selection_window, canvas, selection_data = self._create_selection_window(screenshot_path)
+
+        # 2. Настраиваем UI (инструкция, счётчик)
+        self._setup_selection_window_ui(selection_window, canvas, selection_data)
+
+        # 3. Настраиваем обработчики мыши
+        self._setup_mouse_handlers(canvas, selection_data, screenshot_path, selection_window)
+
+        # 4. Настраиваем ESC и выход
+        self._setup_esc_and_exit(selection_window, canvas)
+
+        # 5. Принудительный захват фокуса
+        self._force_window_focus(selection_window)
+
+        # 6. Блокируем хоткеи
+        self.hotkeys.set_actions_blocked(True)
+
+    def _create_selection_window(self, screenshot_path):
+        """Создаёт окно и canvas для выбора области."""
+        from PIL import Image, ImageTk  # <-- ДОБАВЛЕН ИМПОРТ
+
+        img = Image.open(screenshot_path)
+        img_width, img_height = img.size
+
+        selection_window = tk.Toplevel()
+        selection_window.attributes('-fullscreen', True)
+        selection_window.attributes('-topmost', True)
+        selection_window.configure(bg='black')
+        selection_window.focus_force()
+
+        canvas = tk.Canvas(selection_window, cursor="cross", bg='black', highlightthickness=0)
+        canvas.pack(fill=tk.BOTH, expand=True)
+
+        screen_width = selection_window.winfo_screenwidth()
+        screen_height = selection_window.winfo_screenheight()
+
+        scale = min(screen_width / img_width, screen_height / img_height)
+        display_w, display_h = int(img_width * scale), int(img_height * scale)
+
+        resized = img.resize((display_w, display_h), Image.Resampling.LANCZOS)
+        photo = ImageTk.PhotoImage(resized)  # <-- ТЕПЕРЬ ImageTk ДОСТУПЕН
+        img_x, img_y = (screen_width - display_w) // 2, (screen_height - display_h) // 2
+
+        canvas.create_image(img_x, img_y, anchor=tk.NW, image=photo)
+        canvas.image = photo  # <-- СОХРАНЯЕМ ССЫЛКУ, ЧТОБЫ НЕ СБИРАЛОСЬ GARBAGE COLLECTOR
+
+        selection_data = {
+            'img': img,
+            'screenshot_path': screenshot_path,
+            'scale_x': img_width / display_w,
+            'scale_y': img_height / display_h,
+            'img_x': img_x,
+            'img_y': img_y,
+            'start_x': None,
+            'start_y': None,
+            'rect': None,
+            'selection_window': selection_window,
+            'canvas': canvas,
+            'area_count': 0,
+            'is_temporary': False,
+            'temp_rect': None
+        }
+
+        return selection_window, canvas, selection_data
+
+    def _setup_selection_window_ui(self, selection_window, canvas, selection_data):
+        """Настраивает UI окна выбора области (инструкция, счётчик)."""
+        screen_width = selection_window.winfo_screenwidth()
+
+        instruction_text = self.get_string('area_selector_instruction')
+        canvas.create_text(
+            screen_width // 2, 50,
+            text=instruction_text,
+            fill="white",
+            font=("Arial", 16, "bold")
+        )
+
+        counter_text = self.get_string('area_selector_counter').format(0)
+        counter_id = canvas.create_text(
+            screen_width // 2, 90,
+            text=counter_text,
+            fill="#4CAF50",
+            font=("Arial", 14)
+        )
+        selection_data['counter_id'] = counter_id
+
+    def _setup_mouse_handlers(self, canvas, selection_data, screenshot_path, selection_window):
+        """Настраивает обработчики мыши для ЛКМ (постоянный) и ПКМ (временный)."""
+
+        # ========== ЛКМ (постоянный оверлей, красная рамка) ==========
+        def on_mouse_down(event):
+            selection_data['start_x'] = event.x
+            selection_data['start_y'] = event.y
+            selection_data['is_temporary'] = False
+            if selection_data['rect']:
+                canvas.delete(selection_data['rect'])
+                selection_data['rect'] = None
+            if selection_data['temp_rect']:
+                canvas.delete(selection_data['temp_rect'])
+                selection_data['temp_rect'] = None
+
+        def on_mouse_drag(event):
+            if selection_data['start_x'] is not None:
+                if selection_data['rect']:
+                    canvas.delete(selection_data['rect'])
+                selection_data['rect'] = canvas.create_rectangle(
+                    selection_data['start_x'], selection_data['start_y'],
+                    event.x, event.y,
+                    outline='red', width=2,
+                    fill='blue', stipple='gray50'
+                )
+
+        def on_mouse_up(event):
+            if selection_data['start_x'] is not None:
+                x1, y1 = min(selection_data['start_x'], event.x), min(selection_data['start_y'], event.y)
+                x2, y2 = max(selection_data['start_x'], event.x), max(selection_data['start_y'], event.y)
+                if x2 - x1 > 10 and y2 - y1 > 10:
+                    self._process_selection(x1, y1, x2, y2, selection_data, screenshot_path, selection_window,
+                                            is_temporary=False)
+                else:
+                    if selection_data['rect']:
+                        canvas.delete(selection_data['rect'])
+                        selection_data['rect'] = None
+                    selection_data['start_x'] = None
+                    selection_data['start_y'] = None
+
+        # ========== ПКМ (временный оверлей, синяя рамка) ==========
+        def on_mouse_down_pkm(event):
+            selection_data['start_x'] = event.x
+            selection_data['start_y'] = event.y
+            selection_data['is_temporary'] = True
+            if selection_data['temp_rect']:
+                canvas.delete(selection_data['temp_rect'])
+                selection_data['temp_rect'] = None
+            if selection_data['rect']:
+                canvas.delete(selection_data['rect'])
+                selection_data['rect'] = None
+
+        def on_mouse_drag_pkm(event):
+            if selection_data['start_x'] is not None:
+                if selection_data['temp_rect']:
+                    canvas.delete(selection_data['temp_rect'])
+                selection_data['temp_rect'] = canvas.create_rectangle(
+                    selection_data['start_x'], selection_data['start_y'],
+                    event.x, event.y,
+                    outline='#2196F3', width=2,
+                    fill='blue', stipple='gray50'
+                )
+
+        def on_mouse_up_pkm(event):
+            if selection_data['start_x'] is not None:
+                x1, y1 = min(selection_data['start_x'], event.x), min(selection_data['start_y'], event.y)
+                x2, y2 = max(selection_data['start_x'], event.x), max(selection_data['start_y'], event.y)
+                if x2 - x1 > 10 and y2 - y1 > 10:
+                    self._process_selection(x1, y1, x2, y2, selection_data, screenshot_path, selection_window,
+                                            is_temporary=True)
+                else:
+                    if selection_data['temp_rect']:
+                        canvas.delete(selection_data['temp_rect'])
+                        selection_data['temp_rect'] = None
+                    selection_data['start_x'] = None
+                    selection_data['start_y'] = None
+
+        # Привязываем события
+        canvas.bind("<ButtonPress-1>", on_mouse_down)
+        canvas.bind("<B1-Motion>", on_mouse_drag)
+        canvas.bind("<ButtonRelease-1>", on_mouse_up)
+
+        canvas.bind("<ButtonPress-3>", on_mouse_down_pkm)
+        canvas.bind("<B3-Motion>", on_mouse_drag_pkm)
+        canvas.bind("<ButtonRelease-3>", on_mouse_up_pkm)
+
+    def _setup_esc_and_exit(self, selection_window, canvas):
+        """Настраивает обработчики ESC и Enter для выхода."""
+        import keyboard  # <-- ДОБАВЛЕН ИМПОРТ
+        import win32gui  # <-- ДОБАВЛЕН ИМПОРТ
+
+        target_hwnd_for_exit = self._area_target_hwnd
+
+        def exit_area_mode():
+            self.logger.info("[DEBUG] exit_area_mode() - выход из режима захвата")
+            self._capture_mode = False
+
+            # Восстанавливаем мини-бар
+            self._restore_mini_bar_after_area()
+
+            # Отключаем глобальный хук ESC
+            if hasattr(self, '_area_esc_hook_active') and self._area_esc_hook_active:
+                try:
+                    keyboard.unhook_key(self._area_esc_hook_handler)
+                    self.logger.info("[F3] Глобальный хук ESC отключен")
+                except Exception as e:
+                    self.logger.warning(f"[F3] Ошибка отключения хука ESC: {e}")
+                self._area_esc_hook_active = False
+                self._area_esc_hook_handler = None
+
+            # Отключаем привязки ESC через Tkinter
+            self.ui.root.unbind_all("<Escape>")
+            self.hotkeys.set_actions_blocked(False)
+
+            if self.translation_queue and not self._indicator_shown:
+                self._show_translation_overlay()
+                self._indicator_shown = True
+                self.logger.info("[DEBUG] Индикатор перевода показан после выхода из F3")
+
+            if target_hwnd_for_exit:
+                try:
+                    win32gui.SetForegroundWindow(target_hwnd_for_exit)
+                    self.logger.info("[F3] Фокус возвращён на целевое окно")
+                except Exception as e:
+                    self.logger.error(f"[F3] Ошибка возврата фокуса: {e}")
+                    self.ui.root.deiconify()
+                    self.ui.root.lift()
+                    self.ui.root.focus_force()
+            else:
+                self.ui.root.deiconify()
+                self.ui.root.lift()
+                self.ui.root.focus_force()
+
+            try:
+                selection_window.grab_release()
+                selection_window.destroy()
+            except:
+                pass
+
+        # Привязываем ESC
+        def on_esc_pressed(e):
+            self.logger.info("[F3] ESC нажат -> выход из режима захвата")
+            exit_area_mode()
+            return "break"
+
+        canvas.bind("<Escape>", on_esc_pressed)
+        selection_window.bind("<Escape>", on_esc_pressed)
+        self.ui.root.bind_all("<Escape>", on_esc_pressed)
+
+        # Глобальный хук ESC через keyboard
+        def global_esc_handler(e):
+            self.logger.info("[F3] Глобальный хук: ESC нажат -> выход из режима захвата")
+            self._restore_mini_bar_after_area()
+            exit_area_mode()
+            return False
+
+        try:
+            self._area_esc_hook_handler = keyboard.on_press_key('esc', global_esc_handler, suppress=True)
+            self._area_esc_hook_active = True
+            self.logger.info("[F3] Глобальный хук ESC установлен через keyboard")
+        except Exception as e:
+            self.logger.warning(f"[F3] Не удалось установить глобальный хук ESC: {e}")
+
+        # Enter для выхода
+        canvas.bind("<Return>", lambda e: exit_area_mode())
+        selection_window.bind("<Return>", lambda e: exit_area_mode())
+
+    def _force_window_focus(self, selection_window):
+        """Принудительно устанавливает фокус на окно выбора области."""
+        import win32gui
+        import win32con
+        import time
+
+        selection_window.update_idletasks()
+        time.sleep(0.05)
+
+        try:
+            hwnd = int(selection_window.winfo_id())
+
+            win32gui.SetWindowPos(
+                hwnd,
+                win32con.HWND_TOPMOST,
+                0, 0, 0, 0,
+                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW
+            )
+            win32gui.BringWindowToTop(hwnd)
+            time.sleep(0.02)
+            win32gui.SetForegroundWindow(hwnd)
+            time.sleep(0.02)
+            win32gui.SetFocus(hwnd)
+            win32gui.SendMessage(hwnd, win32con.WM_ACTIVATE, win32con.WA_ACTIVE, 0)
+
+            self.logger.info(f"[F3] Фокус установлен на окно выбора области (HWND: {hwnd})")
+        except Exception as e:
+            self.logger.warning(f"[F3] Не удалось установить фокус через Win32 API: {e}")
+
+        selection_window.focus_force()
+        selection_window.grab_set()
+        selection_window.lift()
+        selection_window.update_idletasks()
+        time.sleep(0.05)
+
+        try:
+            hwnd = int(selection_window.winfo_id())
+            win32gui.SetForegroundWindow(hwnd)
+        except:
+            pass
+
+        def ensure_focus():
+            try:
+                if selection_window.winfo_exists():
+                    hwnd = int(selection_window.winfo_id())
+                    win32gui.SetForegroundWindow(hwnd)
+                    self.logger.info("[F3] Повторная установка фокуса на окно выбора области")
+            except:
+                pass
+
+        selection_window.after(100, ensure_focus)
+
+    def _process_selection(self, x1, y1, x2, y2, selection_data, screenshot_path, selection_window, is_temporary):
+        """Обрабатывает выделенную область (ЛКМ или ПКМ)."""
+        img_x = selection_data['img_x']
+        img_y = selection_data['img_y']
+        scale_x = selection_data['scale_x']
+        scale_y = selection_data['scale_y']
+        img_width = selection_data['img'].width
+        img_height = selection_data['img'].height
+        canvas = selection_data['canvas']
+        counter_id = selection_data['counter_id']
+
+        orig_x1 = int((x1 - img_x) * scale_x)
+        orig_y1 = int((y1 - img_y) * scale_y)
+        orig_x2 = int((x2 - img_x) * scale_x)
+        orig_y2 = int((y2 - img_y) * scale_y)
+
+        orig_x1 = max(0, min(orig_x1, img_width))
+        orig_y1 = max(0, min(orig_y1, img_height))
+        orig_x2 = max(0, min(orig_x2, img_width))
+        orig_y2 = max(0, min(orig_y2, img_height))
+
+        selection_data['area_count'] += 1
+        counter_text = self.get_string('area_selector_counter').format(selection_data['area_count'])
+        canvas.itemconfig(counter_id, text=counter_text)
+
+        if selection_data['rect']:
+            canvas.delete(selection_data['rect'])
+            selection_data['rect'] = None
+        if selection_data['temp_rect']:
+            canvas.delete(selection_data['temp_rect'])
+            selection_data['temp_rect'] = None
+        selection_data['start_x'] = None
+        selection_data['start_y'] = None
+
+        self._process_area_selection_continuous(
+            orig_x1, orig_y1, orig_x2, orig_y2,
+            screenshot_path, selection_window,
+            is_temporary=is_temporary
+        )
+
+    def _restore_mini_bar_after_area(self):
+        """Восстанавливает мини-бар после завершения выбора области."""
+        if hasattr(self, '_mini_bar_was_visible_before_area') and self._mini_bar_was_visible_before_area:
+            if hasattr(self, '_mini_bar_window') and self._mini_bar_window:
+                try:
+                    self._mini_bar_window.window.deiconify()
+                    self._mini_bar_window.window.lift()
+                    self._mini_bar_window.window.attributes('-topmost', True)
+                    self._ensure_mini_bar_on_top()
+                    self.logger.info("[F3] Мини-бар восстановлен после выбора области")
+                except Exception as e:
+                    self.logger.warning(f"[F3] Ошибка восстановления мини-бара: {e}")
+            self._mini_bar_was_visible_before_area = False
 
     def _ensure_mini_bar_on_top(self):
         """
@@ -544,7 +914,6 @@ class ScreenshotTranslatorApp:
             try:
                 from src.mini_bar import MiniBarWindow
                 self._mini_bar_window = MiniBarWindow(self)
-                # Поднимаем мини-бар после создания
                 self._ensure_mini_bar_on_top()
                 self.logger.info("[MINI_BAR] Мини-бар показан")
             except Exception as e:
@@ -552,9 +921,11 @@ class ScreenshotTranslatorApp:
                 import traceback
                 traceback.print_exc()
 
-        # Обновляем меню
-        if hasattr(self, 'ui') and hasattr(self.ui, 'create_menu'):
-            self.ui.create_menu()
+        # ============================================================
+        # ОБНОВЛЯЕМ ТОЛЬКО ПУНКТ МЕНЮ "ВИД", А НЕ ВСЁ МЕНЮ
+        # ============================================================
+        if hasattr(self, 'ui') and hasattr(self.ui, 'update_view_menu'):
+            self.ui.update_view_menu()
 
     def _restart_translator_with_callback(self, callback=None):
         """
@@ -716,24 +1087,35 @@ class ScreenshotTranslatorApp:
         self._clear_f2_overlays_for_current_app()
 
         # ============================================================
-        # 2. ПОЛУЧАЕМ РЕАЛЬНОЕ АКТИВНОЕ ОКНО
+        # 2. СКРЫВАЕМ МИНИ-БАР ВО ВРЕМЯ ВЫДЕЛЕНИЯ ОБЛАСТИ
+        # ============================================================
+        if hasattr(self, '_mini_bar_window') and self._mini_bar_window:
+            try:
+                self._mini_bar_window.window.withdraw()
+                self._mini_bar_was_visible_before_area = True
+                self.logger.info("[F3] Мини-бар скрыт для выбора области")
+            except Exception as e:
+                self.logger.warning(f"[F3] Ошибка скрытия мини-бара: {e}")
+                self._mini_bar_was_visible_before_area = False
+        else:
+            self._mini_bar_was_visible_before_area = False
+
+        # ============================================================
+        # 3. ПОЛУЧАЕМ РЕАЛЬНОЕ АКТИВНОЕ ОКНО
         # ============================================================
         target_hwnd = self._get_real_active_window()
         if not target_hwnd:
             self.logger.error("[F3] Не удалось получить целевое окно")
             self.set_actions_blocked(False)
+            self._restore_mini_bar_after_area()
             return
 
         self.logger.info(f"[F3] Целевое окно: HWND={target_hwnd}")
-
-        # Сохраняем HWND для использования в _capture_window_for_area
         self._area_target_hwnd = target_hwnd
 
         # ============================================================
-        # 3. ПРОДОЛЖАЕМ ОБЫЧНУЮ ЛОГИКУ ЗАХВАТА ОБЛАСТИ
+        # 4. ПРОДОЛЖАЕМ ОБЫЧНУЮ ЛОГИКУ ЗАХВАТА ОБЛАСТИ
         # ============================================================
-
-        # Убеждаемся, что ESC не заблокирован перед открытием окна выбора области
         try:
             import keyboard
             keyboard.unblock_key('esc')
@@ -748,19 +1130,6 @@ class ScreenshotTranslatorApp:
         except:
             pass
         self.ui.root.after(300, self._capture_window_for_area)
-
-        # Принудительный захват фокуса для ESC
-        def ensure_esc_capture():
-            try:
-                if hasattr(self, '_area_selector') and self._area_selector:
-                    if self._area_selector.root and self._area_selector.root.winfo_exists():
-                        self._area_selector.root.focus_force()
-                        self._area_selector.root.grab_set()
-                        self.logger.info("[F3] Принудительный захват фокуса для ESC")
-            except:
-                pass
-
-        self.ui.root.after(500, ensure_esc_capture)
 
     def process_fullscreen_with_ocr(self):
         """
@@ -829,7 +1198,6 @@ class ScreenshotTranslatorApp:
 
         def capture_and_translate_task():
             import time
-            from PIL import Image
 
             try:
                 # Передаём найденный HWND в метод захвата
@@ -1357,162 +1725,6 @@ class ScreenshotTranslatorApp:
         self.logger.info(f"[APP] Команда перезапуска отправлена (id={cmd_id})")
         self.logger.info("[APP] === _restart_translator ЗАВЕРШЕН ===")
 
-    def _create_selection_window(self, screenshot_path):
-        """
-        Создает окно выбора области и возвращает его вместе с данными.
-        """
-        from PIL import Image, ImageTk
-        import win32gui
-        import win32con
-
-        img = Image.open(screenshot_path)
-        img_width, img_height = img.size
-
-        selection_window = tk.Toplevel()
-        selection_window.attributes('-fullscreen', True)
-        selection_window.attributes('-topmost', True)
-        selection_window.configure(bg='black')
-        selection_window.focus_force()
-
-        canvas = tk.Canvas(selection_window, cursor="cross", bg='black', highlightthickness=0)
-        canvas.pack(fill=tk.BOTH, expand=True)
-
-        screen_width = selection_window.winfo_screenwidth()
-        screen_height = selection_window.winfo_screenheight()
-
-        scale = min(screen_width / img_width, screen_height / img_height)
-        display_w, display_h = int(img_width * scale), int(img_height * scale)
-
-        resized = img.resize((display_w, display_h), Image.Resampling.LANCZOS)
-        photo = ImageTk.PhotoImage(resized)
-        img_x, img_y = (screen_width - display_w) // 2, (screen_height - display_h) // 2
-
-        canvas.create_image(img_x, img_y, anchor=tk.NW, image=photo)
-        canvas.image = photo
-
-        selection_data = {
-            'img': img,
-            'screenshot_path': screenshot_path,
-            'scale_x': img_width / display_w,
-            'scale_y': img_height / display_h,
-            'img_x': img_x,
-            'img_y': img_y,
-            'start_x': None,
-            'start_y': None,
-            'rect': None,
-            'selection_window': selection_window,
-            'canvas': canvas,
-            'area_count': 0,
-            'is_temporary': False,
-            'temp_rect': None
-        }
-
-        # Добавляем инструкцию
-        instruction_text = self.get_string('area_selector_instruction')
-        canvas.create_text(
-            screen_width // 2, 50,
-            text=instruction_text,
-            fill="white",
-            font=("Arial", 16, "bold")
-        )
-
-        counter_text = self.get_string('area_selector_counter').format(0)
-        counter_id = canvas.create_text(
-            screen_width // 2, 90,
-            text=counter_text,
-            fill="#4CAF50",
-            font=("Arial", 14)
-        )
-        selection_data['counter_id'] = counter_id
-
-        return selection_window, canvas, selection_data
-
-    def _setup_mouse_handlers(self, canvas, selection_data, screenshot_path, selection_window):
-        """Настраивает обработчики мыши для выбора области."""
-
-        # ========== ЛКМ (постоянный оверлей, красная рамка) ==========
-        def on_mouse_down(event):
-            selection_data['start_x'] = event.x
-            selection_data['start_y'] = event.y
-            selection_data['is_temporary'] = False
-            if selection_data['rect']:
-                canvas.delete(selection_data['rect'])
-                selection_data['rect'] = None
-            if selection_data['temp_rect']:
-                canvas.delete(selection_data['temp_rect'])
-                selection_data['temp_rect'] = None
-
-        def on_mouse_drag(event):
-            if selection_data['start_x'] is not None:
-                if selection_data['rect']:
-                    canvas.delete(selection_data['rect'])
-                selection_data['rect'] = canvas.create_rectangle(
-                    selection_data['start_x'], selection_data['start_y'],
-                    event.x, event.y,
-                    outline='red', width=2,
-                    fill='blue', stipple='gray50'
-                )
-
-        def on_mouse_up(event):
-            if selection_data['start_x'] is not None:
-                x1, y1 = min(selection_data['start_x'], event.x), min(selection_data['start_y'], event.y)
-                x2, y2 = max(selection_data['start_x'], event.x), max(selection_data['start_y'], event.y)
-                if x2 - x1 > 10 and y2 - y1 > 10:
-                    self._process_mouse_selection(x1, y1, x2, y2, selection_data, screenshot_path, selection_window,
-                                                  is_temporary=False)
-                else:
-                    if selection_data['rect']:
-                        canvas.delete(selection_data['rect'])
-                        selection_data['rect'] = None
-                    selection_data['start_x'] = None
-                    selection_data['start_y'] = None
-
-        # ========== ПКМ (временный оверлей, синяя рамка) ==========
-        def on_mouse_down_pkm(event):
-            selection_data['start_x'] = event.x
-            selection_data['start_y'] = event.y
-            selection_data['is_temporary'] = True
-            if selection_data['temp_rect']:
-                canvas.delete(selection_data['temp_rect'])
-                selection_data['temp_rect'] = None
-            if selection_data['rect']:
-                canvas.delete(selection_data['rect'])
-                selection_data['rect'] = None
-
-        def on_mouse_drag_pkm(event):
-            if selection_data['start_x'] is not None:
-                if selection_data['temp_rect']:
-                    canvas.delete(selection_data['temp_rect'])
-                selection_data['temp_rect'] = canvas.create_rectangle(
-                    selection_data['start_x'], selection_data['start_y'],
-                    event.x, event.y,
-                    outline='#2196F3', width=2,
-                    fill='blue', stipple='gray50'
-                )
-
-        def on_mouse_up_pkm(event):
-            if selection_data['start_x'] is not None:
-                x1, y1 = min(selection_data['start_x'], event.x), min(selection_data['start_y'], event.y)
-                x2, y2 = max(selection_data['start_x'], event.x), max(selection_data['start_y'], event.y)
-                if x2 - x1 > 10 and y2 - y1 > 10:
-                    self._process_mouse_selection(x1, y1, x2, y2, selection_data, screenshot_path, selection_window,
-                                                  is_temporary=True)
-                else:
-                    if selection_data['temp_rect']:
-                        canvas.delete(selection_data['temp_rect'])
-                        selection_data['temp_rect'] = None
-                    selection_data['start_x'] = None
-                    selection_data['start_y'] = None
-
-        # Привязываем события
-        canvas.bind("<ButtonPress-1>", on_mouse_down)
-        canvas.bind("<B1-Motion>", on_mouse_drag)
-        canvas.bind("<ButtonRelease-1>", on_mouse_up)
-
-        canvas.bind("<ButtonPress-3>", on_mouse_down_pkm)
-        canvas.bind("<B3-Motion>", on_mouse_drag_pkm)
-        canvas.bind("<ButtonRelease-3>", on_mouse_up_pkm)
-
     def _process_mouse_selection(self, x1, y1, x2, y2, selection_data, screenshot_path, selection_window, is_temporary):
         """Обрабатывает выделение мышью (ЛКМ или ПКМ)."""
         img_x = selection_data['img_x']
@@ -1568,405 +1780,6 @@ class ScreenshotTranslatorApp:
 
         canvas.bind("<Return>", lambda e: exit_area_mode())
         selection_window.bind("<Return>", lambda e: exit_area_mode())
-
-    def _force_window_focus(self, selection_window):
-        """Принудительно устанавливает фокус на окно выбора области."""
-        import win32gui
-        import win32con
-        import time
-
-        selection_window.update_idletasks()
-        time.sleep(0.05)
-
-        try:
-            hwnd = int(selection_window.winfo_id())
-
-            # 1. Устанавливаем TOPMOST
-            win32gui.SetWindowPos(
-                hwnd,
-                win32con.HWND_TOPMOST,
-                0, 0, 0, 0,
-                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW
-            )
-
-            # 2. Принудительно поднимаем окно
-            win32gui.BringWindowToTop(hwnd)
-            time.sleep(0.02)
-
-            # 3. Устанавливаем фокус
-            win32gui.SetForegroundWindow(hwnd)
-            time.sleep(0.02)
-
-            # 4. Устанавливаем фокус через SetFocus
-            win32gui.SetFocus(hwnd)
-
-            # 5. Отправляем сообщение активации
-            win32gui.SendMessage(hwnd, win32con.WM_ACTIVATE, win32con.WA_ACTIVE, 0)
-
-            self.logger.info(f"[F3] Фокус установлен на окно выбора области (HWND: {hwnd})")
-        except Exception as e:
-            self.logger.warning(f"[F3] Не удалось установить фокус через Win32 API: {e}")
-
-        # Устанавливаем фокус через Tkinter
-        selection_window.focus_force()
-        selection_window.grab_set()
-        selection_window.lift()
-        selection_window.update_idletasks()
-        time.sleep(0.05)
-
-        # Ещё раз пробуем захватить фокус
-        try:
-            hwnd = int(selection_window.winfo_id())
-            win32gui.SetForegroundWindow(hwnd)
-        except:
-            pass
-
-        # Таймер для повторной установки фокуса
-        def ensure_focus():
-            try:
-                if selection_window.winfo_exists():
-                    hwnd = int(selection_window.winfo_id())
-                    win32gui.SetForegroundWindow(hwnd)
-                    self.logger.info("[F3] Повторная установка фокуса на окно выбора области")
-            except:
-                pass
-
-        selection_window.after(100, ensure_focus)
-
-    def _show_continuous_area_selection_window(self, screenshot_path):
-        """Показывает окно выделения области"""
-        from PIL import Image, ImageTk
-        import win32gui
-        import win32con
-        import time
-        import keyboard  # <-- ДОБАВИТЬ
-
-        img = Image.open(screenshot_path)
-        img_width, img_height = img.size
-
-        selection_window = tk.Toplevel()
-        selection_window.attributes('-fullscreen', True)
-        selection_window.attributes('-topmost', True)
-        selection_window.configure(bg='black')
-        selection_window.focus_force()
-
-        canvas = tk.Canvas(selection_window, cursor="cross", bg='black', highlightthickness=0)
-        canvas.pack(fill=tk.BOTH, expand=True)
-
-        screen_width = selection_window.winfo_screenwidth()
-        screen_height = selection_window.winfo_screenheight()
-
-        scale = min(screen_width / img_width, screen_height / img_height)
-        display_w, display_h = int(img_width * scale), int(img_height * scale)
-
-        resized = img.resize((display_w, display_h), Image.Resampling.LANCZOS)
-        photo = ImageTk.PhotoImage(resized)
-        img_x, img_y = (screen_width - display_w) // 2, (screen_height - display_h) // 2
-
-        canvas.create_image(img_x, img_y, anchor=tk.NW, image=photo)
-        canvas.image = photo
-
-        selection_data = {
-            'img': img, 'screenshot_path': screenshot_path,
-            'scale_x': img_width / display_w, 'scale_y': img_height / display_h,
-            'img_x': img_x, 'img_y': img_y,
-            'start_x': None, 'start_y': None,
-            'rect': None,
-            'selection_window': selection_window, 'canvas': canvas,
-            'area_count': 0,
-            'is_temporary': False,
-            'temp_rect': None
-        }
-
-        instruction_text = self.get_string('area_selector_instruction')
-        canvas.create_text(
-            screen_width // 2, 50,
-            text=instruction_text,
-            fill="white",
-            font=("Arial", 16, "bold")
-        )
-
-        counter_text = self.get_string('area_selector_counter').format(0)
-        counter_id = canvas.create_text(
-            screen_width // 2, 90,
-            text=counter_text,
-            fill="#4CAF50",
-            font=("Arial", 14)
-        )
-        selection_data['counter_id'] = counter_id
-
-        target_hwnd_for_exit = self._area_target_hwnd
-
-        # ========== ПЕРЕМЕННЫЕ ДЛЯ ХУКА ==========
-        esc_hook_active = False
-        esc_hook_handler = None
-
-        # ========== ЛКМ (постоянный оверлей, красная рамка) ==========
-        def on_mouse_down(event):
-            selection_data['start_x'] = event.x
-            selection_data['start_y'] = event.y
-            selection_data['is_temporary'] = False
-            if selection_data['rect']:
-                canvas.delete(selection_data['rect'])
-                selection_data['rect'] = None
-            if selection_data['temp_rect']:
-                canvas.delete(selection_data['temp_rect'])
-                selection_data['temp_rect'] = None
-
-        def on_mouse_drag(event):
-            if selection_data['start_x'] is not None:
-                if selection_data['rect']:
-                    canvas.delete(selection_data['rect'])
-                selection_data['rect'] = canvas.create_rectangle(
-                    selection_data['start_x'], selection_data['start_y'],
-                    event.x, event.y,
-                    outline='red', width=2,
-                    fill='blue', stipple='gray50'
-                )
-
-        def on_mouse_up(event):
-            if selection_data['start_x'] is not None:
-                x1, y1 = min(selection_data['start_x'], event.x), min(selection_data['start_y'], event.y)
-                x2, y2 = max(selection_data['start_x'], event.x), max(selection_data['start_y'], event.y)
-                if x2 - x1 > 10 and y2 - y1 > 10:
-                    orig_x1 = int((x1 - img_x) * selection_data['scale_x'])
-                    orig_y1 = int((y1 - img_y) * selection_data['scale_y'])
-                    orig_x2 = int((x2 - img_x) * selection_data['scale_x'])
-                    orig_y2 = int((y2 - img_y) * selection_data['scale_y'])
-                    orig_x1 = max(0, min(orig_x1, img_width))
-                    orig_y1 = max(0, min(orig_y1, img_height))
-                    orig_x2 = max(0, min(orig_x2, img_width))
-                    orig_y2 = max(0, min(orig_y2, img_height))
-
-                    selection_data['area_count'] += 1
-                    counter_text = self.get_string('area_selector_counter').format(selection_data['area_count'])
-                    canvas.itemconfig(counter_id, text=counter_text)
-
-                    if selection_data['rect']:
-                        canvas.delete(selection_data['rect'])
-                        selection_data['rect'] = None
-                    selection_data['start_x'] = None
-                    selection_data['start_y'] = None
-
-                    self._process_area_selection_continuous(
-                        orig_x1, orig_y1, orig_x2, orig_y2,
-                        screenshot_path, selection_window,
-                        is_temporary=False
-                    )
-                else:
-                    if selection_data['rect']:
-                        canvas.delete(selection_data['rect'])
-                        selection_data['rect'] = None
-                    selection_data['start_x'] = None
-                    selection_data['start_y'] = None
-
-        # ========== ПКМ (временный оверлей, синяя рамка) ==========
-        def on_mouse_down_pkm(event):
-            selection_data['start_x'] = event.x
-            selection_data['start_y'] = event.y
-            selection_data['is_temporary'] = True
-            if selection_data['temp_rect']:
-                canvas.delete(selection_data['temp_rect'])
-                selection_data['temp_rect'] = None
-            if selection_data['rect']:
-                canvas.delete(selection_data['rect'])
-                selection_data['rect'] = None
-
-        def on_mouse_drag_pkm(event):
-            if selection_data['start_x'] is not None:
-                if selection_data['temp_rect']:
-                    canvas.delete(selection_data['temp_rect'])
-                selection_data['temp_rect'] = canvas.create_rectangle(
-                    selection_data['start_x'], selection_data['start_y'],
-                    event.x, event.y,
-                    outline='#2196F3', width=2,
-                    fill='blue', stipple='gray50'
-                )
-
-        def on_mouse_up_pkm(event):
-            if selection_data['start_x'] is not None:
-                x1, y1 = min(selection_data['start_x'], event.x), min(selection_data['start_y'], event.y)
-                x2, y2 = max(selection_data['start_x'], event.x), max(selection_data['start_y'], event.y)
-                if x2 - x1 > 10 and y2 - y1 > 10:
-                    orig_x1 = int((x1 - img_x) * selection_data['scale_x'])
-                    orig_y1 = int((y1 - img_y) * selection_data['scale_y'])
-                    orig_x2 = int((x2 - img_x) * selection_data['scale_x'])
-                    orig_y2 = int((y2 - img_y) * selection_data['scale_y'])
-                    orig_x1 = max(0, min(orig_x1, img_width))
-                    orig_y1 = max(0, min(orig_y1, img_height))
-                    orig_x2 = max(0, min(orig_x2, img_width))
-                    orig_y2 = max(0, min(orig_y2, img_height))
-
-                    selection_data['area_count'] += 1
-                    counter_text = self.get_string('area_selector_counter').format(selection_data['area_count'])
-                    canvas.itemconfig(counter_id, text=counter_text)
-
-                    if selection_data['temp_rect']:
-                        canvas.delete(selection_data['temp_rect'])
-                        selection_data['temp_rect'] = None
-                    selection_data['start_x'] = None
-                    selection_data['start_y'] = None
-
-                    self._process_area_selection_continuous(
-                        orig_x1, orig_y1, orig_x2, orig_y2,
-                        screenshot_path, selection_window,
-                        is_temporary=True
-                    )
-                else:
-                    if selection_data['temp_rect']:
-                        canvas.delete(selection_data['temp_rect'])
-                        selection_data['temp_rect'] = None
-                    selection_data['start_x'] = None
-                    selection_data['start_y'] = None
-
-        # ========== ВЫХОД ==========
-        def exit_area_mode():
-            self.logger.info("[DEBUG] exit_area_mode() - выход из режима захвата")
-            self._capture_mode = False
-
-            # ОТКЛЮЧАЕМ ГЛОБАЛЬНЫЙ ХУК ESC
-            nonlocal esc_hook_active, esc_hook_handler
-            if esc_hook_active and esc_hook_handler:
-                try:
-                    keyboard.unhook_key(esc_hook_handler)
-                    self.logger.info("[F3] Глобальный хук ESC отключен")
-                except Exception as e:
-                    self.logger.warning(f"[F3] Ошибка отключения хука ESC: {e}")
-                esc_hook_active = False
-                esc_hook_handler = None
-
-            # Отключаем глобальную привязку ESC через Tkinter
-            self.ui.root.unbind_all("<Escape>")
-
-            self.hotkeys.set_actions_blocked(False)
-
-            if self.translation_queue and not self._indicator_shown:
-                self._show_translation_overlay()
-                self._indicator_shown = True
-                self.logger.info("[DEBUG] Индикатор перевода показан после выхода из F3")
-
-            if target_hwnd_for_exit:
-                try:
-                    win32gui.SetForegroundWindow(target_hwnd_for_exit)
-                    self.logger.info("[F3] Фокус возвращён на целевое окно")
-                except Exception as e:
-                    self.logger.error(f"[F3] Ошибка возврата фокуса: {e}")
-                    self.ui.root.deiconify()
-                    self.ui.root.lift()
-                    self.ui.root.focus_force()
-            else:
-                self.ui.root.deiconify()
-                self.ui.root.lift()
-                self.ui.root.focus_force()
-
-            try:
-                selection_window.grab_release()
-                selection_window.destroy()
-            except:
-                pass
-
-        # ========== ПРИВЯЗКА СОБЫТИЙ ==========
-        # ЛКМ
-        canvas.bind("<ButtonPress-1>", on_mouse_down)
-        canvas.bind("<B1-Motion>", on_mouse_drag)
-        canvas.bind("<ButtonRelease-1>", on_mouse_up)
-
-        # ПКМ
-        canvas.bind("<ButtonPress-3>", on_mouse_down_pkm)
-        canvas.bind("<B3-Motion>", on_mouse_drag_pkm)
-        canvas.bind("<ButtonRelease-3>", on_mouse_up_pkm)
-
-        # === ВЫХОД ПО ESC ===
-        def on_esc_pressed(e):
-            self.logger.info("[F3] ESC нажат -> выход из режима захвата")
-            exit_area_mode()
-            return "break"
-
-        # Привязываем ESC к canvas и window
-        canvas.bind("<Escape>", on_esc_pressed)
-        selection_window.bind("<Escape>", on_esc_pressed)
-        self.ui.root.bind_all("<Escape>", on_esc_pressed)
-
-        # === ГЛОБАЛЬНЫЙ ХУК ЧЕРЕЗ keyboard (перехватывает ESC на системном уровне) ===
-        def global_esc_handler(e):
-            self.logger.info("[F3] Глобальный хук: ESC нажат -> выход из режима захвата")
-            exit_area_mode()
-            return False  # Блокируем дальнейшую обработку
-
-        try:
-            esc_hook_handler = keyboard.on_press_key('esc', global_esc_handler, suppress=True)
-            esc_hook_active = True
-            self.logger.info("[F3] Глобальный хук ESC установлен через keyboard")
-        except Exception as e:
-            self.logger.warning(f"[F3] Не удалось установить глобальный хук ESC: {e}")
-
-        # Enter для выхода
-        canvas.bind("<Return>", lambda e: exit_area_mode())
-        selection_window.bind("<Return>", lambda e: exit_area_mode())
-
-        # === УСИЛЕННЫЙ ЗАХВАТ ФОКУСА ===
-        selection_window.update_idletasks()
-        time.sleep(0.05)
-
-        try:
-            hwnd = int(selection_window.winfo_id())
-
-            # 1. Устанавливаем TOPMOST
-            win32gui.SetWindowPos(
-                hwnd,
-                win32con.HWND_TOPMOST,
-                0, 0, 0, 0,
-                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW
-            )
-
-            # 2. Принудительно поднимаем окно
-            win32gui.BringWindowToTop(hwnd)
-            time.sleep(0.02)
-
-            # 3. Устанавливаем фокус
-            win32gui.SetForegroundWindow(hwnd)
-            time.sleep(0.02)
-
-            # 4. Устанавливаем фокус через SetFocus
-            win32gui.SetFocus(hwnd)
-
-            # 5. Отправляем сообщение активации
-            win32gui.SendMessage(hwnd, win32con.WM_ACTIVATE, win32con.WA_ACTIVE, 0)
-
-            self.logger.info(f"[F3] Фокус установлен на окно выбора области (HWND: {hwnd})")
-        except Exception as e:
-            self.logger.warning(f"[F3] Не удалось установить фокус через Win32 API: {e}")
-
-        # Устанавливаем фокус через Tkinter
-        canvas.focus_set()
-        selection_window.focus_force()
-        selection_window.grab_set()
-        selection_window.lift()
-
-        # Дополнительная задержка для стабилизации
-        selection_window.update_idletasks()
-        time.sleep(0.05)
-
-        # Ещё раз пробуем захватить фокус
-        try:
-            hwnd = int(selection_window.winfo_id())
-            win32gui.SetForegroundWindow(hwnd)
-        except:
-            pass
-
-        # === ТАЙМЕР ДЛЯ ПОВТОРНОЙ УСТАНОВКИ ФОКУСА ===
-        def ensure_focus():
-            try:
-                if selection_window.winfo_exists():
-                    hwnd = int(selection_window.winfo_id())
-                    win32gui.SetForegroundWindow(hwnd)
-                    self.logger.info("[F3] Повторная установка фокуса на окно выбора области")
-            except:
-                pass
-
-        selection_window.after(100, ensure_focus)
-
-        self.hotkeys.set_actions_blocked(True)
 
     def _auto_switch_fullscreen_window(self, hwnd: int, app_name: str):
         """
@@ -2276,7 +2089,6 @@ class ScreenshotTranslatorApp:
         """Обрабатывает все OCR регионы — ТОЛЬКО ДОБАВЛЯЕТ ШАБЛОНЫ В МОНИТОР, без создания оверлеев."""
 
         import time
-        from pathlib import Path
 
         loop_start = time.time()
         self.logger.info(f"[TIMING] Этап 7: Обработка {len(regions)} зон...")
@@ -2382,7 +2194,6 @@ class ScreenshotTranslatorApp:
                                    orig_w, orig_h, wx1, wy1):
         """Создает оверлей для одного региона."""
         import time
-        from pathlib import Path
 
         try:
             region_img = translated_img.crop((x1, y1, x2, y2))
@@ -2423,7 +2234,6 @@ class ScreenshotTranslatorApp:
                                  orig_w, orig_h, wx1, wy1, app_name, i):
         """Добавляет шаблон в монитор для автозамены."""
         import time
-        from pathlib import Path
 
         if not self.translation_monitor or not self.settings.get_auto_replace_translated():
             return
@@ -2814,7 +2624,6 @@ class ScreenshotTranslatorApp:
 
                 app_name = get_process_name_by_hwnd(new_hwnd, default_name="Неизвестно")
 
-                # Получаем имя нашего процесса
                 our_pid = os.getpid()
                 try:
                     our_process = psutil.Process(our_pid)
@@ -2822,17 +2631,37 @@ class ScreenshotTranslatorApp:
                 except:
                     our_app_name = "python.exe"
 
-                # Если переключились на наше приложение — запоминаем предыдущее окно
-                if app_name and app_name.lower() == our_app_name:
-                    # Если у нас есть сохранённое окно и оно ещё существует
+                # Проверяем, является ли активное окно мини-баром
+                is_mini_bar = False
+                if hasattr(self, '_mini_bar_window') and self._mini_bar_window:
+                    try:
+                        mini_bar_hwnd = int(self._mini_bar_window.window.winfo_id())
+                        if new_hwnd == mini_bar_hwnd:
+                            is_mini_bar = True
+                            self.logger.info("[WINDOW] Активное окно - мини-бар")
+                    except:
+                        pass
+
+                # Проверяем, является ли активное окно главным окном приложения
+                is_main_window = False
+                if hasattr(self, 'ui') and hasattr(self.ui, 'root'):
+                    try:
+                        main_hwnd = int(self.ui.root.winfo_id())
+                        if new_hwnd == main_hwnd:
+                            is_main_window = True
+                            self.logger.info("[WINDOW] Активное окно - главное окно приложения")
+                    except:
+                        pass
+
+                # Если переключились на наше приложение (не мини-бар) — запоминаем
+                if app_name and app_name.lower() == our_app_name and not is_mini_bar:
                     if hasattr(self, '_last_real_active_hwnd') and self._last_real_active_hwnd:
                         last_hwnd = self._last_real_active_hwnd
                         if win32gui.IsWindow(last_hwnd) and win32gui.IsWindowVisible(last_hwnd):
                             self.logger.info(f"[WINDOW] Сохранено последнее активное окно: HWND={last_hwnd}")
                         else:
                             self._last_real_active_hwnd = None
-                else:
-                    # Если переключились на другое приложение — сохраняем его
+                elif not is_mini_bar and not is_main_window:
                     self._last_real_active_hwnd = new_hwnd
 
                 self._auto_switch_fullscreen_window(new_hwnd, app_name)
@@ -2845,14 +2674,62 @@ class ScreenshotTranslatorApp:
         if self.overlay_manager.is_dragging():
             return
 
-        # ============================================================
-        # ПОЛУЧАЕМ АКТИВНОЕ ПРИЛОЖЕНИЕ
-        # ============================================================
         active_app_name = self._get_current_app_name()
+
+        # Проверяем, является ли активное окно мини-баром
+        is_mini_bar_active = False
+        if hasattr(self, '_mini_bar_window') and self._mini_bar_window:
+            try:
+                mini_bar_hwnd = int(self._mini_bar_window.window.winfo_id())
+                if new_hwnd == mini_bar_hwnd:
+                    is_mini_bar_active = True
+                    self.logger.info("[WINDOW] Мини-бар активен, оверлеи остаются видимыми")
+            except:
+                pass
+
+        # Проверяем, является ли активное окно главным окном приложения
+        is_main_window_active = False
+        if hasattr(self, 'ui') and hasattr(self.ui, 'root'):
+            try:
+                main_hwnd = int(self.ui.root.winfo_id())
+                if new_hwnd == main_hwnd:
+                    is_main_window_active = True
+                    self.logger.info("[WINDOW] Главное окно активно, оверлеи будут скрыты")
+            except:
+                pass
 
         auto_hide_enabled = self.settings.get_auto_hide_overlay() if hasattr(self, 'settings') else True
 
-        # Флаг, были ли показаны F2-оверлеи
+        # ============================================================
+        # ЕСЛИ АКТИВНО ГЛАВНОЕ ОКНО ПРИЛОЖЕНИЯ — СКРЫВАЕМ ВСЕ ОВЕРЛЕИ
+        # ============================================================
+        if is_main_window_active:
+            self.logger.info("[WINDOW] Главное окно активно, скрываем все оверлеи")
+            for overlay in self.overlay_manager.overlays:
+                try:
+                    if overlay.visible:
+                        overlay.hide(by_user=False)
+                        self.logger.info(f"[WINDOW] Скрыт оверлей для {overlay._app_name}")
+                except Exception as e:
+                    self.logger.warning(f"[WINDOW] Ошибка скрытия оверлея: {e}")
+
+            # Обновляем список окон
+            if hasattr(self, 'window_list'):
+                self.window_list.refresh()
+            return
+
+        # ============================================================
+        # ЕСЛИ АКТИВЕН МИНИ-БАР — НЕ СКРЫВАЕМ ОВЕРЛЕИ
+        # ============================================================
+        if is_mini_bar_active:
+            self.logger.info("[WINDOW] Мини-бар активен, оверлеи не скрываем")
+            if hasattr(self, 'window_list'):
+                self.window_list.refresh()
+            return
+
+        # ============================================================
+        # ОСТАЛЬНАЯ ЛОГИКА ДЛЯ ДРУГИХ ПРИЛОЖЕНИЙ
+        # ============================================================
         f2_overlays_shown = False
 
         if active_app_name:
@@ -2908,11 +2785,8 @@ class ScreenshotTranslatorApp:
                         except Exception as e:
                             self.logger.warning(f"[WINDOW] Ошибка скрытия оверлея: {e}")
         else:
-            self.logger.info("[WINDOW] Auto-hide выключен, F2-оверлеи не скрываются при переключении окон")
+            self.logger.info("[WINDOW] Auto-hide выключен, оверлеи не скрываются при переключении окон")
 
-        # ============================================================
-        # ОСТАВЛЯЕМ ЛОГИКУ ДЛЯ TRANSLATION_MONITOR
-        # ============================================================
         if hasattr(self, 'translation_monitor') and self.translation_monitor and auto_hide_enabled:
             monitor = self.translation_monitor
             for template_data in monitor.templates:
@@ -2928,9 +2802,6 @@ class ScreenshotTranslatorApp:
                         except Exception as e:
                             self.logger.warning(f"[WINDOW] Ошибка скрытия оверлея: {e}")
 
-        # ============================================================
-        # ПОДНИМАЕМ МИНИ-БАР ПОВЕРХ ОВЕРЛЕЕВ, ЕСЛИ ОНИ БЫЛИ ПОКАЗАНЫ
-        # ============================================================
         if f2_overlays_shown:
             self._ensure_mini_bar_on_top()
             self.logger.info("[WINDOW] Мини-бар поднят поверх F2-оверлеев")
@@ -3605,10 +3476,6 @@ class ScreenshotTranslatorApp:
 
     def on_close(self):
         """Закрытие приложения с улучшенной обработкой потоков и таймаутами."""
-        import time
-        import threading
-        import os
-        import sys
 
         self.logger.info("=" * 60)
         self.logger.info("🛑 НАЧАЛО ЗАКРЫТИЯ ПРИЛОЖЕНИЯ")
