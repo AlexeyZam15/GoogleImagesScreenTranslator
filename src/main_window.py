@@ -611,7 +611,9 @@ class MainWindow:
         return self.settings.get_string(key)
 
     def update_status(self, text, color='white'):
-        """Обновляет статус"""
+        """
+        Обновляет статус. Используется только для статуса готовности браузера.
+        """
         self.logger.info(f"[STATUS_UI] update_status вызван: text='{text}', color='{color}'")
         if self.status:
             try:

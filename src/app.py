@@ -1057,9 +1057,6 @@ class ScreenshotTranslatorApp:
         self._last_target_lang = self.settings.get_target_language()
         self.logger.info(f"[APP] Текущий целевой язык: {self._last_target_lang}")
 
-        # ============================================================
-        # ИСПРАВЛЕНИЕ: проверяем debug_mode при показе браузера
-        # ============================================================
         show_browser = self.settings.get_show_browser()
         if self.debug_mode:
             show_browser = True
@@ -1067,13 +1064,9 @@ class ScreenshotTranslatorApp:
 
         target_lang = self.settings.get_target_language()
 
-        self.ui.update_status("● " + self.ui.get_string('starting_browser'), '#ff9800')
-
         # Создаем обертку для колбэка, которая вызовет и наш callback
         def on_init_wrapper(result, error):
-            # Вызываем оригинальный обработчик
             self._on_init_complete(result, error)
-            # Вызываем callback для разблокировки кнопки
             if hasattr(self, '_restart_callback') and self._restart_callback:
                 try:
                     self._restart_callback()
@@ -1733,8 +1726,7 @@ class ScreenshotTranslatorApp:
             except Exception as e:
                 self.logger.warning(f"[APP] Ошибка сохранения состояния: {e}")
 
-        # 2. ОЧИСТКА КОМПОНЕНТОВ (БЕЗ УДАЛЕНИЯ ФАЙЛА СОСТОЯНИЯ)
-        # 2.1 Останавливаем и очищаем TranslationMonitor
+        # 2. ОЧИСТКА КОМПОНЕНТОВ
         if hasattr(self, 'translation_monitor') and self.translation_monitor:
             try:
                 self.translation_monitor.stop()
@@ -1744,7 +1736,6 @@ class ScreenshotTranslatorApp:
                 self.logger.warning(f"[APP] Ошибка очистки TranslationMonitor: {e}")
             self.translation_monitor = None
 
-        # 2.2 Закрываем все оверлеи (но не удаляем файл состояния)
         if hasattr(self, 'overlay_manager') and self.overlay_manager:
             try:
                 count = len(self.overlay_manager.overlays)
@@ -1754,7 +1745,6 @@ class ScreenshotTranslatorApp:
                 self.logger.warning(f"[APP] Ошибка закрытия оверлеев: {e}")
             self.overlay_manager = None
 
-        # 2.3 Очищаем список окон
         if hasattr(self, 'window_list'):
             try:
                 self.window_list.window_listbox.delete(0, 'end')
@@ -1764,7 +1754,6 @@ class ScreenshotTranslatorApp:
             except Exception as e:
                 self.logger.warning(f"[APP] Ошибка очистки списка окон: {e}")
 
-        # 2.4 Сбрасываем флаги инициализации
         self.ready = False
         self.initializing = True
         self._init_done = False
@@ -1779,22 +1768,15 @@ class ScreenshotTranslatorApp:
             self.logger.info(f"[APP] Движок изменен: {self._last_engine} -> {engine}")
             self._last_engine = engine
 
-        # Сохраняем текущий язык для отслеживания изменений
         self._last_target_lang = self.settings.get_target_language()
         self.logger.info(f"[APP] Текущий целевой язык: {self._last_target_lang}")
 
-        # ============================================================
-        # ИСПРАВЛЕНИЕ: проверяем debug_mode при показе браузера
-        # ============================================================
         show_browser = self.settings.get_show_browser()
         if self.debug_mode:
             show_browser = True
             self.logger.info("[DEBUG] Режим отладки: принудительный показ браузера при перезапуске")
 
         target_lang = self.settings.get_target_language()
-
-        # Статус "starting browser"
-        self.ui.update_status("● " + self.ui.get_string('starting_browser'), '#ff9800')
 
         # Отправляем команду перезапуска
         cmd_id = self.browser_worker.restart_browser(show_browser, target_lang, self._on_init_complete)
@@ -1919,16 +1901,10 @@ class ScreenshotTranslatorApp:
                     self.ocr_processor.initialize()
                     self._ocr_initialized = True
                     self.logger.info("✅ EasyOCR готов к использованию")
-                    # Удаляем уведомление
-                    # if hasattr(self, 'show_notification'):
-                    #     self.ui.root.after(0, lambda: self.show_notification("✅ OCR готов", 1500))
                 except ImportError as e:
                     self.logger.warning(f"EasyOCR не установлен: {e}")
                     self._ocr_initialized = False
                     self.ocr_processor = None
-                    # Удаляем уведомление
-                    # if hasattr(self, 'show_notification'):
-                    #     self.ui.root.after(0, lambda: self.show_notification("❌ EasyOCR не установлен", 2000))
                 except Exception as e:
                     self.logger.error(f"❌ Ошибка инициализации EasyOCR: {e}")
                     self._ocr_initialized = False
@@ -2395,7 +2371,6 @@ class ScreenshotTranslatorApp:
         import traceback
         traceback.print_exc()
         self.show_notification(f"❌ Ошибка OCR: {str(e)[:30]}")
-        self.ui.update_status("● " + self.ui.get_string('error'), '#f44336')
         self._hide_translation_overlay()
 
     def _get_app_name_by_hwnd(self, hwnd: int) -> str:
@@ -2637,8 +2612,6 @@ class ScreenshotTranslatorApp:
         if error:
             self.logger.error(f"Ошибка инициализации: {error}")
             self.initializing = False
-
-            # Кнопка настроек остаётся заблокированной до успешной инициализации
             self.ui.root.after(self._init_retry_delay, self._init_translator_step)
             return
 
@@ -2648,19 +2621,16 @@ class ScreenshotTranslatorApp:
         self._init_done = True
         self._init_attempts = 0
 
-        # Сохраняем используемый движок и язык
         self._last_engine = self.settings.get_translator_engine()
         self._last_target_lang = self.settings.get_target_language()
 
         engine_name = "Google Translate" if self._last_engine == "google" else "Яндекс.Переводчик (OCR)"
         self.logger.info(f"[APP] Используется движок: {engine_name}, язык: {self._last_target_lang}")
 
-        # Переустанавливаем горячие клавиши после инициализации
         if hasattr(self, 'hotkeys'):
             self.hotkeys.setup()
             self.logger.info("[APP] Горячие клавиши переустановлены после инициализации браузера")
 
-        # Создаём компоненты заново
         if not self.overlay_manager:
             self.overlay_manager = OverlayManager(self)
             self.logger.info("[APP] OverlayManager создан")
@@ -2669,7 +2639,6 @@ class ScreenshotTranslatorApp:
             self.translation_monitor = TranslationMonitor(self, self.overlay_manager, self.settings)
             self.logger.info("[APP] TranslationMonitor создан")
 
-        # Восстанавливаем оверлеи из сохранённого состояния
         restored_count = 0
         if self.overlay_manager:
             try:
@@ -2682,23 +2651,22 @@ class ScreenshotTranslatorApp:
             except Exception as e:
                 self.logger.error(f"[STATE] Ошибка восстановления оверлеев: {e}")
 
-        # Разблокировка кнопки только при успешной инициализации
         if hasattr(self.ui, 'settings_btn'):
             self.ui.settings_btn.config(state=tk.NORMAL, bg='#3c3c3c', fg='#cccccc')
             self.logger.info("[APP] Кнопка настроек разблокирована")
 
         self.ui.set_settings_menu_enabled(True)
 
-        # Обновляем статус на "Готов"
+        # ============================================================
+        # ТОЛЬКО СТАТУС ГОТОВНОСТИ БРАУЗЕРА
+        # ============================================================
         ready_text = self.ui.get_string('ready')
-        self.logger.info(f"[STATUS] Обновление статуса на: {ready_text}")
         self.ui.update_status(f"● {ready_text} ({engine_name}, {self._last_target_lang.upper()})", '#4CAF50')
         self.logger.info("[STATUS] Статус обновлён на Готов")
 
         self.window_list.refresh()
         self.logger.info("Инициализация полностью завершена, статус: Готов")
 
-        # Показываем уведомление о готовности
         self.show_notification(
             f"✅ {self.ui.get_string('ready_notification')} ({engine_name}, {self._last_target_lang.upper()})", 2000
         )
@@ -2932,21 +2900,17 @@ class ScreenshotTranslatorApp:
         status_text = "включён" if self._edit_mode_enabled else "выключен"
         status_color = '#4CAF50' if self._edit_mode_enabled else '#ff9800'
 
-        self.ui.update_status(f"● Режим редактирования {status_text}", status_color)
+        # Только уведомление, статус-бар не обновляем
         self.show_notification(f"✏️ Режим редактирования {status_text}")
 
         if self._edit_mode_enabled:
-            # Включаем режим: отключаем автоскрытие и монитор видимости
             for overlay in self.overlay_manager.overlays:
                 try:
                     overlay.auto_hide_enabled = False
                     overlay._stop_visibility_monitor()
-                    # НЕ ПОКАЗЫВАЕМ ОВЕРЛЕЙ ПРИНУДИТЕЛЬНО!
-                    # Оверлеи показываются только когда монитор находит шаблон
                 except Exception as e:
                     self.logger.warning(f"[EDIT_MODE] Ошибка настройки оверлея: {e}")
         else:
-            # Выключаем режим: включаем автоскрытие
             for overlay in self.overlay_manager.overlays:
                 try:
                     overlay.auto_hide_enabled = True
@@ -3309,11 +3273,8 @@ class ScreenshotTranslatorApp:
             return
 
         self.initializing = True
-        self.ui.update_status("● " + self.ui.get_string('starting_browser'), '#ff9800')
+        self.logger.info("[APP] Инициализация браузера...")
 
-        # ============================================================
-        # ИСПРАВЛЕНИЕ: проверяем debug_mode при показе браузера
-        # ============================================================
         show_browser = self.settings.get_show_browser()
         if self.debug_mode:
             show_browser = True
@@ -3494,12 +3455,6 @@ class ScreenshotTranslatorApp:
                         # Для Яндекс используем специальный метод обновления языка через интерфейс
                         self.logger.info("[YANDEX] Обновление языка через интерфейс")
                         self.browser_worker.update_yandex_language(new_lang)
-                        # Обновляем статус, но не перезапускаем браузер
-                        engine_name = "Яндекс.Переводчик (OCR)"
-                        self.ui.update_status(
-                            f"● {self.ui.get_string('ready')} ({engine_name}, {new_lang.upper()})",
-                            '#4CAF50'
-                        )
                         # Обновляем язык в браузере
                         if hasattr(self.browser_worker, 'translator') and self.browser_worker.translator:
                             self.browser_worker.translator.target_lang = new_lang
@@ -3515,14 +3470,10 @@ class ScreenshotTranslatorApp:
             engine = self.settings.get_translator_engine()
             engine_name = "Google Translate" if engine == "google" else "Яндекс.Переводчик (OCR)"
             target_lang = self.settings.get_target_language()
+            ready_text = self.ui.get_string('ready')
             self.ui.update_status(
-                f"● {self.ui.get_string('ready')} ({engine_name}, {target_lang.upper()})",
+                f"● {ready_text} ({engine_name}, {target_lang.upper()})",
                 '#4CAF50'
-            )
-        elif hasattr(self, 'initializing') and self.initializing:
-            self.ui.update_status(
-                "● " + self.ui.get_string('starting_browser'),
-                '#ff9800'
             )
 
     def reset_settings(self):
