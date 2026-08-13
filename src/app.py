@@ -2894,30 +2894,23 @@ class ScreenshotTranslatorApp:
         self._edit_mode_enabled = not getattr(self, '_edit_mode_enabled', False)
         self.settings.set_edit_mode_enabled(self._edit_mode_enabled)
 
-        # Обновляем все оверлеи (только режим редактирования, без принудительного показа)
-        self.overlay_manager.update_edit_mode_for_all(self._edit_mode_enabled)
+        # ============================================================
+        # ОПТИМИЗАЦИЯ: обновляем только видимые оверлеи
+        # ============================================================
+        visible_overlays = [ov for ov in self.overlay_manager.overlays if ov.visible]
+
+        if visible_overlays:
+            self.logger.info(f"[EDIT_MODE] Обновление {len(visible_overlays)} видимых оверлеев")
+            for overlay in visible_overlays:
+                try:
+                    overlay.update_edit_mode(self._edit_mode_enabled)
+                except Exception as e:
+                    self.logger.warning(f"[EDIT_MODE] Ошибка обновления оверлея: {e}")
+        else:
+            self.logger.info("[EDIT_MODE] Нет видимых оверлеев для обновления")
 
         status_text = "включён" if self._edit_mode_enabled else "выключен"
-        status_color = '#4CAF50' if self._edit_mode_enabled else '#ff9800'
-
-        # Только уведомление, статус-бар не обновляем
         self.show_notification(f"✏️ Режим редактирования {status_text}")
-
-        if self._edit_mode_enabled:
-            for overlay in self.overlay_manager.overlays:
-                try:
-                    overlay.auto_hide_enabled = False
-                    overlay._stop_visibility_monitor()
-                except Exception as e:
-                    self.logger.warning(f"[EDIT_MODE] Ошибка настройки оверлея: {e}")
-        else:
-            for overlay in self.overlay_manager.overlays:
-                try:
-                    overlay.auto_hide_enabled = True
-                    if overlay.visible:
-                        overlay._start_visibility_monitor()
-                except Exception as e:
-                    self.logger.warning(f"[EDIT_MODE] Ошибка настройки оверлея: {e}")
 
     def _on_translate_finished(self, result, error):
         self.logger.info(f"[DEBUG] === _on_translate_finished НАЧАЛО ===")

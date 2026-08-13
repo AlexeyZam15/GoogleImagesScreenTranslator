@@ -54,7 +54,8 @@ class OverlayWindow:
         '_image_offset_y', '_saved_window_height', '_saved_window_y',
         '_closing',
         '_save_timer', '_last_frame_update',
-        '_is_f2_overlay'  # <-- ФЛАГ ДЛЯ F2-ОВЕРЛЕЯ
+        '_is_f2_overlay',
+        '_updating_edit_mode'  # <-- ДОБАВЛЕН
     )
 
     def __init__(self, parent=None, app_title="Перевод скриншотов", auto_hide_enabled=True):
@@ -108,6 +109,11 @@ class OverlayWindow:
         # ФЛАГ: идентифицирует F2-оверлей
         # ============================================================
         self._is_f2_overlay = False
+
+        # ============================================================
+        # ФЛАГ ДЛЯ ПРЕДОТВРАЩЕНИЯ ПОВТОРНЫХ ОБНОВЛЕНИЙ РЕЖИМА РЕДАКТИРОВАНИЯ
+        # ============================================================
+        self._updating_edit_mode = False
 
         # Временный режим
         self._is_temporary = False
@@ -376,6 +382,9 @@ class OverlayWindow:
             width = self.root.winfo_width()
             height = self.root.winfo_height()
 
+            # Удаляем старую рамку, если есть
+            self.canvas.delete('edit_frame')
+
             self._edit_frame = self.canvas.create_rectangle(
                 0, 0, width, height,
                 outline='#000000',
@@ -639,31 +648,37 @@ class OverlayWindow:
 
     def update_edit_mode(self, edit_mode_enabled: bool):
         """Обновляет состояние режима редактирования для оверлея."""
-        self.logger.info(f"[DEBUG] Обновлен _edit_mode_enabled = {edit_mode_enabled}")
-
-        self._edit_mode_enabled = edit_mode_enabled
-
         # ============================================================
-        # ТОЛЬКО РАМКА! Монитор видимости и F1 продолжают работать
+        # ЗАЩИТА ОТ ПОВТОРНЫХ ВЫЗОВОВ
         # ============================================================
-        if edit_mode_enabled:
-            # Показываем рамку
-            self._show_edit_frame()
+        if hasattr(self, '_updating_edit_mode') and self._updating_edit_mode:
+            return
 
-            # Сбрасываем флаг скрытия мышью (чтобы оверлей не был скрыт из-за мыши)
-            # НО НЕ ВЛИЯЕМ НА F1 И АВТОСКРЫТИЕ ПРИ ПЕРЕКЛЮЧЕНИИ ОКОН
-            if self._hidden_by_mouse:
-                self._hidden_by_mouse = False
-                if not self.visible and self._last_image_path and self._last_window_rect:
-                    # Показываем только если оверлей НЕ скрыт пользователем (F1) и НЕ скрыт системой
-                    if not self._hidden_by_user and self._is_visible_by_user:
-                        self.show()
+        # Проверяем, изменилось ли состояние
+        if self._edit_mode_enabled == edit_mode_enabled:
+            self.logger.debug(f"[EDIT_MODE] Состояние не изменилось: {edit_mode_enabled}")
+            return
 
-            self.logger.info("[DEBUG] Режим редактирования включен: рамка показана")
-        else:
-            # Скрываем рамку
-            self._hide_edit_frame()
-            self.logger.info("[DEBUG] Режим редактирования выключен: рамка скрыта")
+        self._updating_edit_mode = True
+
+        try:
+            self.logger.info(f"[DEBUG] Обновлен _edit_mode_enabled = {edit_mode_enabled}")
+            self._edit_mode_enabled = edit_mode_enabled
+
+            if edit_mode_enabled:
+                # Включаем режим: показываем рамку только если оверлей видим
+                if self.visible:
+                    self._show_edit_frame()
+                    self.logger.info("[DEBUG] Режим редактирования включен: рамка показана")
+                else:
+                    self.logger.debug("[DEBUG] Режим редактирования включен, но оверлей скрыт")
+            else:
+                # Выключаем режим: скрываем рамку
+                self._hide_edit_frame()
+                self.logger.info("[DEBUG] Режим редактирования выключен: рамка скрыта")
+
+        finally:
+            self._updating_edit_mode = False
 
     def _start_drag(self, event):
         """Начинает перетаскивание окна."""

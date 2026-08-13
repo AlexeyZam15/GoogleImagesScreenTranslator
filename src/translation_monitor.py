@@ -350,11 +350,21 @@ class TranslationMonitor:
             pair_index = template_data.get('pair_index', 0)
             overlay = template_data.get('overlay')
 
-            # Пропускаем часто найденные шаблоны
+            # ============================================================
+            # УСИЛЕННАЯ ПРОВЕРКА ЧАСТОТЫ ОБНОВЛЕНИЙ
+            # ============================================================
             if pair_index in last_found_time:
                 time_since_found = current_time - last_found_time[pair_index]
-                if template_data.get('found', False) and overlay and overlay.visible and time_since_found < 1.0:
-                    continue
+
+                # Если шаблон уже найден и оверлей виден — пропускаем частые обновления
+                if template_data.get('found', False) and overlay and overlay.visible:
+                    # Проверяем, не слишком ли часто обновляем (каждые 0.5 секунды вместо 1.0)
+                    if time_since_found < 0.5:
+                        continue
+                # Если оверлей не виден, но шаблон найден — даём шанс на показ
+                elif template_data.get('found', False) and (not overlay or not overlay.visible):
+                    if time_since_found < 0.2:
+                        continue
 
             template = template_data.get('template')
             if template is None:
@@ -394,14 +404,39 @@ class TranslationMonitor:
                 if max_val >= self.confidence_threshold:
                     self.logger.info(f"[MONITOR] ✅ Шаблон #{pair_index} найден (точность {max_val:.3f})")
 
+            # ============================================================
+            # ПРОВЕРКА СОВПАДЕНИЯ И УПРАВЛЕНИЕ СОСТОЯНИЕМ
+            # ============================================================
             if max_val >= self.confidence_threshold:
+                # Проверяем, нужно ли обновлять оверлей
+                should_update = True
+
+                # Если оверлей уже существует и виден, обновляем только если позиция изменилась
+                if overlay and overlay.visible:
+                    last_pos = template_data.get('last_position')
+                    if last_pos:
+                        old_x, old_y, old_w, old_h = last_pos
+                        # Если позиция изменилась незначительно (до 3 пикселей) — не обновляем
+                        if (abs(old_x - original_x) < 3 and
+                                abs(old_y - original_y) < 3 and
+                                abs(old_w - original_w) < 3 and
+                                abs(old_h - original_h) < 3):
+                            should_update = False
+                            # Обновляем время последнего нахождения, чтобы не спамить
+                            last_found_time[pair_index] = current_time
+                            continue
+
                 if not template_data.get('found', False):
                     template_data['found'] = True
                     if debug_counter % 20 == 0:
                         self.logger.info(f"✅ Шаблон #{pair_index} найден с точностью {max_val:.3f}")
 
                 template_data['last_position'] = (original_x, original_y, original_w, original_h)
-                self._update_overlay(template_data, original_x, original_y, original_w, original_h)
+
+                # Обновляем оверлей только если нужно
+                if should_update:
+                    self._update_overlay(template_data, original_x, original_y, original_w, original_h)
+
                 last_found_time[pair_index] = current_time
             else:
                 if template_data.get('found', False):
@@ -887,7 +922,9 @@ class TranslationMonitor:
             current_template_pos = (template_x, template_y)
             last_template_pos = template_data.get('last_template_position')
 
+            # ============================================================
             # ЕСЛИ ОВЕРЛЕЙ УЖЕ СУЩЕСТВУЕТ
+            # ============================================================
             if overlay:
                 try:
                     if overlay.root and overlay.root.winfo_exists():
@@ -902,6 +939,14 @@ class TranslationMonitor:
 
                         position_changed = (last_template_pos is None or last_template_pos != current_template_pos)
 
+                        # ============================================================
+                        # ПРОВЕРКА: оверлей уже виден — не пытаемся показать заново
+                        # ============================================================
+                        if overlay.visible and not position_changed:
+                            # Если оверлей уже виден и позиция не изменилась — просто выходим
+                            self.logger.debug(f"[MONITOR] Оверлей #{pair_index} уже виден, обновление не требуется")
+                            return
+
                         if position_changed:
                             overlay.root.geometry(f"{final_w}x{final_h}+{final_x}+{final_y}")
                             overlay.root.update_idletasks()
@@ -913,17 +958,18 @@ class TranslationMonitor:
                         overlay._hidden_by_user = False
                         overlay._hidden_by_mouse = False
 
+                        # ============================================================
+                        # ПОКАЗЫВАЕМ ТОЛЬКО ЕСЛИ ОВЕРЛЕЙ НЕ ВИДЕН
+                        # ============================================================
                         if not overlay.visible:
                             overlay.show()
-                            # ============================================================
-                            # ДОБАВЛЯЕМ ОВЕРЛЕЙ В СПИСОК НЕДАВНО АКТИВНЫХ
-                            # ============================================================
+                            # Добавляем оверлей в список недавно активных
                             if self.parent and hasattr(self.parent, '_add_recent_overlay'):
                                 self.parent._add_recent_overlay(overlay)
                             self.logger.info(f"[MONITOR] Показан оверлей #{pair_index}")
                         else:
-                            if position_changed:
-                                overlay.root.lift()
+                            # Если оверлей уже виден, просто поднимаем его
+                            overlay.root.lift()
 
                         return
                     else:
@@ -932,7 +978,9 @@ class TranslationMonitor:
                     self.logger.warning(f"[MONITOR] Ошибка обновления оверлея #{pair_index}: {e}")
                     template_data['overlay'] = None
 
+            # ============================================================
             # СОЗДАЁМ НОВЫЙ ОВЕРЛЕЙ
+            # ============================================================
             if not self.monitoring:
                 return
 
@@ -983,9 +1031,6 @@ class TranslationMonitor:
 
                         if not new_overlay.visible:
                             new_overlay.show()
-                            # ============================================================
-                            # ДОБАВЛЯЕМ ОВЕРЛЕЙ В СПИСОК НЕДАВНО АКТИВНЫХ
-                            # ============================================================
                             if self.parent and hasattr(self.parent, '_add_recent_overlay'):
                                 self.parent._add_recent_overlay(new_overlay)
 
@@ -1100,3 +1145,4 @@ class TranslationMonitor:
 
         except Exception as e:
             self.logger.warning(f"Ошибка поиска шаблона #{idx}: {e}")
+

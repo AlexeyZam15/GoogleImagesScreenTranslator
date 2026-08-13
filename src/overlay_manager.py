@@ -24,6 +24,7 @@ class OverlayManager:
         '_context_menu', '_context_menu_overlay', '_restoring', '_suppress_save',
         '_save_timer', '_save_pending', '_last_save_time', '_save_batch',
         '_save_delay',
+        '_updating_edit_mode'  # <-- ДОБАВЛЕН
     )
 
     def __init__(self, parent):
@@ -40,6 +41,11 @@ class OverlayManager:
         self._restoring = False
         self._suppress_save = False
 
+        # ============================================================
+        # ФЛАГ ДЛЯ ПРЕДОТВРАЩЕНИЯ ПОВТОРНЫХ ОБНОВЛЕНИЙ РЕЖИМА РЕДАКТИРОВАНИЯ
+        # ============================================================
+        self._updating_edit_mode = False
+
         # Оптимизация сохранения состояния
         self._save_timer = None
         self._save_pending = False
@@ -47,19 +53,7 @@ class OverlayManager:
         self._save_batch = []
         self._save_delay = 1000
 
-        # ============================================================
-        # НОВЫЙ АТРИБУТ: запоминаем состояние оверлеев при F1
-        # ============================================================
-
         self._create_context_menu()
-
-        # ============================================================
-        # УДАЛЯЕМ ГЛОБАЛЬНЫЙ ОБРАБОТЧИК ESC ДЛЯ ГЛАВНОГО ОКНА
-        # ТЕПЕРЬ ESC ОБРАБАТЫВАЕТСЯ ЧЕРЕЗ hotkeys.py (ГЛОБАЛЬНЫЙ СИСТЕМНЫЙ ХУК)
-        # ============================================================
-        # if hasattr(self.parent, 'root') and self.parent.root:
-        #     self.parent.root.bind('<Escape>', self._on_global_esc)
-        #     self.logger.info("[OVERLAY_MANAGER] Глобальный обработчик ESC добавлен к главному окну")
 
         self.logger.info("OverlayManager инициализирован")
 
@@ -1796,16 +1790,38 @@ class OverlayManager:
         """
         Обновляет состояние режима редактирования для всех существующих оверлеев.
         """
-        self.logger.info(
-            f"Обновление режима редактирования для всех {len(self.overlays)} оверлеев: {edit_mode_enabled}")
-        for overlay in self.overlays:
-            try:
-                if overlay is not None:
-                    overlay.update_edit_mode(edit_mode_enabled)
-                    # НЕ ПОКАЗЫВАЕМ ПАНЕЛЬ АВТОМАТИЧЕСКИ
-                    # Панель будет показана только при наведении мыши
-            except Exception as e:
-                self.logger.warning(f"Ошибка обновления режима редактирования для оверлея: {e}")
+        # ============================================================
+        # ЗАЩИТА ОТ ПОВТОРНЫХ ВЫЗОВОВ
+        # ============================================================
+        if hasattr(self, '_updating_edit_mode') and self._updating_edit_mode:
+            self.logger.debug("[EDIT_MODE] Уже выполняется обновление, пропускаем")
+            return
+
+        self._updating_edit_mode = True
+
+        try:
+            self.logger.info(
+                f"Обновление режима редактирования для {len(self.overlays)} оверлеев: {edit_mode_enabled}"
+            )
+
+            # Оптимизация: обновляем только видимые оверлеи
+            updated_count = 0
+            for overlay in self.overlays:
+                try:
+                    if overlay is None:
+                        continue
+                    # Обновляем только если оверлей видим или edit_mode_enabled == True
+                    # (при включении режима нужно показать рамку, даже если оверлей скрыт)
+                    if overlay.visible or edit_mode_enabled:
+                        overlay.update_edit_mode(edit_mode_enabled)
+                        updated_count += 1
+                except Exception as e:
+                    self.logger.warning(f"Ошибка обновления режима редактирования для оверлея: {e}")
+
+            self.logger.info(f"[EDIT_MODE] Обновлено {updated_count} оверлеев")
+
+        finally:
+            self._updating_edit_mode = False
 
     def _find_overlay_under_cursor(self) -> Optional[OverlayWindow]:
         """Находит оверлей, под которым находится курсор мыши."""
