@@ -930,14 +930,14 @@ class SettingsWindow:
         logger.info(f"[SETTINGS] Восстановлены: язык={current_lang}, show_browser={current_show_browser}, "
                     f"engine={current_engine}, target_lang={current_target_lang}")
 
-        # Сбрасываем горячие клавиши к стандартным
+        # <-- ОБНОВЛЁННЫЙ СБРОС ХОТКЕЕВ: ТОЛЬКО F1 И F3 -->
         default_hotkeys = {
-            "screenshot": "f2",
-            "area": "f3",
-            "toggle_overlay": "f1",
-            "clear_all": "f4",
-            "edit_mode": "f5",
-            "auto_replace": "f6",
+            "screenshot": "",  # Удалён
+            "area": "f3",  # Оставлен
+            "toggle_overlay": "f1",  # Оставлен
+            "clear_all": "",  # Удалён
+            "edit_mode": "",  # Удалён
+            "auto_replace": "",  # Удалён
         }
         for action, default_key in default_hotkeys.items():
             self.settings.set_hotkey(action, default_key)
@@ -957,9 +957,8 @@ class SettingsWindow:
                 default_key = default_hotkeys.get(action, "")
                 var.set(default_key)
                 if action in self.hotkey_capture_manager.hotkey_buttons:
-                    self.hotkey_capture_manager.hotkey_buttons[action].config(
-                        text=default_key.upper() if default_key else "—"
-                    )
+                    display_text = default_key.upper() if default_key else "—"
+                    self.hotkey_capture_manager.hotkey_buttons[action].config(text=display_text)
 
         if hasattr(self, 'app') and hasattr(self.app, '_edit_mode_enabled'):
             edit_mode = self.settings.get_edit_mode_enabled()

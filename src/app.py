@@ -2808,16 +2808,19 @@ class ScreenshotTranslatorApp:
         self.ui.set_settings_menu_enabled(True)
         self.logger.info("[APP] Меню настроек, хоткеев и вид разблокированы")
 
-        # 5. СТАТУС
+        # 5. СТАТУС - ИСПОЛЬЗУЕТ ЛОКАЛИЗАЦИЮ
         ready_text = self.ui.get_string('ready')
-        self.ui.update_status(f"● {ready_text} ({engine_name}, {self._last_target_lang.upper()})", '#4CAF50')
+        engine_name_localized = self.ui.get_string(
+            'engine_google') if self._last_engine == "google" else self.ui.get_string('engine_yandex')
+        self.ui.update_status(f"● {ready_text} ({engine_name_localized}, {self._last_target_lang.upper()})", '#4CAF50')
         self.logger.info("[STATUS] Статус обновлён на Готов")
 
         self.window_list.refresh()
         self.logger.info("Инициализация полностью завершена, статус: Готов")
 
         self.show_notification(
-            f"✅ {self.ui.get_string('ready_notification')} ({engine_name}, {self._last_target_lang.upper()})", 2000
+            f"✅ {self.ui.get_string('ready_notification')} ({engine_name_localized}, {self._last_target_lang.upper()})",
+            2000
         )
 
     def _on_window_switch(self, new_hwnd):

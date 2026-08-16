@@ -95,20 +95,31 @@ class MiniBarWindow:
                 self._add_tooltip(self.close_btn, close_tooltip)
 
             # 3. Обновляем подсказки для всех кнопок
-            # Получаем актуальные горячие клавиши из настроек
             hotkeys = self.app.settings.get_all_hotkeys() if hasattr(self.app, 'settings') else {}
             logger.info(f"[MINI_BAR] Текущие хоткеи: {hotkeys}")
 
-            # Список всех кнопок с их ключами
+            # <-- ОБНОВЛЁННЫЙ СПИСОК КНОПОК -->
             button_keys = ['f1', 'f2', 'f3', 'f3_hold', 'f4', 'f5', 'f6']
             button_attrs = ['btn_f1', 'btn_f2', 'btn_f3', 'btn_f3_hold', 'btn_f4', 'btn_f5', 'btn_f6']
+
+            # Соответствие действий для кнопок
+            action_map = {
+                'f1': 'toggle_overlay',
+                'f2': 'screenshot',
+                'f3': 'area',
+                'f3_hold': 'fullscreen_ocr',
+                'f4': 'clear_all',
+                'f5': 'edit_mode',
+                'f6': 'auto_replace'
+            }
 
             for key, attr in zip(button_keys, button_attrs):
                 if hasattr(self, attr):
                     btn = getattr(self, attr)
                     if btn:
                         # Получаем горячую клавишу для этого действия
-                        hotkey = hotkeys.get(key, '')
+                        action = action_map.get(key, key)
+                        hotkey = hotkeys.get(action, '')
 
                         # Форматируем отображение клавиши
                         if hotkey:
@@ -117,18 +128,8 @@ class MiniBarWindow:
                                 parts = hotkey.split('+')
                                 hotkey_display = '+'.join(p.upper() for p in parts)
                         else:
-                            # Если хоткей не задан, используем значение по умолчанию
-                            default_hotkeys = {
-                                'f1': 'F1',
-                                'f2': 'F2',
-                                'f3': 'F3',
-                                'f3_hold': 'F3 (held)',
-                                'f4': 'F4',
-                                'f5': 'F5',
-                                'f6': 'F6'
-                            }
-                            hotkey_display = default_hotkeys.get(key, '?')
-                            logger.warning(f"[MINI_BAR] Хоткей для {key} не найден, используем: {hotkey_display}")
+                            # Если хоткей не задан, используем "—"
+                            hotkey_display = "—"
 
                         # Получаем локализованную строку для подсказки
                         template_key = f'mini_bar_tooltip_{key}'

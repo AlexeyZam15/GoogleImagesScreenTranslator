@@ -35,12 +35,12 @@ class Settings:
 
     # Значения горячих клавиш по умолчанию
     DEFAULT_HOTKEYS = {
-        "screenshot": "f2",
-        "area": "f3",
-        "toggle_overlay": "f1",
-        "clear_all": "f4",
-        "edit_mode": "f5",
-        "auto_replace": "f6",
+        "screenshot": "",  # Удалён
+        "area": "f3",  # Оставлен
+        "toggle_overlay": "f1",  # Оставлен
+        "clear_all": "",  # Удалён
+        "edit_mode": "",  # Удалён
+        "auto_replace": "",  # Удалён
         "fullscreen_ocr": "f3",  # Это же F3, но с длительным зажатием
     }
 

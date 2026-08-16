@@ -80,18 +80,24 @@ class MainWindow:
             f1_key = hotkeys.get('toggle_overlay', 'F1').upper()
             f3_key = hotkeys.get('area', 'F3').upper()
 
-            # Форматируем отображение (убираем лишние модификаторы для читаемости)
-            if '+' in f1_key:
-                parts = f1_key.split('+')
-                f1_display = '+'.join(p.upper() for p in parts)
+            # Если хоткей не задан — показываем "—"
+            if not f1_key or f1_key == '':
+                f1_display = "—"
             else:
-                f1_display = f1_key
+                if '+' in f1_key:
+                    parts = f1_key.split('+')
+                    f1_display = '+'.join(p.upper() for p in parts)
+                else:
+                    f1_display = f1_key
 
-            if '+' in f3_key:
-                parts = f3_key.split('+')
-                f3_display = '+'.join(p.upper() for p in parts)
+            if not f3_key or f3_key == '':
+                f3_display = "—"
             else:
-                f3_display = f3_key
+                if '+' in f3_key:
+                    parts = f3_key.split('+')
+                    f3_display = '+'.join(p.upper() for p in parts)
+                else:
+                    f3_display = f3_key
 
             # Получаем локализованные описания
             f1_desc = self.get_string('hotkey_info_f1')
@@ -301,21 +307,21 @@ class MainWindow:
 
     def create_widgets(self):
         """Создает все виджеты главного окна - улучшенный интерфейс с разделением на секции"""
-        main = Frame(self.root, bg='#1a1a1a')
+        main = tk.Frame(self.root, bg='#1a1a1a')
         main.pack(expand=True, fill=tk.BOTH, padx=0, pady=0)
 
         # ============================================================
         # ВЕРХНЯЯ ПАНЕЛЬ (логотип + управление)
         # ============================================================
-        header_frame = Frame(main, bg='#1a1a1a', height=75)
+        header_frame = tk.Frame(main, bg='#1a1a1a', height=75)
         header_frame.pack(fill=tk.X, pady=(0, 0))
         header_frame.pack_propagate(False)
 
         # ЛЕВАЯ ЧАСТЬ: логотип и название
-        left_header = Frame(header_frame, bg='#1a1a1a')
+        left_header = tk.Frame(header_frame, bg='#1a1a1a')
         left_header.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(20, 0))
 
-        icon_label = Label(
+        icon_label = tk.Label(
             left_header,
             text="📸",
             bg='#1a1a1a',
@@ -324,7 +330,7 @@ class MainWindow:
         )
         icon_label.pack(side=tk.LEFT, padx=(0, 12))
 
-        self.title_label = Label(
+        self.title_label = tk.Label(
             left_header,
             text=self.get_string('app_title'),
             bg='#1a1a1a',
@@ -335,18 +341,18 @@ class MainWindow:
         self.title_label.pack(side=tk.LEFT)
 
         # ПРАВАЯ ЧАСТЬ: кнопки управления
-        right_header = Frame(header_frame, bg='#1a1a1a')
+        right_header = tk.Frame(header_frame, bg='#1a1a1a')
         right_header.pack(side=tk.RIGHT, padx=(0, 20))
 
         # ---- КНОПКА МИНИ-БАР ----
-        self.mini_bar_btn = Button(
+        self.mini_bar_btn = tk.Button(
             right_header,
             text="📌",
             command=self.app.toggle_mini_bar,
             font=("Segoe UI", 14),
             bg='#2d2d2d',
             fg='#888888',
-            relief=FLAT,
+            relief=tk.FLAT,
             width=3,
             padx=10,
             pady=8,
@@ -371,14 +377,14 @@ class MainWindow:
         current_lang_ui = self.settings.get_language()
         lang_text = "EN" if current_lang_ui == "ru" else "RU"
 
-        self.lang_btn = Button(
+        self.lang_btn = tk.Button(
             right_header,
             text=lang_text,
             command=self.app.toggle_language,
             font=("Segoe UI", 12, "bold"),
             bg='#2d2d2d',
             fg='#4CAF50',
-            relief=FLAT,
+            relief=tk.FLAT,
             width=3,
             padx=10,
             pady=8,
@@ -390,41 +396,41 @@ class MainWindow:
         self.lang_btn.pack(side=tk.LEFT, padx=(0, 10))
 
         def on_lang_enter(e):
-            if self.lang_btn['state'] != DISABLED:
+            if self.lang_btn['state'] != tk.DISABLED:
                 self.lang_btn.config(bg='#3c3c3c', fg='white')
 
         def on_lang_leave(e):
-            if self.lang_btn['state'] != DISABLED:
+            if self.lang_btn['state'] != tk.DISABLED:
                 self.lang_btn.config(bg='#2d2d2d', fg='#4CAF50')
 
         self.lang_btn.bind('<Enter>', on_lang_enter)
         self.lang_btn.bind('<Leave>', on_lang_leave)
 
         # ---- КНОПКА НАСТРОЕК ----
-        self.settings_btn = Button(
+        self.settings_btn = tk.Button(
             right_header,
             text="⚙️",
             command=self.app.open_settings,
             font=("Segoe UI", 14),
             bg='#2d2d2d',
             fg='#888888',
-            relief=FLAT,
+            relief=tk.FLAT,
             width=3,
             padx=10,
             pady=8,
             cursor="hand2",
-            state=DISABLED,
+            state=tk.DISABLED,
             borderwidth=0,
             highlightthickness=0
         )
         self.settings_btn.pack(side=tk.LEFT)
 
         def on_settings_enter(e):
-            if self.settings_btn['state'] != DISABLED:
+            if self.settings_btn['state'] != tk.DISABLED:
                 self.settings_btn.config(bg='#3c3c3c', fg='#4CAF50')
 
         def on_settings_leave(e):
-            if self.settings_btn['state'] != DISABLED:
+            if self.settings_btn['state'] != tk.DISABLED:
                 self.settings_btn.config(bg='#2d2d2d', fg='#888888')
             else:
                 self.settings_btn.config(bg='#2d2d2d', fg='#444444')
@@ -435,11 +441,11 @@ class MainWindow:
         # ============================================================
         # ПАНЕЛЬ С ГОРЯЧИМИ КЛАВИШАМИ (F1 и F3) - ИСПОЛЬЗУЕТ ЛОКАЛИЗАЦИЮ
         # ============================================================
-        hotkey_info_frame = Frame(main, bg='#1a1a1a', height=28)
+        hotkey_info_frame = tk.Frame(main, bg='#1a1a1a', height=28)
         hotkey_info_frame.pack(fill=tk.X, padx=20, pady=(2, 6))
         hotkey_info_frame.pack_propagate(False)
 
-        self.hotkey_info_label = Label(
+        self.hotkey_info_label = tk.Label(
             hotkey_info_frame,
             text="",
             bg='#1a1a1a',
@@ -452,17 +458,17 @@ class MainWindow:
         # ============================================================
         # РАЗДЕЛИТЕЛЬ
         # ============================================================
-        separator1 = Frame(main, bg='#2d2d2d', height=1)
+        separator1 = tk.Frame(main, bg='#2d2d2d', height=1)
         separator1.pack(fill=tk.X, padx=20)
 
         # ============================================================
         # СЕКЦИЯ НАСТРОЕК ПЕРЕВОДА (движок + целевой язык)
         # ============================================================
-        settings_section = Frame(main, bg='#1a1a1a')
+        settings_section = tk.Frame(main, bg='#1a1a1a')
         settings_section.pack(fill=tk.X, padx=20, pady=12)
 
-        # Заголовок секции
-        self.section_label = Label(
+        # Заголовок секции - СОХРАНЯЕМ ССЫЛКУ ДЛЯ ОБНОВЛЕНИЯ ЯЗЫКА
+        self.section_label = tk.Label(
             settings_section,
             text=self.get_string('translation_settings_header'),
             bg='#1a1a1a',
@@ -473,14 +479,14 @@ class MainWindow:
         self.section_label.pack(anchor=tk.W, pady=(0, 8))
 
         # Контейнер для двух строк настроек
-        settings_container = Frame(settings_section, bg='#1a1a1a')
+        settings_container = tk.Frame(settings_section, bg='#1a1a1a')
         settings_container.pack(fill=tk.X)
 
         # ---- Строка 1: Движок ----
-        engine_row = Frame(settings_container, bg='#1a1a1a')
+        engine_row = tk.Frame(settings_container, bg='#1a1a1a')
         engine_row.pack(fill=tk.X, pady=3)
 
-        self.engine_label = Label(
+        self.engine_label = tk.Label(
             engine_row,
             text=self.get_string('engine_label_short'),
             bg='#1a1a1a',
@@ -504,7 +510,7 @@ class MainWindow:
         self.engine_combo.bind('<<ComboboxSelected>>', self._on_engine_changed)
 
         # Подсказка для движка
-        self.engine_hint_label = Label(
+        self.engine_hint_label = tk.Label(
             engine_row,
             text=self.get_string('engine_hint'),
             bg='#1a1a1a',
@@ -515,10 +521,10 @@ class MainWindow:
         self.engine_hint_label.pack(side=tk.LEFT, padx=(10, 0))
 
         # ---- Строка 2: Целевой язык ----
-        lang_row = Frame(settings_container, bg='#1a1a1a')
+        lang_row = tk.Frame(settings_container, bg='#1a1a1a')
         lang_row.pack(fill=tk.X, pady=3)
 
-        self.lang_label = Label(
+        self.lang_label = tk.Label(
             lang_row,
             text=self.get_string('target_language_short'),
             bg='#1a1a1a',
@@ -546,7 +552,7 @@ class MainWindow:
         self.target_lang_combo_main.bind('<<ComboboxSelected>>', self._on_language_changed_main)
 
         # Подсказка для языка
-        self.lang_hint_label = Label(
+        self.lang_hint_label = tk.Label(
             lang_row,
             text=self.get_string('language_hint'),
             bg='#1a1a1a',
@@ -573,16 +579,16 @@ class MainWindow:
         # ============================================================
         # РАЗДЕЛИТЕЛЬ
         # ============================================================
-        separator2 = Frame(main, bg='#2d2d2d', height=1)
+        separator2 = tk.Frame(main, bg='#2d2d2d', height=1)
         separator2.pack(fill=tk.X, padx=20)
 
         # ============================================================
         # СЕКЦИЯ СТАТУСА
         # ============================================================
-        status_section = Frame(main, bg='#1a1a1a')
+        status_section = tk.Frame(main, bg='#1a1a1a')
         status_section.pack(fill=tk.X, padx=20, pady=(10, 5))
 
-        self.status = Label(
+        self.status = tk.Label(
             status_section,
             text="● " + self.get_string('starting'),
             fg='#ff9800',
@@ -595,20 +601,20 @@ class MainWindow:
         # ============================================================
         # РАЗДЕЛИТЕЛЬ
         # ============================================================
-        separator3 = Frame(main, bg='#2d2d2d', height=1)
+        separator3 = tk.Frame(main, bg='#2d2d2d', height=1)
         separator3.pack(fill=tk.X, padx=20)
 
         # ============================================================
         # СЕКЦИЯ СПИСКА ОКОН
         # ============================================================
-        windows_section = Frame(main, bg='#1a1a1a')
+        windows_section = tk.Frame(main, bg='#1a1a1a')
         windows_section.pack(fill=tk.BOTH, expand=True, padx=20, pady=(10, 12))
 
-        # Заголовок списка окон (локализованный)
-        windows_header = Frame(windows_section, bg='#1a1a1a')
+        # Заголовок списка окон (локализованный) - СОХРАНЯЕМ ССЫЛКУ
+        windows_header = tk.Frame(windows_section, bg='#1a1a1a')
         windows_header.pack(fill=tk.X, pady=(0, 6))
 
-        windows_icon = Label(
+        windows_icon = tk.Label(
             windows_header,
             text="🖥️",
             bg='#1a1a1a',
@@ -617,7 +623,7 @@ class MainWindow:
         )
         windows_icon.pack(side=tk.LEFT, padx=(0, 8))
 
-        self.windows_label = Label(
+        self.windows_label = tk.Label(
             windows_header,
             text=self.get_string('windows_header'),
             bg='#1a1a1a',
@@ -628,7 +634,7 @@ class MainWindow:
         self.windows_label.pack(side=tk.LEFT)
 
         # Счетчик окон (локализованный)
-        self.windows_count_label = Label(
+        self.windows_count_label = tk.Label(
             windows_header,
             text=self.get_string('windows_count').format(0),
             bg='#1a1a1a',
@@ -638,7 +644,7 @@ class MainWindow:
         self.windows_count_label.pack(side=tk.LEFT, padx=(8, 0))
 
         # Подсказка для списка окон (локализованная)
-        self.windows_hint_label = Label(
+        self.windows_hint_label = tk.Label(
             windows_header,
             text=self.get_string('windows_hint'),
             bg='#1a1a1a',
@@ -650,7 +656,7 @@ class MainWindow:
         # ============================================================
         # СПИСОК ОКОН
         # ============================================================
-        listbox_container = Frame(
+        listbox_container = tk.Frame(
             windows_section,
             bg='#2d2d2d',
             bd=1,
@@ -660,7 +666,7 @@ class MainWindow:
         )
         listbox_container.pack(fill=tk.BOTH, expand=True)
 
-        self.window_listbox = Listbox(
+        self.window_listbox = tk.Listbox(
             listbox_container,
             bg='#2d2d2d',
             fg='#cccccc',
@@ -668,7 +674,7 @@ class MainWindow:
             selectforeground='white',
             font=("Segoe UI", 10),
             height=10,
-            relief=FLAT,
+            relief=tk.FLAT,
             bd=0,
             highlightthickness=0,
             activestyle='none'
@@ -792,21 +798,21 @@ class MainWindow:
 
     def create_menu(self):
         """Создает главное меню"""
-        menubar = Menu(self.root, bg='#1e1e1e', fg='white', activebackground='#333333', activeforeground='white')
+        menubar = tk.Menu(self.root, bg='#1e1e1e', fg='white', activebackground='#333333', activeforeground='white')
         self.root.config(menu=menubar)
 
         # === МЕНЮ ФАЙЛ ===
-        file_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
-                         activeforeground='white')
+        file_menu = tk.Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
+                            activeforeground='white')
         menubar.add_cascade(label=self.get_string('menu_file'), menu=file_menu)
         file_menu.add_command(label=self.get_string('menu_open_folder'), command=self.app.open_app_folder)
         file_menu.add_separator()
         file_menu.add_command(label=self.get_string('menu_exit'), command=self.app.on_close)
 
         # === МЕНЮ ВИД (ЗАБЛОКИРОВАНО ДО ИНИЦИАЛИЗАЦИИ) ===
-        view_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
-                         activeforeground='white')
-        menubar.add_cascade(label=self.get_string('menu_view'), menu=view_menu, state=DISABLED)
+        view_menu = tk.Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
+                            activeforeground='white')
+        menubar.add_cascade(label=self.get_string('menu_view'), menu=view_menu, state=tk.DISABLED)
 
         if hasattr(self.app, '_mini_bar_window') and self.app._mini_bar_window:
             view_menu.add_command(
@@ -821,22 +827,22 @@ class MainWindow:
         self._view_menu = view_menu
 
         # === МЕНЮ НАСТРОЕК (ЗАБЛОКИРОВАНО ДО ИНИЦИАЛИЗАЦИИ) ===
-        settings_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
-                             activeforeground='white')
-        menubar.add_cascade(label=self.get_string('menu_settings'), menu=settings_menu, state=DISABLED)
+        settings_menu = tk.Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
+                                activeforeground='white')
+        menubar.add_cascade(label=self.get_string('menu_settings'), menu=settings_menu, state=tk.DISABLED)
         settings_menu.add_command(label=self.get_string('menu_settings_item'), command=self.app.open_settings)
         settings_menu.add_separator()
         settings_menu.add_command(label=self.get_string('menu_reset_settings'), command=self.app.reset_settings)
 
         # === МЕНЮ ГОРЯЧИХ КЛАВИШ (ЗАБЛОКИРОВАНО ДО ИНИЦИАЛИЗАЦИИ) ===
-        hotkeys_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
-                            activeforeground='white')
-        menubar.add_cascade(label=self.get_string('menu_hotkeys'), menu=hotkeys_menu, state=DISABLED)
+        hotkeys_menu = tk.Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
+                               activeforeground='white')
+        menubar.add_cascade(label=self.get_string('menu_hotkeys'), menu=hotkeys_menu, state=tk.DISABLED)
         hotkeys_menu.add_command(label=self.get_string('menu_hotkeys_show'), command=self.show_hotkeys_window)
 
         # === МЕНЮ ПОМОЩИ (ВСЕГДА ДОСТУПНО) ===
-        help_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
-                         activeforeground='white')
+        help_menu = tk.Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
+                            activeforeground='white')
         menubar.add_cascade(label=self.get_string('menu_help'), menu=help_menu)
         help_menu.add_command(label=self.get_string('menu_help_instruction'), command=self.app.show_help)
 
@@ -974,8 +980,13 @@ class MainWindow:
         if self.title_label:
             self.title_label.config(text=self.get_string('app_title'))
 
-        # 2. СЕКЦИЯ НАСТРОЕК ПЕРЕВОДА
-        self._update_section_headers()
+        # 2. СЕКЦИЯ НАСТРОЕК ПЕРЕВОДА - прямое обновление по ссылке
+        if hasattr(self, 'section_label') and self.section_label:
+            self.section_label.config(text=self.get_string('translation_settings_header'))
+
+        # 3. СЕКЦИЯ СПИСКА ОКОН - прямое обновление по ссылке
+        if hasattr(self, 'windows_label') and self.windows_label:
+            self.windows_label.config(text=self.get_string('windows_header'))
 
         # Обновляем лейблы "Движок:" и "Язык:"
         if hasattr(self, 'engine_label') and self.engine_label:
@@ -1003,8 +1014,6 @@ class MainWindow:
                 self._add_tooltip(self.mini_bar_btn, self.get_string('mini_bar_show_tooltip'))
 
         # 4. СЕКЦИЯ СПИСКА ОКОН
-        if hasattr(self, 'windows_label') and self.windows_label:
-            self.windows_label.config(text=self.get_string('windows_header'))
         if hasattr(self, 'windows_hint_label') and self.windows_hint_label:
             self.windows_hint_label.config(text=self.get_string('windows_hint'))
         if hasattr(self, 'window_listbox'):
@@ -1053,30 +1062,13 @@ class MainWindow:
         if is_ready:
             self.set_settings_menu_enabled(True)
 
-    def _update_section_headers(self):
-        """Обновляет заголовки секций"""
-        try:
-            # Ищем и обновляем все заголовки секций
-            for child in self.root.winfo_children():
-                for subchild in child.winfo_children():
-                    if isinstance(subchild, Label):
-                        current_text = subchild.cget('text')
-                        # Заголовок секции настроек
-                        if '⚙️ Настройки перевода' in current_text or '⚙️ Translation Settings' in current_text:
-                            subchild.config(text=self.get_string('translation_settings_header'))
-                        # Заголовок секции окон
-                        elif '🖥️ Окна с переводами' in current_text or '🖥️ Windows with translations' in current_text:
-                            subchild.config(text=self.get_string('windows_header'))
-        except Exception as e:
-            self.logger.warning(f"[UI] Ошибка обновления заголовков: {e}")
-
     def _update_hints(self):
         """Обновляет все подсказки"""
         try:
             # Ищем и обновляем все подсказки
             for child in self.root.winfo_children():
                 for subchild in child.winfo_children():
-                    if isinstance(subchild, Label):
+                    if isinstance(subchild, tk.Label):
                         current_text = subchild.cget('text')
                         # Подсказка для движка
                         if current_text in ['(выберите сервис перевода)', '(select translation service)']:
