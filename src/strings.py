@@ -5,6 +5,7 @@
 
 def get_russian_main_strings():
     return {
+        # === ОСНОВНЫЕ СТРОКИ ПРИЛОЖЕНИЯ ===
         'app_title': "Перевод скриншотов",
         'ready': "● Готов",
         'ready_notification': "✅ Переводчик готов",
@@ -23,31 +24,46 @@ def get_russian_main_strings():
         'edit_mode_on': "ВКЛЮЧЕН",
         'edit_mode_off': "ВЫКЛЮЧЕН",
         'windows_with_translations': "Окна с переводами",
-        # Строки для движков
+
+        # === СТРОКИ ДЛЯ ДВИЖКОВ ПЕРЕВОДА ===
         'engine_google': "Google Translate",
         'engine_yandex': "Яндекс.Переводчик (OCR)",
         'engine_switched': "✅ Переключено на {}",
         'engine_switch_error': "❌ Ошибка переключения: {}",
-        # Строки для главного окна - ВСЕ ЭЛЕМЕНТЫ
-        'engine_label_short': "Движок:",
-        'target_language_short': "Язык:",
+
+        # === СТРОКИ ДЛЯ ГЛАВНОГО ОКНА ===
+        # Заголовки секций
         'translation_settings_header': "⚙️ Настройки перевода",
-        'engine_hint': "(выберите сервис перевода)",
-        'language_hint': "(язык, на который переводить)",
         'windows_header': "🖥️ Окна с переводами",
-        'windows_hint': "— нажмите правой кнопкой для удаления",
-        'windows_count': "({})",
-        'footer_hotkeys': "⌨️ F2 — скриншот | F3 — область | F1 — скрыть/показать | F4 — очистить | F5 — редактирование | F6 — автозамена",
         'section_translation_settings': "Настройки перевода",
         'section_windows': "Окна с переводами",
-        # Строки для статуса (полная локализация)
+
+        # Лейблы и подсказки
+        'engine_label_short': "Движок:",
+        'target_language_short': "Язык:",
+        'engine_hint': "(выберите сервис перевода)",
+        'language_hint': "(язык, на который переводить)",
+        'windows_hint': "— нажмите правой кнопкой для удаления",
+        'windows_count': "({})",
+
+        # Подсказка по горячим клавишам в футере
+        'footer_hotkeys': "⌨️ F2 — скриншот | F3 — область | F1 — скрыть/показать | F4 — очистить | F5 — редактирование | F6 — автозамена",
+
+        # === СТРОКИ ДЛЯ КНОПКИ МИНИ-БАР ===
+        'mini_bar_toggle_tooltip': "Показать/скрыть мини-бар",
+        'mini_bar_show_tooltip': "Показать мини-бар",
+        'mini_bar_hide_tooltip': "Скрыть мини-бар",
+        'mini_bar_disabled_tooltip': "⏳ Доступно после инициализации",
+
+        # === СТРОКИ ДЛЯ СТАТУСА ===
         'status_ready': "Готов",
         'status_starting': "Запуск...",
         'status_starting_browser': "Запуск браузера...",
         'status_capturing': "Захват...",
         'status_translating': "Перевод...",
         'status_error': "Ошибка",
-        # Строки для уведомлений
+
+        # === СТРОКИ ДЛЯ УВЕДОМЛЕНИЙ ===
         'notification_settings_saved': "Настройки сохранены",
         'notification_language_changed': "🌐 Язык перевода: {}",
         'notification_engine_changed': "🔄 Движок переключён на {}",
@@ -56,6 +72,7 @@ def get_russian_main_strings():
 
 def get_english_main_strings():
     return {
+        # === MAIN APPLICATION STRINGS ===
         'app_title': "Screen Translator",
         'ready': "● Ready",
         'ready_notification': "✅ Translator Ready",
@@ -74,31 +91,46 @@ def get_english_main_strings():
         'edit_mode_on': "ON",
         'edit_mode_off': "OFF",
         'windows_with_translations': "Windows with translations",
-        # Added strings for engines
+
+        # === TRANSLATION ENGINE STRINGS ===
         'engine_google': "Google Translate",
         'engine_yandex': "Yandex.Translator (OCR)",
         'engine_switched': "✅ Switched to {}",
         'engine_switch_error': "❌ Switch error: {}",
-        # Added strings for main window - ALL ELEMENTS
-        'engine_label_short': "Engine:",
-        'target_language_short': "Language:",
+
+        # === MAIN WINDOW STRINGS ===
+        # Section headers
         'translation_settings_header': "⚙️ Translation Settings",
-        'engine_hint': "(select translation service)",
-        'language_hint': "(target translation language)",
         'windows_header': "🖥️ Windows with translations",
-        'windows_hint': "— right-click to remove",
-        'windows_count': "({})",
-        'footer_hotkeys': "⌨️ F2 — screenshot | F3 — area | F1 — show/hide | F4 — clear | F5 — edit mode | F6 — auto-replace",
         'section_translation_settings': "Translation Settings",
         'section_windows': "Windows with translations",
-        # Status strings (full localization)
+
+        # Labels and hints
+        'engine_label_short': "Engine:",
+        'target_language_short': "Language:",
+        'engine_hint': "(select translation service)",
+        'language_hint': "(target translation language)",
+        'windows_hint': "— right-click to remove",
+        'windows_count': "({})",
+
+        # Footer hotkeys hint
+        'footer_hotkeys': "⌨️ F2 — screenshot | F3 — area | F1 — show/hide | F4 — clear | F5 — edit mode | F6 — auto-replace",
+
+        # === MINI-BAR BUTTON STRINGS ===
+        'mini_bar_toggle_tooltip': "Show/Hide mini-bar",
+        'mini_bar_show_tooltip': "Show mini-bar",
+        'mini_bar_hide_tooltip': "Hide mini-bar",
+        'mini_bar_disabled_tooltip': "⏳ Available after initialization",
+
+        # === STATUS STRINGS ===
         'status_ready': "Ready",
         'status_starting': "Starting...",
         'status_starting_browser': "Starting browser...",
         'status_capturing': "Capturing...",
         'status_translating': "Translating...",
         'status_error': "Error",
-        # Notification strings
+
+        # === NOTIFICATION STRINGS ===
         'notification_settings_saved': "Settings saved",
         'notification_language_changed': "🌐 Translation language: {}",
         'notification_engine_changed': "🔄 Engine switched to {}",

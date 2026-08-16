@@ -68,9 +68,118 @@ class MainWindow:
         self.root.lift()
         self.root.focus_force()
 
-    # ============================================================
-    # НОВЫЙ МЕТОД: блокировка/разблокировка комбобокса языка
-    # ============================================================
+    def _add_tooltip(self, widget, text):
+        """Добавляет всплывающую подсказку при наведении на виджет."""
+
+        def enter(event):
+            if hasattr(widget, '_tooltip') and widget._tooltip:
+                try:
+                    widget._tooltip.destroy()
+                except:
+                    pass
+                widget._tooltip = None
+
+            tooltip = tk.Toplevel(widget)
+            tooltip.wm_overrideredirect(True)
+            tooltip.attributes('-topmost', True)
+
+            x = event.x_root + 10
+            y = event.y_root + 20
+            screen_width = tooltip.winfo_screenwidth()
+            screen_height = tooltip.winfo_screenheight()
+
+            label = tk.Label(
+                tooltip,
+                text=text,
+                bg='#2d2d2d',
+                fg='white',
+                font=('Segoe UI', 10),
+                relief=tk.SOLID,
+                borderwidth=1,
+                padx=10,
+                pady=6,
+                wraplength=300,
+                justify='left'
+            )
+            label.pack()
+            tooltip.update_idletasks()
+
+            tw = tooltip.winfo_width()
+            th = tooltip.winfo_height()
+            if x + tw > screen_width:
+                x = screen_width - tw - 10
+            if y + th > screen_height:
+                y = screen_height - th - 10
+            tooltip.wm_geometry(f"+{x}+{y}")
+            widget._tooltip = tooltip
+
+        def leave(event):
+            if hasattr(widget, '_tooltip') and widget._tooltip:
+                try:
+                    widget._tooltip.destroy()
+                except:
+                    pass
+                widget._tooltip = None
+
+        widget.bind('<Enter>', enter)
+        widget.bind('<Leave>', leave)
+
+    def update_mini_bar_button(self):
+        """
+        Обновляет состояние кнопки мини-бара в зависимости от того,
+        открыт ли мини-бар или скрыт, и готова ли инициализация.
+        """
+        if not hasattr(self, 'mini_bar_btn'):
+            return
+
+        # Проверяем, готова ли инициализация
+        is_ready = False
+        if hasattr(self.app, 'ready') and self.app.ready:
+            is_ready = True
+
+        try:
+            if not is_ready:
+                # Приложение не готово - кнопка заблокирована, подсказки нет
+                self.mini_bar_btn.config(
+                    state=tk.DISABLED,
+                    text="📌",
+                    fg='#444444',
+                    bg='#2d2d2d'
+                )
+                # Удаляем подсказку, если она есть
+                if hasattr(self.mini_bar_btn, '_tooltip') and self.mini_bar_btn._tooltip:
+                    try:
+                        self.mini_bar_btn._tooltip.destroy()
+                    except:
+                        pass
+                    self.mini_bar_btn._tooltip = None
+                self.logger.debug("[MINI_BAR] Кнопка заблокирована (инициализация не завершена), подсказка убрана")
+                return
+
+            # Приложение готово - кнопка активна
+            if hasattr(self.app, '_mini_bar_window') and self.app._mini_bar_window:
+                # Мини-бар открыт
+                self.mini_bar_btn.config(
+                    state=tk.NORMAL,
+                    text="📌",
+                    fg='#4CAF50',
+                    bg='#2d2d2d'
+                )
+                self._add_tooltip(self.mini_bar_btn, self.get_string('mini_bar_hide_tooltip'))
+                self.logger.debug("[MINI_BAR] Кнопка обновлена: мини-бар открыт")
+            else:
+                # Мини-бар скрыт
+                self.mini_bar_btn.config(
+                    state=tk.NORMAL,
+                    text="📌",
+                    fg='#888888',
+                    bg='#2d2d2d'
+                )
+                self._add_tooltip(self.mini_bar_btn, self.get_string('mini_bar_show_tooltip'))
+                self.logger.debug("[MINI_BAR] Кнопка обновлена: мини-бар скрыт")
+        except Exception as e:
+            self.logger.warning(f"[MINI_BAR] Ошибка обновления кнопки: {e}")
+
     def set_language_combo_enabled(self, enabled: bool):
         """
         Устанавливает доступность комбобокса выбора целевого языка.
@@ -185,11 +294,40 @@ class MainWindow:
         )
         self.title_label.pack(side=tk.LEFT)
 
-        # ПРАВАЯ ЧАСТЬ: кнопки управления (язык интерфейса и настройки)
+        # ПРАВАЯ ЧАСТЬ: кнопки управления
         right_header = Frame(header_frame, bg='#1a1a1a')
         right_header.pack(side=tk.RIGHT, padx=(0, 20))
 
-        # Кнопка смены языка интерфейса
+        # ---- КНОПКА МИНИ-БАР ----
+        self.mini_bar_btn = Button(
+            right_header,
+            text="📌",
+            command=self.app.toggle_mini_bar,
+            font=("Segoe UI", 14),
+            bg='#2d2d2d',
+            fg='#888888',
+            relief=FLAT,
+            width=3,
+            padx=10,
+            pady=8,
+            cursor="hand2",
+            state=tk.NORMAL,
+            borderwidth=0,
+            highlightthickness=0
+        )
+        self.mini_bar_btn.pack(side=tk.LEFT, padx=(0, 10))
+
+        def on_mini_bar_enter(e):
+            self.mini_bar_btn.config(bg='#3c3c3c', fg='#4CAF50')
+
+        def on_mini_bar_leave(e):
+            self.mini_bar_btn.config(bg='#2d2d2d', fg='#888888')
+
+        self.mini_bar_btn.bind('<Enter>', on_mini_bar_enter)
+        self.mini_bar_btn.bind('<Leave>', on_mini_bar_leave)
+        self._add_tooltip(self.mini_bar_btn, self.get_string('mini_bar_toggle_tooltip'))
+
+        # ---- КНОПКА СМЕНЫ ЯЗЫКА ИНТЕРФЕЙСА ----
         current_lang_ui = self.settings.get_language()
         lang_text = "EN" if current_lang_ui == "ru" else "RU"
 
@@ -222,7 +360,7 @@ class MainWindow:
         self.lang_btn.bind('<Enter>', on_lang_enter)
         self.lang_btn.bind('<Leave>', on_lang_leave)
 
-        # Кнопка настроек
+        # ---- КНОПКА НАСТРОЕК ----
         self.settings_btn = Button(
             right_header,
             text="⚙️",
@@ -266,8 +404,8 @@ class MainWindow:
         settings_section = Frame(main, bg='#1a1a1a')
         settings_section.pack(fill=tk.X, padx=20, pady=12)
 
-        # Заголовок секции (локализованный)
-        section_label = Label(
+        # Заголовок секции - ИСПОЛЬЗУЕМ ЛОКАЛИЗОВАННУЮ СТРОКУ
+        self.section_label = Label(
             settings_section,
             text=self.get_string('translation_settings_header'),
             bg='#1a1a1a',
@@ -275,7 +413,7 @@ class MainWindow:
             font=("Segoe UI", 11, "bold"),
             anchor='w'
         )
-        section_label.pack(anchor=tk.W, pady=(0, 8))
+        self.section_label.pack(anchor=tk.W, pady=(0, 8))
 
         # Контейнер для двух строк настроек
         settings_container = Frame(settings_section, bg='#1a1a1a')
@@ -308,7 +446,7 @@ class MainWindow:
         self.engine_combo.pack(side=tk.LEFT)
         self.engine_combo.bind('<<ComboboxSelected>>', self._on_engine_changed)
 
-        # Подсказка для движка (локализованная)
+        # Подсказка для движка
         self.engine_hint_label = Label(
             engine_row,
             text=self.get_string('engine_hint'),
@@ -350,7 +488,7 @@ class MainWindow:
         self.target_lang_combo_main.pack(side=tk.LEFT)
         self.target_lang_combo_main.bind('<<ComboboxSelected>>', self._on_language_changed_main)
 
-        # Подсказка для языка (локализованная)
+        # Подсказка для языка
         self.lang_hint_label = Label(
             lang_row,
             text=self.get_string('language_hint'),
@@ -453,7 +591,7 @@ class MainWindow:
         self.windows_hint_label.pack(side=tk.LEFT, padx=(10, 0))
 
         # ============================================================
-        # СПИСОК ОКОН (с красивой рамкой)
+        # СПИСОК ОКОН
         # ============================================================
         listbox_container = Frame(
             windows_section,
@@ -481,7 +619,7 @@ class MainWindow:
         self.window_listbox.pack(fill=tk.BOTH, expand=True, padx=3, pady=3)
 
         # ============================================================
-        # НИЖНЯЯ ПАНЕЛЬ С ПОДСКАЗКОЙ ПО ХОТКЕЯМ (локализованная)
+        # НИЖНЯЯ ПАНЕЛЬ С ПОДСКАЗКОЙ ПО ХОТКЕЯМ
         # ============================================================
         footer_frame = Frame(main, bg='#1a1a1a')
         footer_frame.pack(fill=tk.X, padx=20, pady=(0, 8))
@@ -621,7 +759,7 @@ class MainWindow:
         file_menu.add_separator()
         file_menu.add_command(label=self.get_string('menu_exit'), command=self.app.on_close)
 
-        # === МЕНЮ ВИД ===
+        # === МЕНЮ ВИД (ЗАБЛОКИРОВАНО ДО ИНИЦИАЛИЗАЦИИ) ===
         view_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
                          activeforeground='white')
         menubar.add_cascade(label=self.get_string('menu_view'), menu=view_menu, state=DISABLED)
@@ -638,7 +776,7 @@ class MainWindow:
             )
         self._view_menu = view_menu
 
-        # === МЕНЮ НАСТРОЕК ===
+        # === МЕНЮ НАСТРОЕК (ЗАБЛОКИРОВАНО ДО ИНИЦИАЛИЗАЦИИ) ===
         settings_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
                              activeforeground='white')
         menubar.add_cascade(label=self.get_string('menu_settings'), menu=settings_menu, state=DISABLED)
@@ -646,19 +784,21 @@ class MainWindow:
         settings_menu.add_separator()
         settings_menu.add_command(label=self.get_string('menu_reset_settings'), command=self.app.reset_settings)
 
-        # === МЕНЮ ГОРЯЧИХ КЛАВИШ ===
+        # === МЕНЮ ГОРЯЧИХ КЛАВИШ (ЗАБЛОКИРОВАНО ДО ИНИЦИАЛИЗАЦИИ) ===
         hotkeys_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
                             activeforeground='white')
         menubar.add_cascade(label=self.get_string('menu_hotkeys'), menu=hotkeys_menu, state=DISABLED)
         hotkeys_menu.add_command(label=self.get_string('menu_hotkeys_show'), command=self.show_hotkeys_window)
 
-        # === МЕНЮ ПОМОЩИ ===
+        # === МЕНЮ ПОМОЩИ (ВСЕГДА ДОСТУПНО) ===
         help_menu = Menu(menubar, tearoff=0, bg='#1e1e1e', fg='white', activebackground='#333333',
                          activeforeground='white')
         menubar.add_cascade(label=self.get_string('menu_help'), menu=help_menu)
         help_menu.add_command(label=self.get_string('menu_help_instruction'), command=self.app.show_help)
 
         self._menubar = menubar
+
+        self.logger.info("[MENU] Меню создано, пункты 'Настройки', 'Хоткеи', 'Вид' заблокированы")
 
     def _on_window_configure(self, event):
         """
@@ -791,7 +931,6 @@ class MainWindow:
             self.title_label.config(text=self.get_string('app_title'))
 
         # 2. СЕКЦИЯ НАСТРОЕК ПЕРЕВОДА
-        # Обновляем заголовок секции
         self._update_section_headers()
 
         # Обновляем лейблы "Движок:" и "Язык:"
@@ -812,21 +951,23 @@ class MainWindow:
             else:
                 self.engine_var.set(self.get_string('engine_yandex'))
 
-        # 3. СЕКЦИЯ СПИСКА ОКОН
-        # Обновляем заголовок
+        # 3. КНОПКА МИНИ-БАР (обновляем подсказку)
+        if hasattr(self, 'mini_bar_btn') and self.mini_bar_btn:
+            if hasattr(self.app, '_mini_bar_window') and self.app._mini_bar_window:
+                self._add_tooltip(self.mini_bar_btn, self.get_string('mini_bar_hide_tooltip'))
+            else:
+                self._add_tooltip(self.mini_bar_btn, self.get_string('mini_bar_show_tooltip'))
+
+        # 4. СЕКЦИЯ СПИСКА ОКОН
         if hasattr(self, 'windows_label') and self.windows_label:
             self.windows_label.config(text=self.get_string('windows_header'))
-
-        # Обновляем подсказку для списка окон
         if hasattr(self, 'windows_hint_label') and self.windows_hint_label:
             self.windows_hint_label.config(text=self.get_string('windows_hint'))
-
-        # Обновляем счетчик окон
         if hasattr(self, 'window_listbox'):
             count = self.window_listbox.size()
             self.update_windows_count(count)
 
-        # 4. СТАТУС
+        # 5. СТАТУС
         if self.status and hasattr(self.app, 'ready'):
             if not self.app.ready:
                 if hasattr(self.app, 'initializing') and self.app.initializing:
@@ -849,17 +990,17 @@ class MainWindow:
                     fg='#4CAF50'
                 )
 
-        # 5. ФУТЕР С ХОТКЕЯМИ
+        # 6. ФУТЕР С ХОТКЕЯМИ
         if hasattr(self, 'footer_label') and self.footer_label:
             self.footer_label.config(text=self.get_string('footer_hotkeys'))
 
-        # 6. КНОПКА СМЕНЫ ЯЗЫКА ИНТЕРФЕЙСА
+        # 7. КНОПКА СМЕНЫ ЯЗЫКА ИНТЕРФЕЙСА
         current_lang = self.settings.get_language()
         if self.lang_btn:
             lang_text = "EN" if current_lang == "ru" else "RU"
             self.lang_btn.config(text=lang_text)
 
-        # 7. МЕНЮ
+        # 8. МЕНЮ
         is_ready = False
         if hasattr(self.app, 'ready') and self.app.ready:
             is_ready = True
@@ -1015,18 +1156,42 @@ class MainWindow:
             self.logger.warning("[STATUS_UI] self.status отсутствует!")
 
     def set_settings_menu_enabled(self, enabled):
-        """Блокирует/разблокирует меню настроек, хоткеев и вид."""
+        """
+        Блокирует/разблокирует меню настроек, хоткеев, вид и кнопку мини-бар.
+
+        Args:
+            enabled: True - разблокировать, False - заблокировать
+        """
         try:
             state = tk.NORMAL if enabled else DISABLED
 
-            # Блокируем/разблокируем кнопку шестеренку
+            # === БЛОКИРУЕМ/РАЗБЛОКИРУЕМ КНОПКУ ШЕСТЕРЕНКУ ===
             if hasattr(self, 'settings_btn'):
                 if enabled:
                     self.settings_btn.config(state=tk.NORMAL, bg='#3c3c3c', fg='#cccccc')
                 else:
                     self.settings_btn.config(state=tk.DISABLED, bg='#2d2d2d', fg='#444444')
 
-            # Блокируем/разблокируем меню
+            # === БЛОКИРУЕМ/РАЗБЛОКИРУЕМ КНОПКУ МИНИ-БАР ===
+            if hasattr(self, 'mini_bar_btn'):
+                if enabled:
+                    self.mini_bar_btn.config(state=tk.NORMAL, bg='#2d2d2d', fg='#888888')
+                    # Восстанавливаем нормальную подсказку
+                    if hasattr(self.app, '_mini_bar_window') and self.app._mini_bar_window:
+                        self._add_tooltip(self.mini_bar_btn, self.get_string('mini_bar_hide_tooltip'))
+                    else:
+                        self._add_tooltip(self.mini_bar_btn, self.get_string('mini_bar_show_tooltip'))
+                else:
+                    # Кнопка заблокирована - просто убираем подсказку через удаление tooltip
+                    self.mini_bar_btn.config(state=tk.DISABLED, bg='#2d2d2d', fg='#444444')
+                    if hasattr(self.mini_bar_btn, '_tooltip') and self.mini_bar_btn._tooltip:
+                        try:
+                            self.mini_bar_btn._tooltip.destroy()
+                        except:
+                            pass
+                        self.mini_bar_btn._tooltip = None
+
+            # === БЛОКИРУЕМ/РАЗБЛОКИРУЕМ МЕНЮ ===
             if hasattr(self, '_menubar') and self._menubar:
                 for index in range(self._menubar.index('end') + 1):
                     try:
@@ -1039,6 +1204,8 @@ class MainWindow:
                             self._menubar.entryconfig(index, state=state)
                     except:
                         pass
+
+            self.logger.info(f"[UI] Меню и кнопки {'разблокированы' if enabled else 'заблокированы'}")
         except Exception as e:
             self.logger.warning(f"[MENU] Ошибка при блокировке меню: {e}")
 

@@ -69,6 +69,91 @@ class MiniBarWindow:
 
         self.logger.info("[MINI_BAR] Мини-бар-оверлей создан")
 
+    def update_language(self):
+        """
+        Обновляет все текстовые элементы мини-бара при смене языка.
+        Вызывается из app.py при переключении языка.
+        """
+        try:
+            if not self.window or not self.window.winfo_exists():
+                return
+
+            logger = logging.getLogger(__name__)
+            logger.info("[MINI_BAR] Обновление языка в мини-баре...")
+
+            # 1. Обновляем заголовок в области перетаскивания
+            if hasattr(self, 'drag_label') and self.drag_label:
+                new_text = self.app.get_string('mini_bar_drag_label') if hasattr(self.app,
+                                                                                 'get_string') else "⠿ Мини-бар"
+                self.drag_label.config(text=new_text)
+                logger.info(f"[MINI_BAR] Заголовок обновлён: {new_text}")
+
+            # 2. Обновляем подсказку для кнопки закрытия
+            if hasattr(self, 'close_btn') and self.close_btn:
+                close_tooltip = self.app.get_string('mini_bar_close') if hasattr(self.app,
+                                                                                 'get_string') else "Закрыть мини-бар (ESC)"
+                self._add_tooltip(self.close_btn, close_tooltip)
+
+            # 3. Обновляем подсказки для всех кнопок
+            # Получаем актуальные горячие клавиши из настроек
+            hotkeys = self.app.settings.get_all_hotkeys() if hasattr(self.app, 'settings') else {}
+            logger.info(f"[MINI_BAR] Текущие хоткеи: {hotkeys}")
+
+            # Список всех кнопок с их ключами
+            button_keys = ['f1', 'f2', 'f3', 'f3_hold', 'f4', 'f5', 'f6']
+            button_attrs = ['btn_f1', 'btn_f2', 'btn_f3', 'btn_f3_hold', 'btn_f4', 'btn_f5', 'btn_f6']
+
+            for key, attr in zip(button_keys, button_attrs):
+                if hasattr(self, attr):
+                    btn = getattr(self, attr)
+                    if btn:
+                        # Получаем горячую клавишу для этого действия
+                        hotkey = hotkeys.get(key, '')
+
+                        # Форматируем отображение клавиши
+                        if hotkey:
+                            hotkey_display = hotkey.upper()
+                            if '+' in hotkey:
+                                parts = hotkey.split('+')
+                                hotkey_display = '+'.join(p.upper() for p in parts)
+                        else:
+                            # Если хоткей не задан, используем значение по умолчанию
+                            default_hotkeys = {
+                                'f1': 'F1',
+                                'f2': 'F2',
+                                'f3': 'F3',
+                                'f3_hold': 'F3 (held)',
+                                'f4': 'F4',
+                                'f5': 'F5',
+                                'f6': 'F6'
+                            }
+                            hotkey_display = default_hotkeys.get(key, '?')
+                            logger.warning(f"[MINI_BAR] Хоткей для {key} не найден, используем: {hotkey_display}")
+
+                        # Получаем локализованную строку для подсказки
+                        template_key = f'mini_bar_tooltip_{key}'
+                        if hasattr(self.app, 'get_string'):
+                            template = self.app.get_string(template_key)
+                        else:
+                            template = None
+
+                        if template:
+                            new_tooltip = template.format(hotkey=hotkey_display)
+                        else:
+                            # Fallback, если строка не найдена
+                            new_tooltip = f"{key} ({hotkey_display})"
+
+                        self._add_tooltip(btn, new_tooltip)
+                        logger.info(f"[MINI_BAR] Подсказка для {key} обновлена: {new_tooltip}")
+
+            logger.info("[MINI_BAR] Обновление языка в мини-баре завершено")
+
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.warning(f"[MINI_BAR] Ошибка обновления языка: {e}")
+            import traceback
+            traceback.print_exc()
+
     def _start_topmost_timer(self):
         """Запускает периодический таймер для поддержания topmost."""
         self._topmost_timer_running = True
@@ -275,13 +360,13 @@ class MiniBarWindow:
         self.drag_area = tk.Frame(
             self.main_frame,
             bg='#2a2a2a',
-            height=26,  # чуть выше
+            height=26,
             cursor='fleur'
         )
         self.drag_area.pack(fill=tk.X, side=tk.TOP, padx=0, pady=0)
         self.drag_area.pack_propagate(False)
 
-        # Заголовок в области перетаскивания
+        # Заголовок в области перетаскивания - СОХРАНЯЕМ ССЫЛКУ
         drag_text = self.app.get_string('mini_bar_drag_label') if hasattr(self.app, 'get_string') else "⠿ Мини-бар"
         self.drag_label = tk.Label(
             self.drag_area,
@@ -323,31 +408,50 @@ class MiniBarWindow:
         # Получаем текущие горячие клавиши
         hotkeys = self.app.settings.get_all_hotkeys() if hasattr(self.app, 'settings') else {}
 
-        def format_tooltip(key, default_hotkey):
-            hotkey = hotkeys.get(key, default_hotkey)
-            hotkey_display = hotkey.upper() if hotkey else "?"
-            if '+' in hotkey:
-                parts = hotkey.split('+')
-                hotkey_display = '+'.join(p.upper() for p in parts)
+        # Значения по умолчанию для хоткеев (если не заданы)
+        default_hotkeys = {
+            'f1': 'F1',
+            'f2': 'F2',
+            'f3': 'F3',
+            'f3_hold': 'F3 (held)',
+            'f4': 'F4',
+            'f5': 'F5',
+            'f6': 'F6'
+        }
+
+        def format_hotkey_display(key):
+            """Форматирует отображение горячей клавиши."""
+            hotkey = hotkeys.get(key, '')
+            if hotkey:
+                hotkey_display = hotkey.upper()
+                if '+' in hotkey:
+                    parts = hotkey.split('+')
+                    hotkey_display = '+'.join(p.upper() for p in parts)
+                return hotkey_display
+            return default_hotkeys.get(key, '?')
+
+        def format_tooltip(key):
+            """Форматирует подсказку для кнопки."""
+            hotkey_display = format_hotkey_display(key)
             template = self.app.get_string(f'mini_bar_tooltip_{key}') if hasattr(self.app, 'get_string') else None
             if template:
                 return template.format(hotkey=hotkey_display)
             return f"{key} ({hotkey_display})"
 
-        tooltip_f1 = format_tooltip('f1', 'F1')
-        tooltip_f2 = format_tooltip('f2', 'F2')
-        tooltip_f3 = format_tooltip('f3', 'F3')
-        tooltip_f3_hold = format_tooltip('f3_hold', 'F3 (held)')
-        tooltip_f4 = format_tooltip('f4', 'F4')
-        tooltip_f5 = format_tooltip('f5', 'F5')
-        tooltip_f6 = format_tooltip('f6', 'F6')
+        tooltip_f1 = format_tooltip('f1')
+        tooltip_f2 = format_tooltip('f2')
+        tooltip_f3 = format_tooltip('f3')
+        tooltip_f3_hold = format_tooltip('f3_hold')
+        tooltip_f4 = format_tooltip('f4')
+        tooltip_f5 = format_tooltip('f5')
+        tooltip_f6 = format_tooltip('f6')
 
         # ============================================================
-        # СОЗДАЁМ ИЗОБРАЖЕНИЯ ЭМОДЗИ (УВЕЛИЧЕННЫЙ РАЗМЕР)
+        # СОЗДАЁМ ИЗОБРАЖЕНИЯ ЭМОДЗИ
         # ============================================================
         self._emoji_images = []
 
-        emoji_size = 26  # <-- УВЕЛИЧЕНО С 22 ДО 26
+        emoji_size = 26
         emoji_f1 = self.create_emoji_image('👁️', emoji_size)
         emoji_f2 = self.create_emoji_image('📸', emoji_size)
         emoji_f3 = self.create_emoji_image('✂️', emoji_size)
@@ -358,7 +462,7 @@ class MiniBarWindow:
 
         self._emoji_images.extend([emoji_f1, emoji_f2, emoji_f3, emoji_f3_hold, emoji_f4, emoji_f5, emoji_f6])
 
-        # Стиль кнопок — УВЕЛИЧЕННЫЙ РАЗМЕР
+        # Стиль кнопок
         btn_style = {
             'bg': '#2d2d2d',
             'fg': 'white',
@@ -367,8 +471,8 @@ class MiniBarWindow:
             'bd': 0,
             'activebackground': '#4CAF50',
             'activeforeground': 'white',
-            'width': 44,  # <-- УВЕЛИЧЕНО С 36 ДО 44
-            'height': 34,  # <-- УВЕЛИЧЕНО С 30 ДО 34
+            'width': 44,
+            'height': 34,
             'compound': 'center',
         }
 
@@ -443,16 +547,15 @@ class MiniBarWindow:
         self._add_tooltip(self.btn_f6, tooltip_f6)
 
         # ============================================================
-        # ДОБАВЛЯЕМ ОТСТУП ПОСЛЕ ПОСЛЕДНЕЙ КНОПКИ
+        # ОТСТУП ПОСЛЕ ПОСЛЕДНЕЙ КНОПКИ
         # ============================================================
-        # Создаём пустой Label для отступа справа
         padding_label = tk.Label(
             self.btn_frame,
             text=" ",
             bg='#1e1e1e',
             width=1
         )
-        padding_label.pack(side=tk.RIGHT, padx=4)  # <-- ОТСТУП СПРАВА
+        padding_label.pack(side=tk.RIGHT, padx=4)
 
         # Обновляем окно для пересчёта размера
         self.window.update_idletasks()
@@ -469,15 +572,15 @@ class MiniBarWindow:
         """Добавляет всплывающую подсказку при наведении на виджет.
         Тултип появляется фиксированно под мини-баром, не зависит от позиции мыши.
         """
+        # Удаляем старую подсказку, если она есть
+        if hasattr(widget, '_tooltip') and widget._tooltip:
+            try:
+                widget._tooltip.destroy()
+            except:
+                pass
+            widget._tooltip = None
 
         def enter(event):
-            if hasattr(widget, '_tooltip') and widget._tooltip:
-                try:
-                    widget._tooltip.destroy()
-                except:
-                    pass
-                widget._tooltip = None
-
             # Получаем позицию мини-бара
             try:
                 window_x = self.window.winfo_x()
@@ -512,13 +615,10 @@ class MiniBarWindow:
             tw = tooltip.winfo_width()
             th = tooltip.winfo_height()
 
-            # ============================================================
-            # ФИКСИРОВАННАЯ ПОЗИЦИЯ: всегда под мини-баром по центру
-            # ============================================================
+            # Позиционируем под мини-баром по центру
             screen_width = tooltip.winfo_screenwidth()
             screen_height = tooltip.winfo_screenheight()
 
-            # Позиционируем под мини-баром по центру
             x = window_x + (window_width - tw) // 2
             y = window_y + 80  # Под мини-баром
 
@@ -561,6 +661,9 @@ class MiniBarWindow:
             pass
         if hasattr(self.app, '_mini_bar_window'):
             self.app._mini_bar_window = None
+
+        # Очищаем ссылки на кнопки
+        self._tooltip_buttons = {}
 
     def lift(self):
         """Поднимает окно наверх."""

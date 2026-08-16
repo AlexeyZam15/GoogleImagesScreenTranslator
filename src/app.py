@@ -1100,8 +1100,12 @@ class ScreenshotTranslatorApp:
                 traceback.print_exc()
 
         # ============================================================
-        # ОБНОВЛЯЕМ ТОЛЬКО ПУНКТ МЕНЮ "ВИД", БЕЗ ПЕРЕСОЗДАНИЯ ВСЕГО МЕНЮ
+        # ОБНОВЛЯЕМ СОСТОЯНИЕ КНОПКИ МИНИ-БАР В ГЛАВНОМ ОКНЕ
         # ============================================================
+        if hasattr(self, 'ui') and hasattr(self.ui, 'update_mini_bar_button'):
+            self.ui.update_mini_bar_button()
+
+        # ОБНОВЛЯЕМ ТОЛЬКО ПУНКТ МЕНЮ "ВИД"
         if hasattr(self, 'ui') and hasattr(self.ui, 'update_view_menu'):
             self.ui.update_view_menu()
 
@@ -2778,19 +2782,29 @@ class ScreenshotTranslatorApp:
                 self.logger.error(f"[STATE] Ошибка восстановления оверлеев: {e}")
 
         # ============================================================
-        # РАЗБЛОКИРУЕМ КОМБОБОКСЫ ВЫБОРА ДВИЖКА И ЯЗЫКА
+        # РАЗБЛОКИРУЕМ ВСЕ ЭЛЕМЕНТЫ ИНТЕРФЕЙСА
         # ============================================================
+
+        # 1. КОМБОБОКСЫ ВЫБОРА ДВИЖКА И ЯЗЫКА
         if hasattr(self.ui, 'set_engine_combo_enabled'):
             self.ui.set_engine_combo_enabled(True)
             self.logger.info("[APP] Комбобоксы выбора движка и языка разблокированы")
 
+        # 2. КНОПКА НАСТРОЕК
         if hasattr(self.ui, 'settings_btn'):
             self.ui.settings_btn.config(state=tk.NORMAL, bg='#3c3c3c', fg='#cccccc')
             self.logger.info("[APP] Кнопка настроек разблокирована")
 
-        self.ui.set_settings_menu_enabled(True)
+        # 3. КНОПКА МИНИ-БАР
+        if hasattr(self.ui, 'update_mini_bar_button'):
+            self.ui.update_mini_bar_button()
+            self.logger.info("[APP] Кнопка мини-бар разблокирована и обновлена")
 
-        # ТОЛЬКО СТАТУС ГОТОВНОСТИ БРАУЗЕРА
+        # 4. МЕНЮ (НАСТРОЙКИ, ХОТКЕИ, ВИД)
+        self.ui.set_settings_menu_enabled(True)
+        self.logger.info("[APP] Меню настроек, хоткеев и вид разблокированы")
+
+        # 5. СТАТУС
         ready_text = self.ui.get_string('ready')
         self.ui.update_status(f"● {ready_text} ({engine_name}, {self._last_target_lang.upper()})", '#4CAF50')
         self.logger.info("[STATUS] Статус обновлён на Готов")
@@ -3610,12 +3624,29 @@ class ScreenshotTranslatorApp:
             messagebox.showinfo(self.ui.get_string('settings_title'), self.ui.get_string('settings_reset_done'))
 
     def toggle_language(self):
+        """Переключает язык интерфейса"""
         current = self.settings.get_language()
         new = "en" if current == "ru" else "ru"
         self.settings.set_language(new)
+
+        # Обновляем интерфейс главного окна
         self.ui.update_ui_language()
+
+        # Обновляем кнопку языка
         if hasattr(self.ui, 'lang_btn'):
             self.ui.lang_btn.config(text="EN" if new == "ru" else "RU")
+
+        # ============================================================
+        # ОБНОВЛЯЕМ МИНИ-БАР, ЕСЛИ ОН ОТКРЫТ
+        # ============================================================
+        if hasattr(self, '_mini_bar_window') and self._mini_bar_window:
+            try:
+                self._mini_bar_window.update_language()
+                self.logger.info("[APP] Язык мини-бара обновлён")
+            except Exception as e:
+                self.logger.warning(f"[APP] Ошибка обновления языка мини-бара: {e}")
+
+        self.logger.info(f"[APP] Язык интерфейса переключён на {new}")
 
     def open_app_folder(self):
         try:
