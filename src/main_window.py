@@ -42,20 +42,13 @@ class MainWindow:
         self.root = tk.Tk()
         self.root.title(self.get_string('app_title'))
         self.root.withdraw()
-        self.root.geometry("720x500")
-        self.root.minsize(500, 380)
-        self.root.maxsize(900, 700)
+        self.root.geometry("820x520")
+        self.root.minsize(600, 420)
+        self.root.maxsize(1000, 750)
         self.root.resizable(True, True)
         self.root.configure(bg='#1e1e1e')
 
-        # ============================================================
-        # ДОБАВЛЯЕМ ПРИВЯЗКУ ЗАКРЫТИЯ ОКНА
-        # ============================================================
         self.root.protocol("WM_DELETE_WINDOW", self.app.on_close)
-
-        # ============================================================
-        # ДОБАВЛЯЕМ ОБРАБОТЧИК ИЗМЕНЕНИЯ РАЗМЕРА ОКНА
-        # ============================================================
         self.root.bind('<Configure>', self._on_window_configure)
 
         self._setup_icon()
@@ -65,25 +58,448 @@ class MainWindow:
         self.update_ui_language()
         self._center_window()
 
-        # ============================================================
-        # ИНИЦИАЛИЗИРУЕМ СЛОВАРИ ДЛЯ WINDOW_LIST_MANAGER
-        # ============================================================
         self._window_hwnd_map = {}
         self._window_app_map = {}
 
-        # ============================================================
-        # ОТКЛЮЧАЕМ СТАНДАРТНУЮ ОБРАБОТКУ F1 (СПРАВКА) В TKINTER
-        # ============================================================
         self.root.bind('<F1>', lambda e: 'break')
-
-        # ============================================================
-        # БЛОКИРУЕМ МЕНЮ ДО ИНИЦИАЛИЗАЦИИ
-        # ============================================================
         self.set_settings_menu_enabled(False)
 
         self.root.deiconify()
         self.root.lift()
         self.root.focus_force()
+
+    # ============================================================
+    # НОВЫЙ МЕТОД: блокировка/разблокировка комбобокса языка
+    # ============================================================
+    def set_language_combo_enabled(self, enabled: bool):
+        """
+        Устанавливает доступность комбобокса выбора целевого языка.
+        """
+        state = tk.NORMAL if enabled else DISABLED
+        if hasattr(self, 'target_lang_combo_main') and self.target_lang_combo_main:
+            try:
+                self.target_lang_combo_main.config(state=state)
+                self.logger.info(f"[UI] Комбобокс языка {'разблокирован' if enabled else 'заблокирован'}")
+            except Exception as e:
+                self.logger.warning(f"[UI] Ошибка блокировки комбобокса языка: {e}")
+
+    def set_engine_combo_enabled(self, enabled: bool):
+        """
+        Устанавливает доступность комбобокса выбора движка.
+        Также блокирует/разблокирует комбобокс языка.
+        """
+        state = tk.NORMAL if enabled else DISABLED
+        if self.engine_combo:
+            self.engine_combo.config(state=state)
+            self.logger.info(f"[UI] Комбобокс движка {'разблокирован' if enabled else 'заблокирован'}")
+
+        # Одновременно блокируем/разблокируем комбобокс языка
+        self.set_language_combo_enabled(enabled)
+
+    def _on_language_changed_main(self, event):
+        """
+        Обработчик выбора целевого языка в главном окне.
+        """
+        selected = self.target_lang_var.get()
+        if not selected:
+            return
+
+        # Извлекаем код языка из строки вида "Russian (ru)"
+        if "(" in selected and ")" in selected:
+            lang_code = selected.split("(")[-1].replace(")", "").strip()
+        else:
+            # Fallback: пробуем найти по названию
+            for code, name in LANGUAGES.items():
+                if name.lower() in selected.lower():
+                    lang_code = code
+                    break
+            else:
+                return
+
+        current_lang = self.settings.get_target_language()
+        if current_lang != lang_code:
+            self.logger.info(f"[UI] Смена целевого языка в главном окне: {current_lang} -> {lang_code}")
+            self.settings.set_target_language(lang_code)
+
+            # Обновляем язык в браузере, если он готов
+            if hasattr(self.app, 'ready') and self.app.ready:
+                if hasattr(self.app, 'browser_worker') and self.app.browser_worker:
+                    self.app.browser_worker.update_language(lang_code)
+
+                # Обновляем статус
+                engine = self.settings.get_translator_engine()
+                engine_name = "Google Translate" if engine == "google" else "Яндекс.Переводчик (OCR)"
+                ready_text = self.get_string('ready')
+                self.update_status(
+                    f"● {ready_text} ({engine_name}, {lang_code.upper()})",
+                    '#4CAF50'
+                )
+
+                self.app.show_notification(f"🌐 Язык перевода: {lang_code.upper()}")
+
+    def update_language_display(self, lang_code: str):
+        """
+        Обновляет отображение выбранного языка в комбобоксе.
+        """
+        if not hasattr(self, 'target_lang_combo_main') or not self.target_lang_combo_main:
+            return
+
+        for item in self._lang_display_names:
+            if f"({lang_code})" in item:
+                self.target_lang_var.set(item)
+                self.logger.info(f"[UI] Обновлён язык в комбобоксе: {lang_code}")
+                return
+
+    def create_widgets(self):
+        """Создает все виджеты главного окна - улучшенный интерфейс с разделением на секции"""
+        main = Frame(self.root, bg='#1a1a1a')
+        main.pack(expand=True, fill=tk.BOTH, padx=0, pady=0)
+
+        # ============================================================
+        # ВЕРХНЯЯ ПАНЕЛЬ (логотип + управление)
+        # ============================================================
+        header_frame = Frame(main, bg='#1a1a1a', height=75)
+        header_frame.pack(fill=tk.X, pady=(0, 0))
+        header_frame.pack_propagate(False)
+
+        # ЛЕВАЯ ЧАСТЬ: логотип и название
+        left_header = Frame(header_frame, bg='#1a1a1a')
+        left_header.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(20, 0))
+
+        icon_label = Label(
+            left_header,
+            text="📸",
+            bg='#1a1a1a',
+            fg='#4CAF50',
+            font=("Segoe UI", 30)
+        )
+        icon_label.pack(side=tk.LEFT, padx=(0, 12))
+
+        self.title_label = Label(
+            left_header,
+            text=self.get_string('app_title'),
+            bg='#1a1a1a',
+            fg='#4CAF50',
+            font=("Segoe UI", 20, "bold"),
+            anchor='w'
+        )
+        self.title_label.pack(side=tk.LEFT)
+
+        # ПРАВАЯ ЧАСТЬ: кнопки управления (язык интерфейса и настройки)
+        right_header = Frame(header_frame, bg='#1a1a1a')
+        right_header.pack(side=tk.RIGHT, padx=(0, 20))
+
+        # Кнопка смены языка интерфейса
+        current_lang_ui = self.settings.get_language()
+        lang_text = "EN" if current_lang_ui == "ru" else "RU"
+
+        self.lang_btn = Button(
+            right_header,
+            text=lang_text,
+            command=self.app.toggle_language,
+            font=("Segoe UI", 12, "bold"),
+            bg='#2d2d2d',
+            fg='#4CAF50',
+            relief=FLAT,
+            width=3,
+            padx=10,
+            pady=8,
+            cursor="hand2",
+            state=tk.NORMAL,
+            borderwidth=0,
+            highlightthickness=0
+        )
+        self.lang_btn.pack(side=tk.LEFT, padx=(0, 10))
+
+        def on_lang_enter(e):
+            if self.lang_btn['state'] != DISABLED:
+                self.lang_btn.config(bg='#3c3c3c', fg='white')
+
+        def on_lang_leave(e):
+            if self.lang_btn['state'] != DISABLED:
+                self.lang_btn.config(bg='#2d2d2d', fg='#4CAF50')
+
+        self.lang_btn.bind('<Enter>', on_lang_enter)
+        self.lang_btn.bind('<Leave>', on_lang_leave)
+
+        # Кнопка настроек
+        self.settings_btn = Button(
+            right_header,
+            text="⚙️",
+            command=self.app.open_settings,
+            font=("Segoe UI", 14),
+            bg='#2d2d2d',
+            fg='#888888',
+            relief=FLAT,
+            width=3,
+            padx=10,
+            pady=8,
+            cursor="hand2",
+            state=DISABLED,
+            borderwidth=0,
+            highlightthickness=0
+        )
+        self.settings_btn.pack(side=tk.LEFT)
+
+        def on_settings_enter(e):
+            if self.settings_btn['state'] != DISABLED:
+                self.settings_btn.config(bg='#3c3c3c', fg='#4CAF50')
+
+        def on_settings_leave(e):
+            if self.settings_btn['state'] != DISABLED:
+                self.settings_btn.config(bg='#2d2d2d', fg='#888888')
+            else:
+                self.settings_btn.config(bg='#2d2d2d', fg='#444444')
+
+        self.settings_btn.bind('<Enter>', on_settings_enter)
+        self.settings_btn.bind('<Leave>', on_settings_leave)
+
+        # ============================================================
+        # РАЗДЕЛИТЕЛЬ
+        # ============================================================
+        separator1 = Frame(main, bg='#2d2d2d', height=1)
+        separator1.pack(fill=tk.X, padx=20)
+
+        # ============================================================
+        # СЕКЦИЯ НАСТРОЕК ПЕРЕВОДА (движок + целевой язык)
+        # ============================================================
+        settings_section = Frame(main, bg='#1a1a1a')
+        settings_section.pack(fill=tk.X, padx=20, pady=12)
+
+        # Заголовок секции (локализованный)
+        section_label = Label(
+            settings_section,
+            text=self.get_string('translation_settings_header'),
+            bg='#1a1a1a',
+            fg='#cccccc',
+            font=("Segoe UI", 11, "bold"),
+            anchor='w'
+        )
+        section_label.pack(anchor=tk.W, pady=(0, 8))
+
+        # Контейнер для двух строк настроек
+        settings_container = Frame(settings_section, bg='#1a1a1a')
+        settings_container.pack(fill=tk.X)
+
+        # ---- Строка 1: Движок ----
+        engine_row = Frame(settings_container, bg='#1a1a1a')
+        engine_row.pack(fill=tk.X, pady=3)
+
+        self.engine_label = Label(
+            engine_row,
+            text=self.get_string('engine_label_short'),
+            bg='#1a1a1a',
+            fg='#aaaaaa',
+            font=("Segoe UI", 10),
+            width=10,
+            anchor='e'
+        )
+        self.engine_label.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.engine_var = tk.StringVar(value="Google Translate")
+        self.engine_combo = ttk.Combobox(
+            engine_row,
+            textvariable=self.engine_var,
+            values=[self.get_string('engine_google'), self.get_string('engine_yandex')],
+            state='disabled',
+            font=("Segoe UI", 10),
+            width=28
+        )
+        self.engine_combo.pack(side=tk.LEFT)
+        self.engine_combo.bind('<<ComboboxSelected>>', self._on_engine_changed)
+
+        # Подсказка для движка (локализованная)
+        self.engine_hint_label = Label(
+            engine_row,
+            text=self.get_string('engine_hint'),
+            bg='#1a1a1a',
+            fg='#666666',
+            font=("Segoe UI", 9),
+            anchor='w'
+        )
+        self.engine_hint_label.pack(side=tk.LEFT, padx=(10, 0))
+
+        # ---- Строка 2: Целевой язык ----
+        lang_row = Frame(settings_container, bg='#1a1a1a')
+        lang_row.pack(fill=tk.X, pady=3)
+
+        self.lang_label = Label(
+            lang_row,
+            text=self.get_string('target_language_short'),
+            bg='#1a1a1a',
+            fg='#aaaaaa',
+            font=("Segoe UI", 10),
+            width=10,
+            anchor='e'
+        )
+        self.lang_label.pack(side=tk.LEFT, padx=(0, 10))
+
+        # Формируем список языков для отображения
+        self._lang_display_names = [f"{name} ({code})" for code, name in LANGUAGES.items()]
+        self._lang_display_names.sort()
+
+        self.target_lang_var = tk.StringVar()
+        self.target_lang_combo_main = ttk.Combobox(
+            lang_row,
+            textvariable=self.target_lang_var,
+            values=self._lang_display_names,
+            state='disabled',
+            font=("Segoe UI", 10),
+            width=28
+        )
+        self.target_lang_combo_main.pack(side=tk.LEFT)
+        self.target_lang_combo_main.bind('<<ComboboxSelected>>', self._on_language_changed_main)
+
+        # Подсказка для языка (локализованная)
+        self.lang_hint_label = Label(
+            lang_row,
+            text=self.get_string('language_hint'),
+            bg='#1a1a1a',
+            fg='#666666',
+            font=("Segoe UI", 9),
+            anchor='w'
+        )
+        self.lang_hint_label.pack(side=tk.LEFT, padx=(10, 0))
+
+        # Устанавливаем текущий язык
+        current_lang = self.settings.get_target_language()
+        for item in self._lang_display_names:
+            if f"({current_lang})" in item:
+                self.target_lang_var.set(item)
+                break
+
+        # Устанавливаем текущий движок
+        current_engine = self.settings.get_translator_engine()
+        if current_engine == "google":
+            self.engine_var.set(self.get_string('engine_google'))
+        else:
+            self.engine_var.set(self.get_string('engine_yandex'))
+
+        # ============================================================
+        # РАЗДЕЛИТЕЛЬ
+        # ============================================================
+        separator2 = Frame(main, bg='#2d2d2d', height=1)
+        separator2.pack(fill=tk.X, padx=20)
+
+        # ============================================================
+        # СЕКЦИЯ СТАТУСА
+        # ============================================================
+        status_section = Frame(main, bg='#1a1a1a')
+        status_section.pack(fill=tk.X, padx=20, pady=(10, 5))
+
+        self.status = Label(
+            status_section,
+            text="● " + self.get_string('starting'),
+            fg='#ff9800',
+            bg='#1a1a1a',
+            font=("Segoe UI", 11),
+            height=1
+        )
+        self.status.pack(anchor=tk.W)
+
+        # ============================================================
+        # РАЗДЕЛИТЕЛЬ
+        # ============================================================
+        separator3 = Frame(main, bg='#2d2d2d', height=1)
+        separator3.pack(fill=tk.X, padx=20)
+
+        # ============================================================
+        # СЕКЦИЯ СПИСКА ОКОН
+        # ============================================================
+        windows_section = Frame(main, bg='#1a1a1a')
+        windows_section.pack(fill=tk.BOTH, expand=True, padx=20, pady=(10, 12))
+
+        # Заголовок списка окон (локализованный)
+        windows_header = Frame(windows_section, bg='#1a1a1a')
+        windows_header.pack(fill=tk.X, pady=(0, 6))
+
+        windows_icon = Label(
+            windows_header,
+            text="🖥️",
+            bg='#1a1a1a',
+            fg='#4CAF50',
+            font=("Segoe UI", 14)
+        )
+        windows_icon.pack(side=tk.LEFT, padx=(0, 8))
+
+        self.windows_label = Label(
+            windows_header,
+            text=self.get_string('windows_header'),
+            bg='#1a1a1a',
+            fg='#cccccc',
+            font=("Segoe UI", 11, "bold"),
+            anchor='w'
+        )
+        self.windows_label.pack(side=tk.LEFT)
+
+        # Счетчик окон (локализованный)
+        self.windows_count_label = Label(
+            windows_header,
+            text=self.get_string('windows_count').format(0),
+            bg='#1a1a1a',
+            fg='#666666',
+            font=("Segoe UI", 10)
+        )
+        self.windows_count_label.pack(side=tk.LEFT, padx=(8, 0))
+
+        # Подсказка для списка окон (локализованная)
+        self.windows_hint_label = Label(
+            windows_header,
+            text=self.get_string('windows_hint'),
+            bg='#1a1a1a',
+            fg='#666666',
+            font=("Segoe UI", 9)
+        )
+        self.windows_hint_label.pack(side=tk.LEFT, padx=(10, 0))
+
+        # ============================================================
+        # СПИСОК ОКОН (с красивой рамкой)
+        # ============================================================
+        listbox_container = Frame(
+            windows_section,
+            bg='#2d2d2d',
+            bd=1,
+            relief=tk.SOLID,
+            highlightbackground='#3c3c3c',
+            highlightthickness=1
+        )
+        listbox_container.pack(fill=tk.BOTH, expand=True)
+
+        self.window_listbox = Listbox(
+            listbox_container,
+            bg='#2d2d2d',
+            fg='#cccccc',
+            selectbackground='#4CAF50',
+            selectforeground='white',
+            font=("Segoe UI", 10),
+            height=10,
+            relief=FLAT,
+            bd=0,
+            highlightthickness=0,
+            activestyle='none'
+        )
+        self.window_listbox.pack(fill=tk.BOTH, expand=True, padx=3, pady=3)
+
+        # ============================================================
+        # НИЖНЯЯ ПАНЕЛЬ С ПОДСКАЗКОЙ ПО ХОТКЕЯМ (локализованная)
+        # ============================================================
+        footer_frame = Frame(main, bg='#1a1a1a')
+        footer_frame.pack(fill=tk.X, padx=20, pady=(0, 8))
+
+        self.footer_label = Label(
+            footer_frame,
+            text=self.get_string('footer_hotkeys'),
+            bg='#1a1a1a',
+            fg='#555555',
+            font=("Segoe UI", 9),
+            anchor='center'
+        )
+        self.footer_label.pack(fill=tk.X)
+
+    def update_windows_count(self, count):
+        """Обновляет счетчик окон с переводами"""
+        if hasattr(self, 'windows_count_label'):
+            self.windows_count_label.config(text=self.get_string('windows_count').format(count))
 
     def update_view_menu(self):
         """Обновляет только пункт меню 'Вид' без пересоздания всего меню."""
@@ -331,178 +747,6 @@ class MainWindow:
         finally:
             self.context_menu.grab_release()
 
-    def create_widgets(self):
-        """Создает все виджеты главного окна - упрощенный интерфейс"""
-        main = Frame(self.root, bg='#1a1a1a')
-        main.pack(expand=True, fill=tk.BOTH, padx=0, pady=0)
-
-        header_frame = Frame(main, bg='#1a1a1a', height=70)
-        header_frame.pack(fill=tk.X, pady=(0, 0))
-        header_frame.pack_propagate(False)
-
-        left_header = Frame(header_frame, bg='#1a1a1a')
-        left_header.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(20, 0))
-
-        icon_label = Label(
-            left_header,
-            text="📸",
-            bg='#1a1a1a',
-            fg='#4CAF50',
-            font=("Segoe UI", 28)
-        )
-        icon_label.pack(side=tk.LEFT, padx=(0, 12))
-
-        self.title_label = Label(
-            left_header,
-            text=self.get_string('app_title'),
-            bg='#1a1a1a',
-            fg='#4CAF50',
-            font=("Segoe UI", 18, "bold"),
-            anchor='w'
-        )
-        self.title_label.pack(side=tk.LEFT)
-
-        right_header = Frame(header_frame, bg='#1a1a1a')
-        right_header.pack(side=tk.RIGHT, padx=(0, 20))
-
-        # ============================================================
-        # КОМБОБОКС ВЫБОРА ДВИЖКА (ДОСТУПЕН ТОЛЬКО ПОСЛЕ ИНИЦИАЛИЗАЦИИ)
-        # ============================================================
-        engine_frame = Frame(right_header, bg='#1a1a1a')
-        engine_frame.pack(side=tk.RIGHT, padx=(0, 10))
-
-        self.engine_var = tk.StringVar(value="Google Translate")
-        self.engine_combo = ttk.Combobox(
-            engine_frame,
-            textvariable=self.engine_var,
-            values=[self.get_string('engine_google'), self.get_string('engine_yandex')],
-            state='disabled',  # <-- ИЗНАЧАЛЬНО ЗАБЛОКИРОВАН
-            font=("Segoe UI", 9),
-            width=18
-        )
-        self.engine_combo.pack(side=tk.RIGHT, padx=(0, 5))
-        self.engine_combo.bind('<<ComboboxSelected>>', self._on_engine_changed)
-
-        # Устанавливаем текущий движок
-        current_engine = self.settings.get_translator_engine()
-        if current_engine == "google":
-            self.engine_var.set(self.get_string('engine_google'))
-        else:
-            self.engine_var.set(self.get_string('engine_yandex'))
-
-        current_lang = self.settings.get_language()
-        lang_text = "EN" if current_lang == "ru" else "RU"
-
-        self.lang_btn = Button(
-            right_header,
-            text=lang_text,
-            command=self.app.toggle_language,
-            font=("Segoe UI", 12, "bold"),
-            bg='#2d2d2d',
-            fg='#4CAF50',
-            relief=FLAT,
-            width=3,
-            padx=8,
-            pady=6,
-            cursor="hand2",
-            state=tk.NORMAL,
-            borderwidth=0,
-            highlightthickness=0
-        )
-        self.lang_btn.pack(side=tk.RIGHT, padx=(0, 10))
-
-        def on_lang_enter(e):
-            if self.lang_btn['state'] != DISABLED:
-                self.lang_btn.config(bg='#3c3c3c', fg='white')
-
-        def on_lang_leave(e):
-            if self.lang_btn['state'] != DISABLED:
-                self.lang_btn.config(bg='#2d2d2d', fg='#4CAF50')
-
-        self.lang_btn.bind('<Enter>', on_lang_enter)
-        self.lang_btn.bind('<Leave>', on_lang_leave)
-
-        self.settings_btn = Button(
-            right_header,
-            text="⚙️",
-            command=self.app.open_settings,
-            font=("Segoe UI", 12),
-            bg='#2d2d2d',
-            fg='#888888',
-            relief=FLAT,
-            width=3,
-            padx=8,
-            pady=6,
-            cursor="hand2",
-            state=DISABLED,
-            borderwidth=0,
-            highlightthickness=0
-        )
-        self.settings_btn.pack(side=tk.RIGHT, padx=(0, 0))
-
-        def on_settings_enter(e):
-            if self.settings_btn['state'] != DISABLED:
-                self.settings_btn.config(bg='#3c3c3c', fg='#4CAF50')
-
-        def on_settings_leave(e):
-            if self.settings_btn['state'] != DISABLED:
-                self.settings_btn.config(bg='#2d2d2d', fg='#888888')
-            else:
-                self.settings_btn.config(bg='#2d2d2d', fg='#444444')
-
-        self.settings_btn.bind('<Enter>', on_settings_enter)
-        self.settings_btn.bind('<Leave>', on_settings_leave)
-
-        separator = Frame(main, bg='#2d2d2d', height=1)
-        separator.pack(fill=tk.X, padx=20)
-
-        content_frame = Frame(main, bg='#1a1a1a')
-        content_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=12)
-
-        status_frame = Frame(content_frame, bg='#1a1a1a')
-        status_frame.pack(fill=tk.X, pady=(0, 10))
-
-        self.status = Label(
-            status_frame,
-            text="● " + self.get_string('starting'),
-            fg='#ff9800',
-            bg='#1a1a1a',
-            font=("Segoe UI", 11),
-            height=1
-        )
-        self.status.pack(anchor=tk.W)
-
-        windows_header = Frame(content_frame, bg='#1a1a1a')
-        windows_header.pack(fill=tk.X, pady=(5, 5))
-
-        self.windows_label = Label(
-            windows_header,
-            text=self.get_string('windows_with_translations'),
-            bg='#1a1a1a',
-            fg='#aaaaaa',
-            font=("Segoe UI", 10),
-            anchor='w'
-        )
-        self.windows_label.pack(side=tk.LEFT)
-
-        listbox_frame = Frame(content_frame, bg='#2d2d2d', bd=1, relief=tk.SOLID, highlightbackground='#3c3c3c',
-                              highlightthickness=1)
-        listbox_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 0))
-
-        self.window_listbox = Listbox(
-            listbox_frame,
-            bg='#2d2d2d',
-            fg='#cccccc',
-            selectbackground='#4CAF50',
-            selectforeground='white',
-            font=("Segoe UI", 10),
-            height=12,
-            relief=FLAT,
-            bd=0,
-            highlightthickness=0
-        )
-        self.window_listbox.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
-
     def _on_engine_changed(self, event):
         """Обработчик выбора движка в комбобоксе"""
         selected = self.engine_var.get()
@@ -528,38 +772,62 @@ class MainWindow:
             self.engine_var.set(self.get_string('engine_yandex'))
         self.logger.info(f"[UI] Обновлён движок в комбобоксе: {engine}")
 
-    def set_engine_combo_enabled(self, enabled: bool):
-        """
-        Устанавливает доступность комбобокса выбора движка.
-        Вызывается после инициализации браузера.
-        """
-        state = tk.NORMAL if enabled else DISABLED
-        if self.engine_combo:
-            self.engine_combo.config(state=state)
-            self.logger.info(f"[UI] Комбобокс движка {'разблокирован' if enabled else 'заблокирован'}")
-
-    def update_ui_language(self):
-        """Обновляет язык интерфейса"""
-        self.root.title(self.get_string('app_title'))
-        if self.title_label:
-            self.title_label.config(text=self.get_string('app_title'))
-        if self.windows_label:
-            self.windows_label.config(text=self.get_string('windows_with_translations'))
-
-        # Обновляем состояние кнопки редактирования
-        if hasattr(self, 'edit_mode_btn'):
-            is_enabled = getattr(self.app, '_edit_mode_enabled', False)
-            status_text = "ВКЛ" if is_enabled else "ВЫКЛ"
-            self.edit_mode_btn.config(
-                text=f"✏️ Редактирование: {status_text}",
-                bg='#4CAF50' if is_enabled else '#3c3c3c'
+        # Также обновляем статус, если приложение готово
+        if hasattr(self.app, 'ready') and self.app.ready:
+            target_lang = self.settings.get_target_language()
+            engine_name = "Google Translate" if engine == "google" else "Яндекс.Переводчик (OCR)"
+            ready_text = self.get_string('ready')
+            self.update_status(
+                f"● {ready_text} ({engine_name}, {target_lang.upper()})",
+                '#4CAF50'
             )
 
-        # Обновляем статус
-        if self.status and hasattr(self.app, 'ready'):
-            current_text = self.status.cget('text')
-            current_color = self.status.cget('fg')
+    def update_ui_language(self):
+        """Обновляет язык интерфейса - все элементы"""
+        self.root.title(self.get_string('app_title'))
 
+        # 1. ЗАГОЛОВОК ОКНА
+        if self.title_label:
+            self.title_label.config(text=self.get_string('app_title'))
+
+        # 2. СЕКЦИЯ НАСТРОЕК ПЕРЕВОДА
+        # Обновляем заголовок секции
+        self._update_section_headers()
+
+        # Обновляем лейблы "Движок:" и "Язык:"
+        if hasattr(self, 'engine_label') and self.engine_label:
+            self.engine_label.config(text=self.get_string('engine_label_short'))
+        if hasattr(self, 'lang_label') and self.lang_label:
+            self.lang_label.config(text=self.get_string('target_language_short'))
+
+        # Обновляем подсказки
+        self._update_hints()
+
+        # Обновляем значения комбобокса движка
+        if hasattr(self, 'engine_combo') and self.engine_combo:
+            current_engine = self.settings.get_translator_engine()
+            self.engine_combo['values'] = [self.get_string('engine_google'), self.get_string('engine_yandex')]
+            if current_engine == "google":
+                self.engine_var.set(self.get_string('engine_google'))
+            else:
+                self.engine_var.set(self.get_string('engine_yandex'))
+
+        # 3. СЕКЦИЯ СПИСКА ОКОН
+        # Обновляем заголовок
+        if hasattr(self, 'windows_label') and self.windows_label:
+            self.windows_label.config(text=self.get_string('windows_header'))
+
+        # Обновляем подсказку для списка окон
+        if hasattr(self, 'windows_hint_label') and self.windows_hint_label:
+            self.windows_hint_label.config(text=self.get_string('windows_hint'))
+
+        # Обновляем счетчик окон
+        if hasattr(self, 'window_listbox'):
+            count = self.window_listbox.size()
+            self.update_windows_count(count)
+
+        # 4. СТАТУС
+        if self.status and hasattr(self.app, 'ready'):
             if not self.app.ready:
                 if hasattr(self.app, 'initializing') and self.app.initializing:
                     self.status.config(
@@ -574,32 +842,98 @@ class MainWindow:
             else:
                 engine = self.app.settings.get_translator_engine()
                 engine_name = "Google Translate" if engine == "google" else "Яндекс.Переводчик (OCR)"
+                target_lang = self.app.settings.get_target_language()
                 ready_text = self.get_string('ready')
                 self.status.config(
-                    text=f"● {ready_text} ({engine_name})",
+                    text=f"● {ready_text} ({engine_name}, {target_lang.upper()})",
                     fg='#4CAF50'
                 )
 
-        # Сохраняем состояние готовности приложения
-        is_ready = False
-        if hasattr(self.app, 'ready') and self.app.ready:
-            is_ready = True
+        # 5. ФУТЕР С ХОТКЕЯМИ
+        if hasattr(self, 'footer_label') and self.footer_label:
+            self.footer_label.config(text=self.get_string('footer_hotkeys'))
 
-        # Пересоздаем меню для обновления текста
-        self.create_menu()
-
-        if is_ready:
-            self.set_settings_menu_enabled(True)
-
+        # 6. КНОПКА СМЕНЫ ЯЗЫКА ИНТЕРФЕЙСА
         current_lang = self.settings.get_language()
         if self.lang_btn:
             lang_text = "EN" if current_lang == "ru" else "RU"
             self.lang_btn.config(text=lang_text)
 
-    def update_windows_count(self, count):
-        """Обновляет счетчик окон с переводами"""
-        if hasattr(self, 'windows_count_label'):
-            self.windows_count_label.config(text=f"({count})")
+        # 7. МЕНЮ
+        is_ready = False
+        if hasattr(self.app, 'ready') and self.app.ready:
+            is_ready = True
+
+        self.create_menu()
+
+        if is_ready:
+            self.set_settings_menu_enabled(True)
+
+    def _update_section_headers(self):
+        """Обновляет заголовки секций"""
+        try:
+            # Ищем и обновляем все заголовки секций
+            for child in self.root.winfo_children():
+                for subchild in child.winfo_children():
+                    if isinstance(subchild, Label):
+                        current_text = subchild.cget('text')
+                        # Заголовок секции настроек
+                        if '⚙️ Настройки перевода' in current_text or '⚙️ Translation Settings' in current_text:
+                            subchild.config(text=self.get_string('translation_settings_header'))
+                        # Заголовок секции окон
+                        elif '🖥️ Окна с переводами' in current_text or '🖥️ Windows with translations' in current_text:
+                            subchild.config(text=self.get_string('windows_header'))
+        except Exception as e:
+            self.logger.warning(f"[UI] Ошибка обновления заголовков: {e}")
+
+    def _update_hints(self):
+        """Обновляет все подсказки"""
+        try:
+            # Ищем и обновляем все подсказки
+            for child in self.root.winfo_children():
+                for subchild in child.winfo_children():
+                    if isinstance(subchild, Label):
+                        current_text = subchild.cget('text')
+                        # Подсказка для движка
+                        if current_text in ['(выберите сервис перевода)', '(select translation service)']:
+                            subchild.config(text=self.get_string('engine_hint'))
+                        # Подсказка для языка
+                        elif current_text in ['(язык, на который переводить)', '(target translation language)']:
+                            subchild.config(text=self.get_string('language_hint'))
+                        # Подсказка для списка окон
+                        elif current_text in ['— нажмите правой кнопкой для удаления', '— right-click to remove']:
+                            subchild.config(text=self.get_string('windows_hint'))
+        except Exception as e:
+            self.logger.warning(f"[UI] Ошибка обновления подсказок: {e}")
+
+    def _update_section_labels(self):
+        """Обновляет лейблы в секции настроек"""
+        try:
+            for child in self.root.winfo_children():
+                for subchild in child.winfo_children():
+                    if isinstance(subchild, Frame):
+                        # Ищем лейблы "Движок:" и "Язык:"
+                        for grandchild in subchild.winfo_children():
+                            if isinstance(grandchild, Label):
+                                current_text = grandchild.cget('text')
+                                if current_text in ['Движок:', 'Engine:']:
+                                    grandchild.config(text=self.get_string('engine_label_short'))
+                                elif current_text in ['Язык:', 'Language:']:
+                                    grandchild.config(text=self.get_string('target_language_short'))
+        except Exception as e:
+            self.logger.warning(f"[UI] Ошибка обновления лейблов: {e}")
+
+    def _update_footer(self):
+        """Обновляет футер с подсказкой по хоткеям"""
+        try:
+            for child in self.root.winfo_children():
+                for subchild in child.winfo_children():
+                    if isinstance(subchild, Label):
+                        current_text = subchild.cget('text')
+                        if 'F2 — скриншот' in current_text or 'F2 — screenshot' in current_text:
+                            subchild.config(text=self.get_string('footer_hotkeys'))
+        except Exception as e:
+            self.logger.warning(f"[UI] Ошибка обновления футера: {e}")
 
     def _setup_icon(self):
         """Устанавливает иконку приложения"""

@@ -227,6 +227,50 @@ class ScreenshotTranslatorApp:
         self.logger.info("✅ Приложение инициализировано успешно")
         self._force_log_flush()
 
+    def _on_language_changed_main(self, event):
+        """
+        Обработчик выбора целевого языка в главном окне.
+        """
+        selected = self.target_lang_var.get()
+        if not selected:
+            return
+
+        # Извлекаем код языка из строки вида "Russian (ru)"
+        if "(" in selected and ")" in selected:
+            lang_code = selected.split("(")[-1].replace(")", "").strip()
+        else:
+            # Fallback: пробуем найти по названию
+            for code, name in LANGUAGES.items():
+                if name.lower() in selected.lower():
+                    lang_code = code
+                    break
+            else:
+                return
+
+        current_lang = self.settings.get_target_language()
+        if current_lang != lang_code:
+            self.logger.info(f"[UI] Смена целевого языка в главном окне: {current_lang} -> {lang_code}")
+            self.settings.set_target_language(lang_code)
+
+            # Обновляем язык в браузере, если он готов
+            if hasattr(self.app, 'ready') and self.app.ready:
+                if hasattr(self.app, 'browser_worker') and self.app.browser_worker:
+                    self.app.browser_worker.update_language(lang_code)
+
+                # Обновляем статус
+                engine = self.settings.get_translator_engine()
+                engine_name = "Google Translate" if engine == "google" else "Яндекс.Переводчик (OCR)"
+                ready_text = self.get_string('ready')
+                self.update_status(
+                    f"● {ready_text} ({engine_name}, {lang_code.upper()})",
+                    '#4CAF50'
+                )
+
+                # Локализованное уведомление
+                self.app.show_notification(
+                    self.get_string('notification_language_changed').format(lang_code.upper())
+                )
+
     def switch_translator_engine(self, engine: str):
         """
         Переключает движок перевода без перезапуска браузера.
@@ -2734,11 +2778,11 @@ class ScreenshotTranslatorApp:
                 self.logger.error(f"[STATE] Ошибка восстановления оверлеев: {e}")
 
         # ============================================================
-        # РАЗБЛОКИРУЕМ КОМБОБОКС ВЫБОРА ДВИЖКА (НОВОЕ)
+        # РАЗБЛОКИРУЕМ КОМБОБОКСЫ ВЫБОРА ДВИЖКА И ЯЗЫКА
         # ============================================================
         if hasattr(self.ui, 'set_engine_combo_enabled'):
             self.ui.set_engine_combo_enabled(True)
-            self.logger.info("[APP] Комбобокс выбора движка разблокирован")
+            self.logger.info("[APP] Комбобоксы выбора движка и языка разблокированы")
 
         if hasattr(self.ui, 'settings_btn'):
             self.ui.settings_btn.config(state=tk.NORMAL, bg='#3c3c3c', fg='#cccccc')
