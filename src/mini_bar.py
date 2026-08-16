@@ -94,58 +94,76 @@ class MiniBarWindow:
                                                                                  'get_string') else "Закрыть мини-бар (ESC)"
                 self._add_tooltip(self.close_btn, close_tooltip)
 
-            # 3. Обновляем подсказки для всех кнопок
+            # 3. Получаем РЕАЛЬНЫЕ хоткеи из настроек
             hotkeys = self.app.settings.get_all_hotkeys() if hasattr(self.app, 'settings') else {}
-            logger.info(f"[MINI_BAR] Текущие хоткеи: {hotkeys}")
+            logger.info(f"[MINI_BAR] Текущие хоткеи из настроек: {hotkeys}")
 
-            # <-- ОБНОВЛЁННЫЙ СПИСОК КНОПОК -->
-            button_keys = ['f1', 'f2', 'f3', 'f3_hold', 'f4', 'f5', 'f6']
-            button_attrs = ['btn_f1', 'btn_f2', 'btn_f3', 'btn_f3_hold', 'btn_f4', 'btn_f5', 'btn_f6']
+            # Форматируем хоткей для отображения
+            def format_hotkey(action_key):
+                hotkey = hotkeys.get(action_key, '')
+                if hotkey:
+                    hotkey_display = hotkey.upper()
+                    if '+' in hotkey:
+                        parts = hotkey.split('+')
+                        hotkey_display = '+'.join(p.upper() for p in parts)
+                    return hotkey_display
+                return "—"
 
-            # Соответствие действий для кнопок
-            action_map = {
-                'f1': 'toggle_overlay',
-                'f2': 'screenshot',
-                'f3': 'area',
-                'f3_hold': 'fullscreen_ocr',
-                'f4': 'clear_all',
-                'f5': 'edit_mode',
-                'f6': 'auto_replace'
-            }
+            # ---- F1 ----
+            if hasattr(self, 'btn_f1') and self.btn_f1:
+                hotkey_display = format_hotkey('toggle_overlay')
+                template = self.app.get_string('mini_bar_tooltip_f1') if hasattr(self.app, 'get_string') else None
+                tooltip = template.format(hotkey=hotkey_display) if template else f"F1 ({hotkey_display})"
+                self._add_tooltip(self.btn_f1, tooltip)
+                logger.info(f"[MINI_BAR] F1 подсказка: {tooltip}")
 
-            for key, attr in zip(button_keys, button_attrs):
-                if hasattr(self, attr):
-                    btn = getattr(self, attr)
-                    if btn:
-                        # Получаем горячую клавишу для этого действия
-                        action = action_map.get(key, key)
-                        hotkey = hotkeys.get(action, '')
+            # ---- F2 ----
+            if hasattr(self, 'btn_f2') and self.btn_f2:
+                hotkey_display = format_hotkey('screenshot')
+                template = self.app.get_string('mini_bar_tooltip_f2') if hasattr(self.app, 'get_string') else None
+                tooltip = template.format(hotkey=hotkey_display) if template else f"F2 ({hotkey_display})"
+                self._add_tooltip(self.btn_f2, tooltip)
+                logger.info(f"[MINI_BAR] F2 подсказка: {tooltip}")
 
-                        # Форматируем отображение клавиши
-                        if hotkey:
-                            hotkey_display = hotkey.upper()
-                            if '+' in hotkey:
-                                parts = hotkey.split('+')
-                                hotkey_display = '+'.join(p.upper() for p in parts)
-                        else:
-                            # Если хоткей не задан, используем "—"
-                            hotkey_display = "—"
+            # ---- F3 ----
+            if hasattr(self, 'btn_f3') and self.btn_f3:
+                hotkey_display = format_hotkey('area')
+                template = self.app.get_string('mini_bar_tooltip_f3') if hasattr(self.app, 'get_string') else None
+                tooltip = template.format(hotkey=hotkey_display) if template else f"F3 ({hotkey_display})"
+                self._add_tooltip(self.btn_f3, tooltip)
+                logger.info(f"[MINI_BAR] F3 подсказка: {tooltip}")
 
-                        # Получаем локализованную строку для подсказки
-                        template_key = f'mini_bar_tooltip_{key}'
-                        if hasattr(self.app, 'get_string'):
-                            template = self.app.get_string(template_key)
-                        else:
-                            template = None
+            # ---- F3_hold ----
+            if hasattr(self, 'btn_f3_hold') and self.btn_f3_hold:
+                hotkey_display = format_hotkey('fullscreen_ocr')
+                template = self.app.get_string('mini_bar_tooltip_f3_hold') if hasattr(self.app, 'get_string') else None
+                tooltip = template.format(hotkey=hotkey_display) if template else f"F3 (hold) ({hotkey_display})"
+                self._add_tooltip(self.btn_f3_hold, tooltip)
+                logger.info(f"[MINI_BAR] F3_hold подсказка: {tooltip}")
 
-                        if template:
-                            new_tooltip = template.format(hotkey=hotkey_display)
-                        else:
-                            # Fallback, если строка не найдена
-                            new_tooltip = f"{key} ({hotkey_display})"
+            # ---- F4 ----
+            if hasattr(self, 'btn_f4') and self.btn_f4:
+                hotkey_display = format_hotkey('clear_all')
+                template = self.app.get_string('mini_bar_tooltip_f4') if hasattr(self.app, 'get_string') else None
+                tooltip = template.format(hotkey=hotkey_display) if template else f"F4 ({hotkey_display})"
+                self._add_tooltip(self.btn_f4, tooltip)
+                logger.info(f"[MINI_BAR] F4 подсказка: {tooltip}")
 
-                        self._add_tooltip(btn, new_tooltip)
-                        logger.info(f"[MINI_BAR] Подсказка для {key} обновлена: {new_tooltip}")
+            # ---- F5 ----
+            if hasattr(self, 'btn_f5') and self.btn_f5:
+                hotkey_display = format_hotkey('edit_mode')
+                template = self.app.get_string('mini_bar_tooltip_f5') if hasattr(self.app, 'get_string') else None
+                tooltip = template.format(hotkey=hotkey_display) if template else f"F5 ({hotkey_display})"
+                self._add_tooltip(self.btn_f5, tooltip)
+                logger.info(f"[MINI_BAR] F5 подсказка: {tooltip}")
+
+            # ---- F6 ----
+            if hasattr(self, 'btn_f6') and self.btn_f6:
+                hotkey_display = format_hotkey('auto_replace')
+                template = self.app.get_string('mini_bar_tooltip_f6') if hasattr(self.app, 'get_string') else None
+                tooltip = template.format(hotkey=hotkey_display) if template else f"F6 ({hotkey_display})"
+                self._add_tooltip(self.btn_f6, tooltip)
+                logger.info(f"[MINI_BAR] F6 подсказка: {tooltip}")
 
             logger.info("[MINI_BAR] Обновление языка в мини-баре завершено")
 
@@ -406,46 +424,41 @@ class MiniBarWindow:
         self.btn_frame = tk.Frame(self.main_frame, bg='#1e1e1e')
         self.btn_frame.pack(fill=tk.BOTH, expand=True, padx=6, pady=(4, 6))
 
-        # Получаем текущие горячие клавиши
+        # Получаем текущие горячие клавиши из настроек
         hotkeys = self.app.settings.get_all_hotkeys() if hasattr(self.app, 'settings') else {}
 
-        # Значения по умолчанию для хоткеев (если не заданы)
-        default_hotkeys = {
-            'f1': 'F1',
-            'f2': 'F2',
-            'f3': 'F3',
-            'f3_hold': 'F3 (held)',
-            'f4': 'F4',
-            'f5': 'F5',
-            'f6': 'F6'
-        }
-
-        def format_hotkey_display(key):
-            """Форматирует отображение горячей клавиши."""
-            hotkey = hotkeys.get(key, '')
+        # ============================================================
+        # ФУНКЦИЯ ДЛЯ ФОРМАТИРОВАНИЯ ОТОБРАЖЕНИЯ ХОТКЕЯ
+        # ТЕПЕРЬ ИСПОЛЬЗУЕТ ТОЛЬКО РЕАЛЬНЫЕ ЗНАЧЕНИЯ ИЗ НАСТРОЕК
+        # ============================================================
+        def format_hotkey_display(action_key):
+            """Форматирует отображение горячей клавиши.
+            Возвращает реальный хоткей из настроек или '—' если не задан."""
+            hotkey = hotkeys.get(action_key, '')
             if hotkey:
                 hotkey_display = hotkey.upper()
                 if '+' in hotkey:
                     parts = hotkey.split('+')
                     hotkey_display = '+'.join(p.upper() for p in parts)
                 return hotkey_display
-            return default_hotkeys.get(key, '?')
+            return "—"
 
-        def format_tooltip(key):
-            """Форматирует подсказку для кнопки."""
-            hotkey_display = format_hotkey_display(key)
-            template = self.app.get_string(f'mini_bar_tooltip_{key}') if hasattr(self.app, 'get_string') else None
+        def format_tooltip(action_key, template_key):
+            """Форматирует подсказку для кнопки с реальным хоткеем."""
+            hotkey_display = format_hotkey_display(action_key)
+            template = self.app.get_string(template_key) if hasattr(self.app, 'get_string') else None
             if template:
                 return template.format(hotkey=hotkey_display)
-            return f"{key} ({hotkey_display})"
+            return f"{action_key} ({hotkey_display})"
 
-        tooltip_f1 = format_tooltip('f1')
-        tooltip_f2 = format_tooltip('f2')
-        tooltip_f3 = format_tooltip('f3')
-        tooltip_f3_hold = format_tooltip('f3_hold')
-        tooltip_f4 = format_tooltip('f4')
-        tooltip_f5 = format_tooltip('f5')
-        tooltip_f6 = format_tooltip('f6')
+        # Формируем подсказки с реальными хоткеями
+        tooltip_f1 = format_tooltip('toggle_overlay', 'mini_bar_tooltip_f1')
+        tooltip_f2 = format_tooltip('screenshot', 'mini_bar_tooltip_f2')
+        tooltip_f3 = format_tooltip('area', 'mini_bar_tooltip_f3')
+        tooltip_f3_hold = format_tooltip('fullscreen_ocr', 'mini_bar_tooltip_f3_hold')
+        tooltip_f4 = format_tooltip('clear_all', 'mini_bar_tooltip_f4')
+        tooltip_f5 = format_tooltip('edit_mode', 'mini_bar_tooltip_f5')
+        tooltip_f6 = format_tooltip('auto_replace', 'mini_bar_tooltip_f6')
 
         # ============================================================
         # СОЗДАЁМ ИЗОБРАЖЕНИЯ ЭМОДЗИ
