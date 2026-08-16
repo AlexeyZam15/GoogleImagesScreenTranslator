@@ -4,32 +4,30 @@
 
 # Стандартные библиотеки
 import logging
-import tempfile
-import time
-import threading
 import os
 import sys
+import threading
+import time
 import tkinter as tk
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
+from typing import Optional
 
 # Сторонние библиотеки
 import win32gui
 
+from src.browser_worker import BrowserWorker
+from src.hotkeys import HotkeyManager
+from src.main_window import MainWindow
+from src.notification_overlay import NotificationOverlay
+from src.overlay_manager import OverlayManager
+from src.screenshot import ScreenshotCapturer
 # Локальные импорты
 from src.settings import Settings
-from src.browser_worker import BrowserWorker
-from src.screenshot import ScreenshotCapturer
-from src.overlay_manager import OverlayManager
 from src.translation_monitor import TranslationMonitor
-from src.translator import GoogleTranslateDebug
-from src.main_window import MainWindow
-from src.hotkeys import HotkeyManager
-from src.window_list import WindowListManager
 from src.utils import ensure_app_temp_dir
-from src.notification_overlay import NotificationOverlay
-from typing import Optional
-import win32con
+from src.window_list import WindowListManager
+from PIL import Image, ImageTk
 
 
 def cleanup_old_logs(log_dir, keep_count=5):
@@ -134,12 +132,9 @@ class ScreenshotTranslatorApp:
         # ============================================================
         # ИСПРАВЛЕНИЕ: отключаем debug-режим в .exe по умолчанию
         # ============================================================
-        # Если приложение собрано в .exe и debug_mode не передан явно,
-        # отключаем debug-режим
         if getattr(sys, 'frozen', False) and not debug_mode:
             debug_mode = False
 
-        # Сохраняем флаг отладки
         self.debug_mode = debug_mode
 
         # Настройка логирования
@@ -148,13 +143,23 @@ class ScreenshotTranslatorApp:
 
         self._force_log_flush()
 
+        # ============================================================
+        # ОЧИСТКА СТАРЫХ ВРЕМЕННЫХ ПРОФИЛЕЙ ПРИ ЗАПУСКЕ (старше 7 дней)
+        # ============================================================
+        try:
+            from src.temp_cleaner import cleanup_old_profiles
+            deleted = cleanup_old_profiles(max_age_days=7, logger=self.logger)
+            if deleted > 0:
+                self.logger.info(f"[STARTUP] 🧹 Удалено {deleted} старых временных папок")
+        except Exception as e:
+            self.logger.warning(f"[STARTUP] Ошибка очистки старых профилей: {e}")
+
         self.settings = Settings()
         self.temp_dir = ensure_app_temp_dir()
 
         # Компоненты
         self.screenshot = ScreenshotCapturer()
         self.browser_worker = BrowserWorker(self.settings)
-        self.browser_worker.start()
         self.overlay_manager = None
         self.translation_monitor = None
 
@@ -189,6 +194,12 @@ class ScreenshotTranslatorApp:
         # Для F4: запоминаем последний перетащенный F2-оверлей
         self._last_dragged_f2_overlay = None
 
+        # ============================================================
+        # ХРАНЕНИЕ НЕДАВНО АКТИВНЫХ ОВЕРЛЕЕВ
+        # ============================================================
+        self._recent_overlays = {}  # app_name -> список (overlay, время_скрытия или None)
+        self._recent_overlays_timeout = 4.0  # 4 секунды после скрытия
+
         # Поля для захвата
         self._area_target_hwnd = None
         self._area_is_fullscreen = False
@@ -211,20 +222,939 @@ class ScreenshotTranslatorApp:
         self.hotkeys = HotkeyManager(self)
         self.window_list = WindowListManager(self, self.ui.window_listbox, self.ui._window_hwnd_map)
 
-        # Настройка
-        self.hotkeys.setup()
-        self._start_window_monitor()
-        self._start_result_processor()
+        # ============================================================
+        # ЗАПУСК БРАУЗЕРА В ФОНОВОМ ПОТОКЕ (НЕ БЛОКИРУЕТ)
+        # ============================================================
+        self.browser_worker.start()
+        self.logger.info("[APP] BrowserWorker запущен")
 
-        # Запускаем фоновую инициализацию OCR
-        self.ui.root.after(100, self._init_ocr_background)
-
-        # Запуск инициализации
-        self.ui.root.after(100, self._init_translator_step)
+        # ============================================================
+        # ОТЛОЖЕННАЯ ИНИЦИАЛИЗАЦИЯ (ДАЁМ ВРЕМЯ НА ОТРИСОВКУ ОКНА)
+        # ============================================================
+        # Запускаем все тяжелые операции с задержками, чтобы окно успело отрисоваться
+        self.ui.root.after(100, self._delayed_init_step1)
+        self.ui.root.after(200, self._delayed_init_step2)
+        self.ui.root.after(300, self._delayed_init_step3)
 
         self._force_log_flush()
         self.logger.info("✅ Приложение инициализировано успешно")
         self._force_log_flush()
+
+    def _delayed_init_step1(self):
+        """Первый шаг отложенной инициализации — настройка хоткеев."""
+        self.logger.info("[APP] Шаг 1: настройка горячих клавиш...")
+        try:
+            self.hotkeys.setup()
+            self.logger.info("[APP] Горячие клавиши настроены")
+        except Exception as e:
+            self.logger.error(f"[APP] Ошибка настройки хоткеев: {e}")
+
+    def _delayed_init_step2(self):
+        """Второй шаг отложенной инициализации — мониторы и OCR."""
+        self.logger.info("[APP] Шаг 2: запуск мониторов и OCR...")
+        try:
+            self._start_window_monitor()
+            self._start_result_processor()
+            self.ui.root.after(100, self._init_ocr_background)
+            self.logger.info("[APP] Мониторы запущены, OCR инициализируется")
+        except Exception as e:
+            self.logger.error(f"[APP] Ошибка запуска мониторов: {e}")
+
+    def _delayed_init_step3(self):
+        """Третий шаг отложенной инициализации — инициализация переводчика."""
+        self.logger.info("[APP] Шаг 3: инициализация переводчика...")
+        try:
+            self._init_translator_step()
+            self.logger.info("[APP] Инициализация переводчика запущена")
+        except Exception as e:
+            self.logger.error(f"[APP] Ошибка инициализации переводчика: {e}")
+
+    def _on_language_changed_main(self, event):
+        """
+        Обработчик выбора целевого языка в главном окне.
+        """
+        selected = self.target_lang_var.get()
+        if not selected:
+            return
+
+        # Извлекаем код языка из строки вида "Russian (ru)"
+        if "(" in selected and ")" in selected:
+            lang_code = selected.split("(")[-1].replace(")", "").strip()
+        else:
+            # Fallback: пробуем найти по названию
+            for code, name in LANGUAGES.items():
+                if name.lower() in selected.lower():
+                    lang_code = code
+                    break
+            else:
+                return
+
+        current_lang = self.settings.get_target_language()
+        if current_lang != lang_code:
+            self.logger.info(f"[UI] Смена целевого языка в главном окне: {current_lang} -> {lang_code}")
+            self.settings.set_target_language(lang_code)
+
+            # Обновляем язык в браузере, если он готов
+            if hasattr(self.app, 'ready') and self.app.ready:
+                if hasattr(self.app, 'browser_worker') and self.app.browser_worker:
+                    self.app.browser_worker.update_language(lang_code)
+
+                # Обновляем статус
+                engine = self.settings.get_translator_engine()
+                engine_name = "Google Translate" if engine == "google" else "Яндекс.Переводчик (OCR)"
+                ready_text = self.get_string('ready')
+                self.update_status(
+                    f"● {ready_text} ({engine_name}, {lang_code.upper()})",
+                    '#4CAF50'
+                )
+
+                # Локализованное уведомление
+                self.app.show_notification(
+                    self.get_string('notification_language_changed').format(lang_code.upper())
+                )
+
+    def switch_translator_engine(self, engine: str):
+        """
+        Переключает движок перевода без перезапуска браузера.
+        Вызывается из главного окна при выборе движка в комбобоксе.
+        """
+        self.logger.info(f"[APP] Переключение движка на: {engine}")
+
+        # Проверяем, изменился ли движок
+        current_engine = self.settings.get_translator_engine()
+        if current_engine == engine:
+            self.logger.info("[APP] Движок уже выбран, пропускаем")
+            # Разблокируем комбобокс, если он был заблокирован
+            if hasattr(self.ui, 'set_engine_combo_enabled'):
+                self.ui.set_engine_combo_enabled(True)
+            return
+
+        # Обновляем настройку без сохранения (сохраним позже, если переключение успешно)
+        self.settings.set_translator_engine_no_save(engine)
+
+        # Если браузер готов — переключаем "на лету"
+        if self.browser_worker and self.browser_worker.is_ready:
+            self.logger.info("[APP] Браузер готов, выполняем переключение на лету")
+
+            def on_switch_complete(result, error):
+                if error:
+                    self.logger.error(f"[APP] Ошибка переключения движка: {error}")
+                    self.show_notification(self.get_string('engine_switch_error').format(error[:30]))
+                    # Откатываем настройку
+                    self.settings.set_translator_engine(current_engine)
+                    # Обновляем UI
+                    self.ui.update_engine_display(current_engine)
+                else:
+                    self.logger.info(f"[APP] ✅ Движок переключен на {engine}")
+                    self.settings.save()  # Сохраняем настройку
+                    # Обновляем статус
+                    engine_name = self.get_string('engine_google') if engine == "google" else self.get_string(
+                        'engine_yandex')
+                    target_lang = self.settings.get_target_language()
+                    ready_text = self.ui.get_string('ready')
+                    self.ui.update_status(
+                        f"● {ready_text} ({engine_name}, {target_lang.upper()})",
+                        '#4CAF50'
+                    )
+                    self.show_notification(self.get_string('engine_switched').format(engine_name))
+                    self.ui.update_engine_display(engine)
+
+                # Разблокируем комбобокс после завершения переключения
+                if hasattr(self.ui, 'set_engine_combo_enabled'):
+                    self.ui.set_engine_combo_enabled(True)
+
+            # Блокируем комбобокс на время переключения
+            if hasattr(self.ui, 'set_engine_combo_enabled'):
+                self.ui.set_engine_combo_enabled(False)
+
+            cmd_id = self.browser_worker.switch_engine(
+                engine,
+                self.settings.get_target_language(),
+                self.settings.get_show_browser(),
+                on_switch_complete
+            )
+            self._pending_command_ids[cmd_id] = 'switch_engine'
+        else:
+            # Если браузер не готов — просто сохраняем настройку
+            self.logger.info("[APP] Браузер не готов, сохраняем настройку для следующей инициализации")
+            self.settings.set_translator_engine(engine)
+            self.ui.update_engine_display(engine)
+            # Обновляем статус
+            engine_name = self.get_string('engine_google') if engine == "google" else self.get_string('engine_yandex')
+            ready_text = self.ui.get_string('ready') if self.ready else self.ui.get_string('starting')
+            self.ui.update_status(
+                f"● {ready_text} ({engine_name})",
+                '#4CAF50' if self.ready else '#ff9800'
+            )
+            # Разблокируем комбобокс
+            if hasattr(self.ui, 'set_engine_combo_enabled'):
+                self.ui.set_engine_combo_enabled(True)
+
+    def is_edit_mode_enabled(self) -> bool:
+        """Возвращает состояние режима редактирования"""
+        return getattr(self, '_edit_mode_enabled', False)
+
+    def _on_overlay_hidden(self, overlay):
+        """Вызывается когда оверлей скрывается — запоминаем время скрытия."""
+        if not overlay:
+            return
+
+        app_name = overlay._app_name or "Неизвестно"
+        current_time = time.time()
+
+        if app_name in self._recent_overlays:
+            for i, (existing_overlay, _) in enumerate(self._recent_overlays[app_name]):
+                if existing_overlay is overlay:
+                    self._recent_overlays[app_name][i] = (overlay, current_time)
+                    self.logger.info(f"[RECENT] Оверлей для {app_name} скрыт, время: {current_time}")
+                    return
+
+    def _cleanup_recent_overlays(self, app_name: str = None):
+        """Удаляет оверлеи, которые были скрыты более 4 секунд назад."""
+        current_time = time.time()
+
+        if app_name:
+            if app_name in self._recent_overlays:
+                self._recent_overlays[app_name] = [
+                    (overlay, hide_time) for overlay, hide_time in self._recent_overlays[app_name]
+                    if hide_time is None or current_time - hide_time <= self._recent_overlays_timeout
+                ]
+                if not self._recent_overlays[app_name]:
+                    del self._recent_overlays[app_name]
+        else:
+            for app_name in list(self._recent_overlays.keys()):
+                self._cleanup_recent_overlays(app_name)
+
+    def _add_recent_overlay(self, overlay):
+        """Добавляет оверлей в список недавно активных при его показе."""
+        if not overlay:
+            return
+
+        app_name = overlay._app_name or "Неизвестно"
+
+        if app_name not in self._recent_overlays:
+            self._recent_overlays[app_name] = []
+
+        # Проверяем, есть ли уже такой оверлей в списке
+        for i, (existing_overlay, _) in enumerate(self._recent_overlays[app_name]):
+            if existing_overlay is overlay:
+                return  # Уже есть, не дублируем
+
+        # Добавляем новый оверлей с временем скрытия None (ещё не скрыт)
+        self._recent_overlays[app_name].append((overlay, None))
+        self.logger.info(f"[RECENT] Добавлен оверлей для {app_name}, всего: {len(self._recent_overlays[app_name])}")
+
+    def _show_continuous_area_selection_window(self, screenshot_path):
+        """
+        Показывает окно выделения области с поддержкой:
+        - ЛКМ — постоянный оверлей (красная рамка)
+        - ПКМ — временный оверлей (синяя рамка)
+        - ESC — выход
+        """
+        from PIL import Image, ImageTk  # <-- ДОБАВЛЕН ИМПОРТ
+        import win32gui
+        import win32con
+        import time
+        import keyboard
+
+        # 1. Создаём окно и canvas
+        selection_window, canvas, selection_data = self._create_selection_window(screenshot_path)
+
+        # 2. Настраиваем UI (инструкция, счётчик)
+        self._setup_selection_window_ui(selection_window, canvas, selection_data)
+
+        # 3. Настраиваем обработчики мыши
+        self._setup_mouse_handlers(canvas, selection_data, screenshot_path, selection_window)
+
+        # 4. Настраиваем ESC и выход
+        self._setup_esc_and_exit(selection_window, canvas)
+
+        # 5. Принудительный захват фокуса
+        self._force_window_focus(selection_window)
+
+        # 6. Блокируем хоткеи
+        self.hotkeys.set_actions_blocked(True)
+
+    def _create_selection_window(self, screenshot_path):
+        """Создаёт окно и canvas для выбора области."""
+        from PIL import Image, ImageTk  # <-- ДОБАВЛЕН ИМПОРТ
+
+        img = Image.open(screenshot_path)
+        img_width, img_height = img.size
+
+        selection_window = tk.Toplevel()
+        selection_window.attributes('-fullscreen', True)
+        selection_window.attributes('-topmost', True)
+        selection_window.configure(bg='black')
+        selection_window.focus_force()
+
+        canvas = tk.Canvas(selection_window, cursor="cross", bg='black', highlightthickness=0)
+        canvas.pack(fill=tk.BOTH, expand=True)
+
+        screen_width = selection_window.winfo_screenwidth()
+        screen_height = selection_window.winfo_screenheight()
+
+        scale = min(screen_width / img_width, screen_height / img_height)
+        display_w, display_h = int(img_width * scale), int(img_height * scale)
+
+        resized = img.resize((display_w, display_h), Image.Resampling.LANCZOS)
+        photo = ImageTk.PhotoImage(resized)  # <-- ТЕПЕРЬ ImageTk ДОСТУПЕН
+        img_x, img_y = (screen_width - display_w) // 2, (screen_height - display_h) // 2
+
+        canvas.create_image(img_x, img_y, anchor=tk.NW, image=photo)
+        canvas.image = photo  # <-- СОХРАНЯЕМ ССЫЛКУ, ЧТОБЫ НЕ СБИРАЛОСЬ GARBAGE COLLECTOR
+
+        selection_data = {
+            'img': img,
+            'screenshot_path': screenshot_path,
+            'scale_x': img_width / display_w,
+            'scale_y': img_height / display_h,
+            'img_x': img_x,
+            'img_y': img_y,
+            'start_x': None,
+            'start_y': None,
+            'rect': None,
+            'selection_window': selection_window,
+            'canvas': canvas,
+            'area_count': 0,
+            'is_temporary': False,
+            'temp_rect': None
+        }
+
+        return selection_window, canvas, selection_data
+
+    def _setup_selection_window_ui(self, selection_window, canvas, selection_data):
+        """Настраивает UI окна выбора области (инструкция, счётчик)."""
+        screen_width = selection_window.winfo_screenwidth()
+
+        instruction_text = self.get_string('area_selector_instruction')
+        canvas.create_text(
+            screen_width // 2, 50,
+            text=instruction_text,
+            fill="white",
+            font=("Arial", 16, "bold")
+        )
+
+        counter_text = self.get_string('area_selector_counter').format(0)
+        counter_id = canvas.create_text(
+            screen_width // 2, 90,
+            text=counter_text,
+            fill="#4CAF50",
+            font=("Arial", 14)
+        )
+        selection_data['counter_id'] = counter_id
+
+    def _setup_mouse_handlers(self, canvas, selection_data, screenshot_path, selection_window):
+        """Настраивает обработчики мыши для ЛКМ (постоянный) и ПКМ (временный)."""
+
+        # ========== ЛКМ (постоянный оверлей, красная рамка) ==========
+        def on_mouse_down(event):
+            selection_data['start_x'] = event.x
+            selection_data['start_y'] = event.y
+            selection_data['is_temporary'] = False
+            if selection_data['rect']:
+                canvas.delete(selection_data['rect'])
+                selection_data['rect'] = None
+            if selection_data['temp_rect']:
+                canvas.delete(selection_data['temp_rect'])
+                selection_data['temp_rect'] = None
+
+        def on_mouse_drag(event):
+            if selection_data['start_x'] is not None:
+                if selection_data['rect']:
+                    canvas.delete(selection_data['rect'])
+                selection_data['rect'] = canvas.create_rectangle(
+                    selection_data['start_x'], selection_data['start_y'],
+                    event.x, event.y,
+                    outline='red', width=2,
+                    fill='blue', stipple='gray50'
+                )
+
+        def on_mouse_up(event):
+            if selection_data['start_x'] is not None:
+                x1, y1 = min(selection_data['start_x'], event.x), min(selection_data['start_y'], event.y)
+                x2, y2 = max(selection_data['start_x'], event.x), max(selection_data['start_y'], event.y)
+                if x2 - x1 > 10 and y2 - y1 > 10:
+                    self._process_selection(x1, y1, x2, y2, selection_data, screenshot_path, selection_window,
+                                            is_temporary=False)
+                else:
+                    if selection_data['rect']:
+                        canvas.delete(selection_data['rect'])
+                        selection_data['rect'] = None
+                    selection_data['start_x'] = None
+                    selection_data['start_y'] = None
+
+        # ========== ПКМ (временный оверлей, синяя рамка) ==========
+        def on_mouse_down_pkm(event):
+            selection_data['start_x'] = event.x
+            selection_data['start_y'] = event.y
+            selection_data['is_temporary'] = True
+            if selection_data['temp_rect']:
+                canvas.delete(selection_data['temp_rect'])
+                selection_data['temp_rect'] = None
+            if selection_data['rect']:
+                canvas.delete(selection_data['rect'])
+                selection_data['rect'] = None
+
+        def on_mouse_drag_pkm(event):
+            if selection_data['start_x'] is not None:
+                if selection_data['temp_rect']:
+                    canvas.delete(selection_data['temp_rect'])
+                selection_data['temp_rect'] = canvas.create_rectangle(
+                    selection_data['start_x'], selection_data['start_y'],
+                    event.x, event.y,
+                    outline='#2196F3', width=2,
+                    fill='blue', stipple='gray50'
+                )
+
+        def on_mouse_up_pkm(event):
+            if selection_data['start_x'] is not None:
+                x1, y1 = min(selection_data['start_x'], event.x), min(selection_data['start_y'], event.y)
+                x2, y2 = max(selection_data['start_x'], event.x), max(selection_data['start_y'], event.y)
+                if x2 - x1 > 10 and y2 - y1 > 10:
+                    self._process_selection(x1, y1, x2, y2, selection_data, screenshot_path, selection_window,
+                                            is_temporary=True)
+                else:
+                    if selection_data['temp_rect']:
+                        canvas.delete(selection_data['temp_rect'])
+                        selection_data['temp_rect'] = None
+                    selection_data['start_x'] = None
+                    selection_data['start_y'] = None
+
+        # Привязываем события
+        canvas.bind("<ButtonPress-1>", on_mouse_down)
+        canvas.bind("<B1-Motion>", on_mouse_drag)
+        canvas.bind("<ButtonRelease-1>", on_mouse_up)
+
+        canvas.bind("<ButtonPress-3>", on_mouse_down_pkm)
+        canvas.bind("<B3-Motion>", on_mouse_drag_pkm)
+        canvas.bind("<ButtonRelease-3>", on_mouse_up_pkm)
+
+    def _setup_esc_and_exit(self, selection_window, canvas):
+        """Настраивает обработчики ESC и Enter для выхода."""
+        import keyboard  # <-- ДОБАВЛЕН ИМПОРТ
+        import win32gui  # <-- ДОБАВЛЕН ИМПОРТ
+
+        target_hwnd_for_exit = self._area_target_hwnd
+
+        def exit_area_mode():
+            self.logger.info("[DEBUG] exit_area_mode() - выход из режима захвата")
+            self._capture_mode = False
+
+            # Восстанавливаем мини-бар
+            self._restore_mini_bar_after_area()
+
+            # Отключаем глобальный хук ESC
+            if hasattr(self, '_area_esc_hook_active') and self._area_esc_hook_active:
+                try:
+                    keyboard.unhook_key(self._area_esc_hook_handler)
+                    self.logger.info("[F3] Глобальный хук ESC отключен")
+                except Exception as e:
+                    self.logger.warning(f"[F3] Ошибка отключения хука ESC: {e}")
+                self._area_esc_hook_active = False
+                self._area_esc_hook_handler = None
+
+            # Отключаем привязки ESC через Tkinter
+            self.ui.root.unbind_all("<Escape>")
+            self.hotkeys.set_actions_blocked(False)
+
+            if self.translation_queue and not self._indicator_shown:
+                self._show_translation_overlay()
+                self._indicator_shown = True
+                self.logger.info("[DEBUG] Индикатор перевода показан после выхода из F3")
+
+            if target_hwnd_for_exit:
+                try:
+                    win32gui.SetForegroundWindow(target_hwnd_for_exit)
+                    self.logger.info("[F3] Фокус возвращён на целевое окно")
+                except Exception as e:
+                    self.logger.error(f"[F3] Ошибка возврата фокуса: {e}")
+                    self.ui.root.deiconify()
+                    self.ui.root.lift()
+                    self.ui.root.focus_force()
+            else:
+                self.ui.root.deiconify()
+                self.ui.root.lift()
+                self.ui.root.focus_force()
+
+            try:
+                selection_window.grab_release()
+                selection_window.destroy()
+            except:
+                pass
+
+        # Привязываем ESC
+        def on_esc_pressed(e):
+            self.logger.info("[F3] ESC нажат -> выход из режима захвата")
+            exit_area_mode()
+            return "break"
+
+        canvas.bind("<Escape>", on_esc_pressed)
+        selection_window.bind("<Escape>", on_esc_pressed)
+        self.ui.root.bind_all("<Escape>", on_esc_pressed)
+
+        # Глобальный хук ESC через keyboard
+        def global_esc_handler(e):
+            self.logger.info("[F3] Глобальный хук: ESC нажат -> выход из режима захвата")
+            self._restore_mini_bar_after_area()
+            exit_area_mode()
+            return False
+
+        try:
+            self._area_esc_hook_handler = keyboard.on_press_key('esc', global_esc_handler, suppress=True)
+            self._area_esc_hook_active = True
+            self.logger.info("[F3] Глобальный хук ESC установлен через keyboard")
+        except Exception as e:
+            self.logger.warning(f"[F3] Не удалось установить глобальный хук ESC: {e}")
+
+        # Enter для выхода
+        canvas.bind("<Return>", lambda e: exit_area_mode())
+        selection_window.bind("<Return>", lambda e: exit_area_mode())
+
+    def _force_window_focus(self, selection_window):
+        """Принудительно устанавливает фокус на окно выбора области."""
+        import win32gui
+        import win32con
+        import time
+
+        selection_window.update_idletasks()
+        time.sleep(0.05)
+
+        try:
+            hwnd = int(selection_window.winfo_id())
+
+            win32gui.SetWindowPos(
+                hwnd,
+                win32con.HWND_TOPMOST,
+                0, 0, 0, 0,
+                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW
+            )
+            win32gui.BringWindowToTop(hwnd)
+            time.sleep(0.02)
+            win32gui.SetForegroundWindow(hwnd)
+            time.sleep(0.02)
+            win32gui.SetFocus(hwnd)
+            win32gui.SendMessage(hwnd, win32con.WM_ACTIVATE, win32con.WA_ACTIVE, 0)
+
+            self.logger.info(f"[F3] Фокус установлен на окно выбора области (HWND: {hwnd})")
+        except Exception as e:
+            self.logger.warning(f"[F3] Не удалось установить фокус через Win32 API: {e}")
+
+        selection_window.focus_force()
+        selection_window.grab_set()
+        selection_window.lift()
+        selection_window.update_idletasks()
+        time.sleep(0.05)
+
+        try:
+            hwnd = int(selection_window.winfo_id())
+            win32gui.SetForegroundWindow(hwnd)
+        except:
+            pass
+
+        def ensure_focus():
+            try:
+                if selection_window.winfo_exists():
+                    hwnd = int(selection_window.winfo_id())
+                    win32gui.SetForegroundWindow(hwnd)
+                    self.logger.info("[F3] Повторная установка фокуса на окно выбора области")
+            except:
+                pass
+
+        selection_window.after(100, ensure_focus)
+
+    def _process_selection(self, x1, y1, x2, y2, selection_data, screenshot_path, selection_window, is_temporary):
+        """Обрабатывает выделенную область (ЛКМ или ПКМ)."""
+        img_x = selection_data['img_x']
+        img_y = selection_data['img_y']
+        scale_x = selection_data['scale_x']
+        scale_y = selection_data['scale_y']
+        img_width = selection_data['img'].width
+        img_height = selection_data['img'].height
+        canvas = selection_data['canvas']
+        counter_id = selection_data['counter_id']
+
+        orig_x1 = int((x1 - img_x) * scale_x)
+        orig_y1 = int((y1 - img_y) * scale_y)
+        orig_x2 = int((x2 - img_x) * scale_x)
+        orig_y2 = int((y2 - img_y) * scale_y)
+
+        orig_x1 = max(0, min(orig_x1, img_width))
+        orig_y1 = max(0, min(orig_y1, img_height))
+        orig_x2 = max(0, min(orig_x2, img_width))
+        orig_y2 = max(0, min(orig_y2, img_height))
+
+        selection_data['area_count'] += 1
+        counter_text = self.get_string('area_selector_counter').format(selection_data['area_count'])
+        canvas.itemconfig(counter_id, text=counter_text)
+
+        if selection_data['rect']:
+            canvas.delete(selection_data['rect'])
+            selection_data['rect'] = None
+        if selection_data['temp_rect']:
+            canvas.delete(selection_data['temp_rect'])
+            selection_data['temp_rect'] = None
+        selection_data['start_x'] = None
+        selection_data['start_y'] = None
+
+        self._process_area_selection_continuous(
+            orig_x1, orig_y1, orig_x2, orig_y2,
+            screenshot_path, selection_window,
+            is_temporary=is_temporary
+        )
+
+    def _restore_mini_bar_after_area(self):
+        """Восстанавливает мини-бар после завершения выбора области."""
+        if hasattr(self, '_mini_bar_was_visible_before_area') and self._mini_bar_was_visible_before_area:
+            if hasattr(self, '_mini_bar_window') and self._mini_bar_window:
+                try:
+                    self._mini_bar_window.window.deiconify()
+                    self._mini_bar_window.window.lift()
+                    self._mini_bar_window.window.attributes('-topmost', True)
+                    self._ensure_mini_bar_on_top()
+                    self.logger.info("[F3] Мини-бар восстановлен после выбора области")
+                except Exception as e:
+                    self.logger.warning(f"[F3] Ошибка восстановления мини-бара: {e}")
+            self._mini_bar_was_visible_before_area = False
+
+    def _ensure_mini_bar_on_top(self):
+        """
+        Поднимает мини-бар поверх всех окон, включая оверлеи перевода.
+        Использует Windows API для гарантированного Z-порядка.
+        """
+        if not hasattr(self, '_mini_bar_window') or not self._mini_bar_window:
+            return
+
+        try:
+            import win32gui
+            import win32con
+
+            mini_bar = self._mini_bar_window
+            if not mini_bar.window or not mini_bar.window.winfo_exists():
+                return
+
+            hwnd = int(mini_bar.window.winfo_id())
+
+            # 1. Устанавливаем TOPMOST
+            win32gui.SetWindowPos(
+                hwnd,
+                win32con.HWND_TOPMOST,
+                0, 0, 0, 0,
+                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW
+            )
+
+            # 2. Поднимаем на самый верх среди TOPMOST окон
+            win32gui.SetWindowPos(
+                hwnd,
+                win32con.HWND_TOP,
+                0, 0, 0, 0,
+                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
+            )
+
+            # 3. BringWindowToTop
+            win32gui.BringWindowToTop(hwnd)
+
+            # 4. SetForegroundWindow (без захвата фокуса)
+            win32gui.SetForegroundWindow(hwnd)
+
+            # 5. Через Tkinter
+            mini_bar.window.lift()
+            mini_bar.window.attributes('-topmost', True)
+            mini_bar.window.update_idletasks()
+
+            self.logger.debug("[MINI_BAR] Мини-бар поднят поверх всех окон")
+        except Exception as e:
+            self.logger.warning(f"[MINI_BAR] Ошибка поднятия мини-бара: {e}")
+            # Fallback
+            try:
+                if self._mini_bar_window and self._mini_bar_window.window:
+                    self._mini_bar_window.window.lift()
+                    self._mini_bar_window.window.attributes('-topmost', True)
+            except:
+                pass
+
+    def process(self):
+        """Скриншот окна (F2)"""
+        if self.translating or not self.ready:
+            return
+
+        self.set_actions_blocked(True)
+
+        target_hwnd = self._get_real_active_window()
+
+        if not target_hwnd:
+            self.logger.error("[F2] Не удалось определить целевое окно")
+            self.set_actions_blocked(False)
+            return
+
+        self.screenshot._last_hwnd = target_hwnd
+        self.screenshot._is_fullscreen = self.screenshot.is_window_fullscreen(target_hwnd)
+
+        from src.window_utils import get_process_name_by_hwnd
+        self._f2_target_app_name = get_process_name_by_hwnd(target_hwnd)
+        self._last_processed_app_name = self._f2_target_app_name
+        self.logger.info(f"[F2] Целевое окно: HWND={target_hwnd}, приложение={self._f2_target_app_name}")
+
+        self.translating = True
+        self.logger.info("[F2] Захват скриншота...")
+        self.show_notification(self.get_string('notification_capturing'))
+
+        def capture_task():
+            try:
+                from PIL import Image
+                img = self.screenshot.capture_active_window(hwnd=target_hwnd)
+                if not img:
+                    self.logger.error("[F2] Ошибка захвата окна")
+                    self.translating = False
+                    self.set_actions_blocked(False)
+                    return
+
+                self.ui.root.after(0, self._show_translation_overlay)
+                path = self.temp_dir / f"scr_{int(time.time())}.png"
+                img.save(path)
+
+                task = {'type': 'screenshot', 'image_path': path, 'area_rect': None}
+                self.translation_queue.append(task)
+                self.translating = False
+
+                if not self.is_processing_queue:
+                    self._process_next_in_queue()
+            except Exception as e:
+                self.logger.error(f"Ошибка захвата: {e}")
+                self.translating = False
+                self.set_actions_blocked(False)
+
+        threading.Thread(target=capture_task, daemon=True).start()
+
+    def _get_real_active_window(self) -> Optional[int]:
+        """
+        Возвращает реальное активное окно, игнорируя окна нашего приложения.
+        Используется для F2 и F3, чтобы не переводить собственное окно.
+
+        Улучшенная версия: запоминает последнее активное окно и фильтрует системные окна.
+        """
+        import win32gui
+        import win32api
+        import os
+        import psutil
+        from src.window_utils import get_process_name_by_hwnd
+
+        # Получаем имя нашего процесса
+        our_pid = os.getpid()
+        try:
+            our_process = psutil.Process(our_pid)
+            our_app_name = our_process.name().lower()
+        except:
+            our_app_name = "python.exe"
+
+        # Получаем текущее активное окно
+        foreground_hwnd = win32gui.GetForegroundWindow()
+
+        if not foreground_hwnd:
+            self.logger.warning("[F2] Нет активного окна")
+            # Возвращаем последнее сохранённое окно, если есть
+            if hasattr(self, '_last_real_active_hwnd') and self._last_real_active_hwnd:
+                return self._last_real_active_hwnd
+            return None
+
+        # Проверяем, принадлежит ли активное окно нашему приложению
+        foreground_app = get_process_name_by_hwnd(foreground_hwnd)
+
+        # Если активное окно НЕ наше — сохраняем его и возвращаем
+        if foreground_app and foreground_app.lower() != our_app_name:
+            self._last_real_active_hwnd = foreground_hwnd
+            self.logger.info(f"[F2] Активное окно: {foreground_app} (HWND={foreground_hwnd})")
+            return foreground_hwnd
+
+        # Если активное окно наше — ищем другое
+        self.logger.info(f"[F2] Активное окно принадлежит нашему приложению ({our_app_name}), ищем другое окно")
+
+        # Сначала пробуем вернуть последнее сохранённое окно
+        if hasattr(self, '_last_real_active_hwnd') and self._last_real_active_hwnd:
+            last_hwnd = self._last_real_active_hwnd
+            # Проверяем, что окно всё ещё существует и видимо
+            if win32gui.IsWindow(last_hwnd) and win32gui.IsWindowVisible(last_hwnd):
+                last_app = get_process_name_by_hwnd(last_hwnd)
+                if last_app and last_app.lower() != our_app_name:
+                    self.logger.info(f"[F2] Используем сохранённое окно: {last_app} (HWND={last_hwnd})")
+                    return last_hwnd
+            else:
+                self._last_real_active_hwnd = None
+
+        # Ищем окно с фокусом ввода (через GetGUIThreadInfo)
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            GUITHREADINFO = ctypes.Structure()
+            GUITHREADINFO._fields_ = [
+                ('cbSize', wintypes.DWORD),
+                ('flags', wintypes.DWORD),
+                ('hwndActive', wintypes.HWND),
+                ('hwndFocus', wintypes.HWND),
+                ('hwndCapture', wintypes.HWND),
+                ('hwndMenuOwner', wintypes.HWND),
+                ('hwndMoveSize', wintypes.HWND),
+                ('hwndCaret', wintypes.HWND),
+                ('rcCaret', wintypes.RECT),
+            ]
+
+            user32 = ctypes.windll.user32
+            gti = GUITHREADINFO()
+            gti.cbSize = ctypes.sizeof(GUITHREADINFO)
+
+            # Получаем ID текущего потока
+            thread_id = user32.GetWindowThreadProcessId(foreground_hwnd, None)
+
+            if user32.GetGUIThreadInfo(thread_id, ctypes.byref(gti)):
+                if gti.hwndFocus:
+                    focus_app = get_process_name_by_hwnd(gti.hwndFocus)
+                    if focus_app and focus_app.lower() != our_app_name:
+                        self._last_real_active_hwnd = gti.hwndFocus
+                        self.logger.info(f"[F2] Найдено окно с фокусом ввода: {focus_app} (HWND={gti.hwndFocus})")
+                        return gti.hwndFocus
+        except Exception as e:
+            self.logger.debug(f"[F2] GetGUIThreadInfo не сработал: {e}")
+
+        # Ищем окно под курсором (если оно не наше)
+        try:
+            cursor_pos = win32api.GetCursorPos()
+            hwnd_under_cursor = win32gui.WindowFromPoint(cursor_pos)
+            if hwnd_under_cursor:
+                app_under = get_process_name_by_hwnd(hwnd_under_cursor)
+                if app_under and app_under.lower() != our_app_name:
+                    # Проверяем, что это не системное окно
+                    if not self._is_system_window(hwnd_under_cursor):
+                        self._last_real_active_hwnd = hwnd_under_cursor
+                        self.logger.info(f"[F2] Используем окно под курсором: {app_under} (HWND={hwnd_under_cursor})")
+                        return hwnd_under_cursor
+        except Exception as e:
+            self.logger.debug(f"[F2] Ошибка получения окна под курсором: {e}")
+
+        # Ищем любое видимое окно другого приложения (с фильтрацией системных)
+        def enum_callback(hwnd, hwnds):
+            if not win32gui.IsWindowVisible(hwnd):
+                return True
+            if hwnd == foreground_hwnd:
+                return True
+
+            try:
+                app_name = get_process_name_by_hwnd(hwnd)
+                if not app_name or app_name.lower() == our_app_name:
+                    return True
+
+                # Пропускаем системные окна
+                if self._is_system_window(hwnd):
+                    return True
+
+                # Проверяем, что окно имеет нормальный размер
+                rect = win32gui.GetWindowRect(hwnd)
+                if rect and rect[2] > rect[0] and rect[3] > rect[1]:
+                    hwnds.append(hwnd)
+                    return False
+            except:
+                pass
+            return True
+
+        hwnds = []
+        win32gui.EnumWindows(enum_callback, hwnds)
+
+        if hwnds:
+            found_hwnd = hwnds[0]
+            found_app = get_process_name_by_hwnd(found_hwnd)
+            self._last_real_active_hwnd = found_hwnd
+            self.logger.info(f"[F2] Найдено окно другого приложения: HWND={found_hwnd}, приложение={found_app}")
+            return found_hwnd
+
+        # Если ничего не нашли — используем последнее захваченное окно
+        last_hwnd = self.screenshot.get_last_hwnd()
+        if last_hwnd:
+            last_app = get_process_name_by_hwnd(last_hwnd)
+            if last_app and last_app.lower() != our_app_name:
+                self.logger.info(f"[F2] Используем последнее захваченное окно: HWND={last_hwnd}, приложение={last_app}")
+                return last_hwnd
+
+        self.logger.warning("[F2] Не удалось найти подходящее окно")
+        return None
+
+    def _is_system_window(self, hwnd: int) -> bool:
+        """
+        Проверяет, является ли окно системным (нежелательным для скриншота).
+        """
+        try:
+            import win32gui
+            app_name = self._get_app_name_by_hwnd(hwnd)
+
+            # Список системных приложений, которые не нужно переводить
+            system_apps = [
+                'explorer.exe', 'searchapp.exe', 'taskhostw.exe',
+                'svchost.exe', 'dwm.exe', 'csrss.exe', 'winlogon.exe',
+                'systemsettings.exe', 'startmenuexperiencehost.exe',
+                'windows.internal.shellhost.exe', 'applicationframehost.exe'
+            ]
+
+            if app_name and app_name.lower() in system_apps:
+                return True
+
+            # Проверяем класс окна
+            class_name = win32gui.GetClassName(hwnd)
+            system_classes = [
+                'Progman', 'WorkerW', 'Shell_TrayWnd', 'SysListView32',
+                'TaskManagerWindow', 'MultitaskingViewFrame'
+            ]
+            if class_name in system_classes:
+                return True
+
+            # Проверяем заголовок окна
+            window_text = win32gui.GetWindowText(hwnd)
+            if window_text and (
+                    'Start' in window_text or
+                    'Taskbar' in window_text or
+                    'Cortana' in window_text or
+                    'Search' in window_text
+            ):
+                return True
+
+            return False
+        except Exception as e:
+            self.logger.debug(f"[F2] Ошибка проверки системного окна: {e}")
+            return False
+
+    def toggle_mini_bar(self):
+        """Показывает или скрывает мини-бар с кнопками функций."""
+        if hasattr(self, '_mini_bar_window') and self._mini_bar_window:
+            try:
+                self._mini_bar_window.on_close()
+                self._mini_bar_window = None
+                self.logger.info("[MINI_BAR] Мини-бар скрыт")
+            except Exception as e:
+                self.logger.warning(f"[MINI_BAR] Ошибка при закрытии мини-бара: {e}")
+                self._mini_bar_window = None
+        else:
+            try:
+                from src.mini_bar import MiniBarWindow
+                self._mini_bar_window = MiniBarWindow(self)
+                self._ensure_mini_bar_on_top()
+                self.logger.info("[MINI_BAR] Мини-бар показан")
+            except Exception as e:
+                self.logger.error(f"[MINI_BAR] Ошибка при создании мини-бара: {e}")
+                import traceback
+                traceback.print_exc()
+
+        # ============================================================
+        # ОБНОВЛЯЕМ СОСТОЯНИЕ КНОПКИ МИНИ-БАР В ГЛАВНОМ ОКНЕ
+        # ============================================================
+        if hasattr(self, 'ui') and hasattr(self.ui, 'update_mini_bar_button'):
+            self.ui.update_mini_bar_button()
+
+        # ОБНОВЛЯЕМ ТОЛЬКО ПУНКТ МЕНЮ "ВИД"
+        if hasattr(self, 'ui') and hasattr(self.ui, 'update_view_menu'):
+            self.ui.update_view_menu()
+
+        # Гарантируем, что меню остаётся разблокированным
+        if hasattr(self, 'ready') and self.ready:
+            if hasattr(self, 'ui') and hasattr(self.ui, 'set_settings_menu_enabled'):
+                self.ui.set_settings_menu_enabled(True)
 
     def _restart_translator_with_callback(self, callback=None):
         """
@@ -298,9 +1228,6 @@ class ScreenshotTranslatorApp:
         self._last_target_lang = self.settings.get_target_language()
         self.logger.info(f"[APP] Текущий целевой язык: {self._last_target_lang}")
 
-        # ============================================================
-        # ИСПРАВЛЕНИЕ: проверяем debug_mode при показе браузера
-        # ============================================================
         show_browser = self.settings.get_show_browser()
         if self.debug_mode:
             show_browser = True
@@ -308,13 +1235,9 @@ class ScreenshotTranslatorApp:
 
         target_lang = self.settings.get_target_language()
 
-        self.ui.update_status("● " + self.ui.get_string('starting_browser'), '#ff9800')
-
         # Создаем обертку для колбэка, которая вызовет и наш callback
         def on_init_wrapper(result, error):
-            # Вызываем оригинальный обработчик
             self._on_init_complete(result, error)
-            # Вызываем callback для разблокировки кнопки
             if hasattr(self, '_restart_callback') and self._restart_callback:
                 try:
                     self._restart_callback()
@@ -386,10 +1309,39 @@ class ScreenshotTranslatorApp:
         self._clear_f2_overlays_for_current_app()
 
         # ============================================================
-        # 2. ПРОДОЛЖАЕМ ОБЫЧНУЮ ЛОГИКУ ЗАХВАТА ОБЛАСТИ
+        # 2. СКРЫВАЕМ МИНИ-БАР ВО ВРЕМЯ ВЫДЕЛЕНИЯ ОБЛАСТИ
         # ============================================================
+        if hasattr(self, '_mini_bar_window') and self._mini_bar_window:
+            try:
+                self._mini_bar_window.window.withdraw()
+                self._mini_bar_was_visible_before_area = True
+                self.logger.info("[F3] Мини-бар скрыт для выбора области")
+            except Exception as e:
+                self.logger.warning(f"[F3] Ошибка скрытия мини-бара: {e}")
+                self._mini_bar_was_visible_before_area = False
+        else:
+            self._mini_bar_was_visible_before_area = False
 
-        # Убеждаемся, что ESC не заблокирован перед открытием окна выбора области
+        # ============================================================
+        # 3. ПОЛУЧАЕМ РЕАЛЬНОЕ АКТИВНОЕ ОКНО
+        # ============================================================
+        target_hwnd = self._get_real_active_window()
+        if not target_hwnd:
+            self.logger.error("[F3] Не удалось получить целевое окно")
+            self.set_actions_blocked(False)
+            self._restore_mini_bar_after_area()
+            return
+
+        from src.window_utils import get_process_name_by_hwnd
+        self._area_target_app_name = get_process_name_by_hwnd(target_hwnd)
+        self._last_processed_app_name = self._area_target_app_name
+        self.logger.info(f"[F3] Целевое окно: HWND={target_hwnd}, приложение={self._area_target_app_name}")
+
+        self._area_target_hwnd = target_hwnd
+
+        # ============================================================
+        # 4. ПРОДОЛЖАЕМ ОБЫЧНУЮ ЛОГИКУ ЗАХВАТА ОБЛАСТИ
+        # ============================================================
         try:
             import keyboard
             keyboard.unblock_key('esc')
@@ -405,7 +1357,6 @@ class ScreenshotTranslatorApp:
             pass
         self.ui.root.after(300, self._capture_window_for_area)
 
-        # Принудительный захват фокуса для ESC
         def ensure_esc_capture():
             try:
                 if hasattr(self, '_area_selector') and self._area_selector:
@@ -436,10 +1387,23 @@ class ScreenshotTranslatorApp:
         self.logger.info("[F3_HOLD] Начало обработки с OCR (OCR готов)")
         self.set_actions_blocked(True)
 
-        current_hwnd = win32gui.GetForegroundWindow()
-        if current_hwnd:
-            self.screenshot._last_hwnd = current_hwnd
-            self.screenshot._is_fullscreen = self.screenshot.is_window_fullscreen(current_hwnd)
+        # ============================================================
+        # ПОЛУЧАЕМ РЕАЛЬНОЕ АКТИВНОЕ ОКНО
+        # ============================================================
+        current_hwnd = self._get_real_active_window()
+        if not current_hwnd:
+            self.logger.error("[F3_HOLD] Не удалось получить целевое окно")
+            self.set_actions_blocked(False)
+            return
+
+        from src.window_utils import get_process_name_by_hwnd
+        self._f3_hold_target_app_name = get_process_name_by_hwnd(current_hwnd)
+        self._last_processed_app_name = self._f3_hold_target_app_name
+        self.logger.info(f"[F3_HOLD] Целевое окно: HWND={current_hwnd}, приложение={self._f3_hold_target_app_name}")
+
+        # Сохраняем HWND для последующего использования
+        self.screenshot._last_hwnd = current_hwnd
+        self.screenshot._is_fullscreen = self.screenshot.is_window_fullscreen(current_hwnd)
 
         # ============================================================
         # 1. УДАЛЯЕМ F2-ОВЕРЛЕИ ДЛЯ ТЕКУЩЕГО ПРИЛОЖЕНИЯ
@@ -478,7 +1442,7 @@ class ScreenshotTranslatorApp:
             from PIL import Image
 
             try:
-                img = self.screenshot.capture_active_window()
+                img = self.screenshot.capture_active_window(hwnd=current_hwnd)
                 if not img:
                     self.logger.error("[F3_HOLD] Ошибка захвата окна")
                     self.translating = False
@@ -657,10 +1621,6 @@ class ScreenshotTranslatorApp:
     def _remove_overlay_state_from_file(self, app_name: str, template_id: str = None):
         """
         Удаляет конкретный оверлей из файла состояния.
-
-        Args:
-            app_name: Имя приложения
-            template_id: ID шаблона (если есть)
         """
         try:
             import json
@@ -676,10 +1636,12 @@ class ScreenshotTranslatorApp:
             keys_to_remove = []
 
             if template_id:
-                for key in states.keys():
+                # Удаляем по template_id
+                for key in list(states.keys()):
                     if key.startswith(f"{app_name}_") and template_id in key:
                         keys_to_remove.append(key)
             else:
+                # Удаляем все для этого приложения
                 keys_to_remove = [key for key in states.keys() if key.startswith(f"{app_name}_")]
 
             if not keys_to_remove:
@@ -806,10 +1768,7 @@ class ScreenshotTranslatorApp:
 
     def _clear_single_overlay(self, overlay):
         """
-        Удаляет один оверлей и полностью очищает его состояние.
-
-        Args:
-            overlay: Объект оверлея для удаления
+        Полностью удаляет оверлей без возможности восстановления.
         """
         if not overlay:
             return
@@ -836,25 +1795,32 @@ class ScreenshotTranslatorApp:
             self.overlay_manager._suppress_save = True
 
         try:
-            # 3. Удаляем оверлей через менеджер (без сохранения состояния)
-            #    remove_overlay теперь сам обрабатывает удаление из F1 состояния
             self.overlay_manager.remove_overlay(overlay, force=True)
             self.logger.info("[CLEAR_ALL] Оверлей удалён из менеджера")
         except Exception as e:
             self.logger.error(f"[CLEAR_ALL] Ошибка удаления оверлея: {e}")
         finally:
-            # 4. Восстанавливаем сохранение
             if hasattr(self.overlay_manager, '_suppress_save'):
                 self.overlay_manager._suppress_save = False
 
-        # 5. Удаляем состояние из файла
+        # 4. Удаляем состояние из файла
         self._remove_overlay_state_from_file(app_name, template_id)
 
-        # 6. Принудительно сохраняем состояние (уже без оверлея)
+        # 5. Удаляем из списка недавно активных (ИСПРАВЛЕНО)
+        if app_name in self._recent_overlays:
+            # В _recent_overlays хранятся (overlay, hide_time) - 2 элемента
+            self._recent_overlays[app_name] = [
+                (ov, ht) for ov, ht in self._recent_overlays[app_name] if ov is not overlay
+            ]
+            if not self._recent_overlays[app_name]:
+                del self._recent_overlays[app_name]
+
+        # 6. Принудительно сохраняем состояние
         self.overlay_manager.save_overlay_state(immediate=True)
 
         # 7. Обновляем список окон
-        self.ui.root.after(100, lambda: self.window_list.refresh(skip_restore=True))
+        if hasattr(self, 'window_list'):
+            self.window_list.refresh(skip_restore=True)
 
         self.logger.info(f"[CLEAR_ALL] Оверлей полностью удалён и состояние очищено")
 
@@ -932,8 +1898,7 @@ class ScreenshotTranslatorApp:
             except Exception as e:
                 self.logger.warning(f"[APP] Ошибка сохранения состояния: {e}")
 
-        # 2. ОЧИСТКА КОМПОНЕНТОВ (БЕЗ УДАЛЕНИЯ ФАЙЛА СОСТОЯНИЯ)
-        # 2.1 Останавливаем и очищаем TranslationMonitor
+        # 2. ОЧИСТКА КОМПОНЕНТОВ
         if hasattr(self, 'translation_monitor') and self.translation_monitor:
             try:
                 self.translation_monitor.stop()
@@ -943,7 +1908,6 @@ class ScreenshotTranslatorApp:
                 self.logger.warning(f"[APP] Ошибка очистки TranslationMonitor: {e}")
             self.translation_monitor = None
 
-        # 2.2 Закрываем все оверлеи (но не удаляем файл состояния)
         if hasattr(self, 'overlay_manager') and self.overlay_manager:
             try:
                 count = len(self.overlay_manager.overlays)
@@ -953,7 +1917,6 @@ class ScreenshotTranslatorApp:
                 self.logger.warning(f"[APP] Ошибка закрытия оверлеев: {e}")
             self.overlay_manager = None
 
-        # 2.3 Очищаем список окон
         if hasattr(self, 'window_list'):
             try:
                 self.window_list.window_listbox.delete(0, 'end')
@@ -963,7 +1926,6 @@ class ScreenshotTranslatorApp:
             except Exception as e:
                 self.logger.warning(f"[APP] Ошибка очистки списка окон: {e}")
 
-        # 2.4 Сбрасываем флаги инициализации
         self.ready = False
         self.initializing = True
         self._init_done = False
@@ -978,13 +1940,9 @@ class ScreenshotTranslatorApp:
             self.logger.info(f"[APP] Движок изменен: {self._last_engine} -> {engine}")
             self._last_engine = engine
 
-        # Сохраняем текущий язык для отслеживания изменений
         self._last_target_lang = self.settings.get_target_language()
         self.logger.info(f"[APP] Текущий целевой язык: {self._last_target_lang}")
 
-        # ============================================================
-        # ИСПРАВЛЕНИЕ: проверяем debug_mode при показе браузера
-        # ============================================================
         show_browser = self.settings.get_show_browser()
         if self.debug_mode:
             show_browser = True
@@ -992,171 +1950,12 @@ class ScreenshotTranslatorApp:
 
         target_lang = self.settings.get_target_language()
 
-        # Статус "starting browser"
-        self.ui.update_status("● " + self.ui.get_string('starting_browser'), '#ff9800')
-
         # Отправляем команду перезапуска
         cmd_id = self.browser_worker.restart_browser(show_browser, target_lang, self._on_init_complete)
         self._pending_command_ids[cmd_id] = 'restart'
 
         self.logger.info(f"[APP] Команда перезапуска отправлена (id={cmd_id})")
         self.logger.info("[APP] === _restart_translator ЗАВЕРШЕН ===")
-
-    def _create_selection_window(self, screenshot_path):
-        """
-        Создает окно выбора области и возвращает его вместе с данными.
-        """
-        from PIL import Image, ImageTk
-        import win32gui
-        import win32con
-
-        img = Image.open(screenshot_path)
-        img_width, img_height = img.size
-
-        selection_window = tk.Toplevel()
-        selection_window.attributes('-fullscreen', True)
-        selection_window.attributes('-topmost', True)
-        selection_window.configure(bg='black')
-        selection_window.focus_force()
-
-        canvas = tk.Canvas(selection_window, cursor="cross", bg='black', highlightthickness=0)
-        canvas.pack(fill=tk.BOTH, expand=True)
-
-        screen_width = selection_window.winfo_screenwidth()
-        screen_height = selection_window.winfo_screenheight()
-
-        scale = min(screen_width / img_width, screen_height / img_height)
-        display_w, display_h = int(img_width * scale), int(img_height * scale)
-
-        resized = img.resize((display_w, display_h), Image.Resampling.LANCZOS)
-        photo = ImageTk.PhotoImage(resized)
-        img_x, img_y = (screen_width - display_w) // 2, (screen_height - display_h) // 2
-
-        canvas.create_image(img_x, img_y, anchor=tk.NW, image=photo)
-        canvas.image = photo
-
-        selection_data = {
-            'img': img,
-            'screenshot_path': screenshot_path,
-            'scale_x': img_width / display_w,
-            'scale_y': img_height / display_h,
-            'img_x': img_x,
-            'img_y': img_y,
-            'start_x': None,
-            'start_y': None,
-            'rect': None,
-            'selection_window': selection_window,
-            'canvas': canvas,
-            'area_count': 0,
-            'is_temporary': False,
-            'temp_rect': None
-        }
-
-        # Добавляем инструкцию
-        instruction_text = self.get_string('area_selector_instruction')
-        canvas.create_text(
-            screen_width // 2, 50,
-            text=instruction_text,
-            fill="white",
-            font=("Arial", 16, "bold")
-        )
-
-        counter_text = self.get_string('area_selector_counter').format(0)
-        counter_id = canvas.create_text(
-            screen_width // 2, 90,
-            text=counter_text,
-            fill="#4CAF50",
-            font=("Arial", 14)
-        )
-        selection_data['counter_id'] = counter_id
-
-        return selection_window, canvas, selection_data
-
-    def _setup_mouse_handlers(self, canvas, selection_data, screenshot_path, selection_window):
-        """Настраивает обработчики мыши для выбора области."""
-
-        # ========== ЛКМ (постоянный оверлей, красная рамка) ==========
-        def on_mouse_down(event):
-            selection_data['start_x'] = event.x
-            selection_data['start_y'] = event.y
-            selection_data['is_temporary'] = False
-            if selection_data['rect']:
-                canvas.delete(selection_data['rect'])
-                selection_data['rect'] = None
-            if selection_data['temp_rect']:
-                canvas.delete(selection_data['temp_rect'])
-                selection_data['temp_rect'] = None
-
-        def on_mouse_drag(event):
-            if selection_data['start_x'] is not None:
-                if selection_data['rect']:
-                    canvas.delete(selection_data['rect'])
-                selection_data['rect'] = canvas.create_rectangle(
-                    selection_data['start_x'], selection_data['start_y'],
-                    event.x, event.y,
-                    outline='red', width=2,
-                    fill='blue', stipple='gray50'
-                )
-
-        def on_mouse_up(event):
-            if selection_data['start_x'] is not None:
-                x1, y1 = min(selection_data['start_x'], event.x), min(selection_data['start_y'], event.y)
-                x2, y2 = max(selection_data['start_x'], event.x), max(selection_data['start_y'], event.y)
-                if x2 - x1 > 10 and y2 - y1 > 10:
-                    self._process_mouse_selection(x1, y1, x2, y2, selection_data, screenshot_path, selection_window,
-                                                  is_temporary=False)
-                else:
-                    if selection_data['rect']:
-                        canvas.delete(selection_data['rect'])
-                        selection_data['rect'] = None
-                    selection_data['start_x'] = None
-                    selection_data['start_y'] = None
-
-        # ========== ПКМ (временный оверлей, синяя рамка) ==========
-        def on_mouse_down_pkm(event):
-            selection_data['start_x'] = event.x
-            selection_data['start_y'] = event.y
-            selection_data['is_temporary'] = True
-            if selection_data['temp_rect']:
-                canvas.delete(selection_data['temp_rect'])
-                selection_data['temp_rect'] = None
-            if selection_data['rect']:
-                canvas.delete(selection_data['rect'])
-                selection_data['rect'] = None
-
-        def on_mouse_drag_pkm(event):
-            if selection_data['start_x'] is not None:
-                if selection_data['temp_rect']:
-                    canvas.delete(selection_data['temp_rect'])
-                selection_data['temp_rect'] = canvas.create_rectangle(
-                    selection_data['start_x'], selection_data['start_y'],
-                    event.x, event.y,
-                    outline='#2196F3', width=2,
-                    fill='blue', stipple='gray50'
-                )
-
-        def on_mouse_up_pkm(event):
-            if selection_data['start_x'] is not None:
-                x1, y1 = min(selection_data['start_x'], event.x), min(selection_data['start_y'], event.y)
-                x2, y2 = max(selection_data['start_x'], event.x), max(selection_data['start_y'], event.y)
-                if x2 - x1 > 10 and y2 - y1 > 10:
-                    self._process_mouse_selection(x1, y1, x2, y2, selection_data, screenshot_path, selection_window,
-                                                  is_temporary=True)
-                else:
-                    if selection_data['temp_rect']:
-                        canvas.delete(selection_data['temp_rect'])
-                        selection_data['temp_rect'] = None
-                    selection_data['start_x'] = None
-                    selection_data['start_y'] = None
-
-        # Привязываем события
-        canvas.bind("<ButtonPress-1>", on_mouse_down)
-        canvas.bind("<B1-Motion>", on_mouse_drag)
-        canvas.bind("<ButtonRelease-1>", on_mouse_up)
-
-        canvas.bind("<ButtonPress-3>", on_mouse_down_pkm)
-        canvas.bind("<B3-Motion>", on_mouse_drag_pkm)
-        canvas.bind("<ButtonRelease-3>", on_mouse_up_pkm)
 
     def _process_mouse_selection(self, x1, y1, x2, y2, selection_data, screenshot_path, selection_window, is_temporary):
         """Обрабатывает выделение мышью (ЛКМ или ПКМ)."""
@@ -1213,405 +2012,6 @@ class ScreenshotTranslatorApp:
 
         canvas.bind("<Return>", lambda e: exit_area_mode())
         selection_window.bind("<Return>", lambda e: exit_area_mode())
-
-    def _force_window_focus(self, selection_window):
-        """Принудительно устанавливает фокус на окно выбора области."""
-        import win32gui
-        import win32con
-        import time
-
-        selection_window.update_idletasks()
-        time.sleep(0.05)
-
-        try:
-            hwnd = int(selection_window.winfo_id())
-
-            # 1. Устанавливаем TOPMOST
-            win32gui.SetWindowPos(
-                hwnd,
-                win32con.HWND_TOPMOST,
-                0, 0, 0, 0,
-                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW
-            )
-
-            # 2. Принудительно поднимаем окно
-            win32gui.BringWindowToTop(hwnd)
-            time.sleep(0.02)
-
-            # 3. Устанавливаем фокус
-            win32gui.SetForegroundWindow(hwnd)
-            time.sleep(0.02)
-
-            # 4. Устанавливаем фокус через SetFocus
-            win32gui.SetFocus(hwnd)
-
-            # 5. Отправляем сообщение активации
-            win32gui.SendMessage(hwnd, win32con.WM_ACTIVATE, win32con.WA_ACTIVE, 0)
-
-            self.logger.info(f"[F3] Фокус установлен на окно выбора области (HWND: {hwnd})")
-        except Exception as e:
-            self.logger.warning(f"[F3] Не удалось установить фокус через Win32 API: {e}")
-
-        # Устанавливаем фокус через Tkinter
-        selection_window.focus_force()
-        selection_window.grab_set()
-        selection_window.lift()
-        selection_window.update_idletasks()
-        time.sleep(0.05)
-
-        # Ещё раз пробуем захватить фокус
-        try:
-            hwnd = int(selection_window.winfo_id())
-            win32gui.SetForegroundWindow(hwnd)
-        except:
-            pass
-
-        # Таймер для повторной установки фокуса
-        def ensure_focus():
-            try:
-                if selection_window.winfo_exists():
-                    hwnd = int(selection_window.winfo_id())
-                    win32gui.SetForegroundWindow(hwnd)
-                    self.logger.info("[F3] Повторная установка фокуса на окно выбора области")
-            except:
-                pass
-
-        selection_window.after(100, ensure_focus)
-
-    def _show_continuous_area_selection_window(self, screenshot_path):
-        """Показывает окно выделения области"""
-        from PIL import Image, ImageTk
-        import win32gui
-        import win32con
-        import time
-        import keyboard  # <-- ДОБАВИТЬ
-
-        img = Image.open(screenshot_path)
-        img_width, img_height = img.size
-
-        selection_window = tk.Toplevel()
-        selection_window.attributes('-fullscreen', True)
-        selection_window.attributes('-topmost', True)
-        selection_window.configure(bg='black')
-        selection_window.focus_force()
-
-        canvas = tk.Canvas(selection_window, cursor="cross", bg='black', highlightthickness=0)
-        canvas.pack(fill=tk.BOTH, expand=True)
-
-        screen_width = selection_window.winfo_screenwidth()
-        screen_height = selection_window.winfo_screenheight()
-
-        scale = min(screen_width / img_width, screen_height / img_height)
-        display_w, display_h = int(img_width * scale), int(img_height * scale)
-
-        resized = img.resize((display_w, display_h), Image.Resampling.LANCZOS)
-        photo = ImageTk.PhotoImage(resized)
-        img_x, img_y = (screen_width - display_w) // 2, (screen_height - display_h) // 2
-
-        canvas.create_image(img_x, img_y, anchor=tk.NW, image=photo)
-        canvas.image = photo
-
-        selection_data = {
-            'img': img, 'screenshot_path': screenshot_path,
-            'scale_x': img_width / display_w, 'scale_y': img_height / display_h,
-            'img_x': img_x, 'img_y': img_y,
-            'start_x': None, 'start_y': None,
-            'rect': None,
-            'selection_window': selection_window, 'canvas': canvas,
-            'area_count': 0,
-            'is_temporary': False,
-            'temp_rect': None
-        }
-
-        instruction_text = self.get_string('area_selector_instruction')
-        canvas.create_text(
-            screen_width // 2, 50,
-            text=instruction_text,
-            fill="white",
-            font=("Arial", 16, "bold")
-        )
-
-        counter_text = self.get_string('area_selector_counter').format(0)
-        counter_id = canvas.create_text(
-            screen_width // 2, 90,
-            text=counter_text,
-            fill="#4CAF50",
-            font=("Arial", 14)
-        )
-        selection_data['counter_id'] = counter_id
-
-        target_hwnd_for_exit = self._area_target_hwnd
-
-        # ========== ПЕРЕМЕННЫЕ ДЛЯ ХУКА ==========
-        esc_hook_active = False
-        esc_hook_handler = None
-
-        # ========== ЛКМ (постоянный оверлей, красная рамка) ==========
-        def on_mouse_down(event):
-            selection_data['start_x'] = event.x
-            selection_data['start_y'] = event.y
-            selection_data['is_temporary'] = False
-            if selection_data['rect']:
-                canvas.delete(selection_data['rect'])
-                selection_data['rect'] = None
-            if selection_data['temp_rect']:
-                canvas.delete(selection_data['temp_rect'])
-                selection_data['temp_rect'] = None
-
-        def on_mouse_drag(event):
-            if selection_data['start_x'] is not None:
-                if selection_data['rect']:
-                    canvas.delete(selection_data['rect'])
-                selection_data['rect'] = canvas.create_rectangle(
-                    selection_data['start_x'], selection_data['start_y'],
-                    event.x, event.y,
-                    outline='red', width=2,
-                    fill='blue', stipple='gray50'
-                )
-
-        def on_mouse_up(event):
-            if selection_data['start_x'] is not None:
-                x1, y1 = min(selection_data['start_x'], event.x), min(selection_data['start_y'], event.y)
-                x2, y2 = max(selection_data['start_x'], event.x), max(selection_data['start_y'], event.y)
-                if x2 - x1 > 10 and y2 - y1 > 10:
-                    orig_x1 = int((x1 - img_x) * selection_data['scale_x'])
-                    orig_y1 = int((y1 - img_y) * selection_data['scale_y'])
-                    orig_x2 = int((x2 - img_x) * selection_data['scale_x'])
-                    orig_y2 = int((y2 - img_y) * selection_data['scale_y'])
-                    orig_x1 = max(0, min(orig_x1, img_width))
-                    orig_y1 = max(0, min(orig_y1, img_height))
-                    orig_x2 = max(0, min(orig_x2, img_width))
-                    orig_y2 = max(0, min(orig_y2, img_height))
-
-                    selection_data['area_count'] += 1
-                    counter_text = self.get_string('area_selector_counter').format(selection_data['area_count'])
-                    canvas.itemconfig(counter_id, text=counter_text)
-
-                    if selection_data['rect']:
-                        canvas.delete(selection_data['rect'])
-                        selection_data['rect'] = None
-                    selection_data['start_x'] = None
-                    selection_data['start_y'] = None
-
-                    self._process_area_selection_continuous(
-                        orig_x1, orig_y1, orig_x2, orig_y2,
-                        screenshot_path, selection_window,
-                        is_temporary=False
-                    )
-                else:
-                    if selection_data['rect']:
-                        canvas.delete(selection_data['rect'])
-                        selection_data['rect'] = None
-                    selection_data['start_x'] = None
-                    selection_data['start_y'] = None
-
-        # ========== ПКМ (временный оверлей, синяя рамка) ==========
-        def on_mouse_down_pkm(event):
-            selection_data['start_x'] = event.x
-            selection_data['start_y'] = event.y
-            selection_data['is_temporary'] = True
-            if selection_data['temp_rect']:
-                canvas.delete(selection_data['temp_rect'])
-                selection_data['temp_rect'] = None
-            if selection_data['rect']:
-                canvas.delete(selection_data['rect'])
-                selection_data['rect'] = None
-
-        def on_mouse_drag_pkm(event):
-            if selection_data['start_x'] is not None:
-                if selection_data['temp_rect']:
-                    canvas.delete(selection_data['temp_rect'])
-                selection_data['temp_rect'] = canvas.create_rectangle(
-                    selection_data['start_x'], selection_data['start_y'],
-                    event.x, event.y,
-                    outline='#2196F3', width=2,
-                    fill='blue', stipple='gray50'
-                )
-
-        def on_mouse_up_pkm(event):
-            if selection_data['start_x'] is not None:
-                x1, y1 = min(selection_data['start_x'], event.x), min(selection_data['start_y'], event.y)
-                x2, y2 = max(selection_data['start_x'], event.x), max(selection_data['start_y'], event.y)
-                if x2 - x1 > 10 and y2 - y1 > 10:
-                    orig_x1 = int((x1 - img_x) * selection_data['scale_x'])
-                    orig_y1 = int((y1 - img_y) * selection_data['scale_y'])
-                    orig_x2 = int((x2 - img_x) * selection_data['scale_x'])
-                    orig_y2 = int((y2 - img_y) * selection_data['scale_y'])
-                    orig_x1 = max(0, min(orig_x1, img_width))
-                    orig_y1 = max(0, min(orig_y1, img_height))
-                    orig_x2 = max(0, min(orig_x2, img_width))
-                    orig_y2 = max(0, min(orig_y2, img_height))
-
-                    selection_data['area_count'] += 1
-                    counter_text = self.get_string('area_selector_counter').format(selection_data['area_count'])
-                    canvas.itemconfig(counter_id, text=counter_text)
-
-                    if selection_data['temp_rect']:
-                        canvas.delete(selection_data['temp_rect'])
-                        selection_data['temp_rect'] = None
-                    selection_data['start_x'] = None
-                    selection_data['start_y'] = None
-
-                    self._process_area_selection_continuous(
-                        orig_x1, orig_y1, orig_x2, orig_y2,
-                        screenshot_path, selection_window,
-                        is_temporary=True
-                    )
-                else:
-                    if selection_data['temp_rect']:
-                        canvas.delete(selection_data['temp_rect'])
-                        selection_data['temp_rect'] = None
-                    selection_data['start_x'] = None
-                    selection_data['start_y'] = None
-
-        # ========== ВЫХОД ==========
-        def exit_area_mode():
-            self.logger.info("[DEBUG] exit_area_mode() - выход из режима захвата")
-            self._capture_mode = False
-
-            # ОТКЛЮЧАЕМ ГЛОБАЛЬНЫЙ ХУК ESC
-            nonlocal esc_hook_active, esc_hook_handler
-            if esc_hook_active and esc_hook_handler:
-                try:
-                    keyboard.unhook_key(esc_hook_handler)
-                    self.logger.info("[F3] Глобальный хук ESC отключен")
-                except Exception as e:
-                    self.logger.warning(f"[F3] Ошибка отключения хука ESC: {e}")
-                esc_hook_active = False
-                esc_hook_handler = None
-
-            # Отключаем глобальную привязку ESC через Tkinter
-            self.ui.root.unbind_all("<Escape>")
-
-            self.hotkeys.set_actions_blocked(False)
-
-            if self.translation_queue and not self._indicator_shown:
-                self._show_translation_overlay()
-                self._indicator_shown = True
-                self.logger.info("[DEBUG] Индикатор перевода показан после выхода из F3")
-
-            if target_hwnd_for_exit:
-                try:
-                    win32gui.SetForegroundWindow(target_hwnd_for_exit)
-                    self.logger.info("[F3] Фокус возвращён на целевое окно")
-                except Exception as e:
-                    self.logger.error(f"[F3] Ошибка возврата фокуса: {e}")
-                    self.ui.root.deiconify()
-                    self.ui.root.lift()
-                    self.ui.root.focus_force()
-            else:
-                self.ui.root.deiconify()
-                self.ui.root.lift()
-                self.ui.root.focus_force()
-
-            try:
-                selection_window.grab_release()
-                selection_window.destroy()
-            except:
-                pass
-
-        # ========== ПРИВЯЗКА СОБЫТИЙ ==========
-        # ЛКМ
-        canvas.bind("<ButtonPress-1>", on_mouse_down)
-        canvas.bind("<B1-Motion>", on_mouse_drag)
-        canvas.bind("<ButtonRelease-1>", on_mouse_up)
-
-        # ПКМ
-        canvas.bind("<ButtonPress-3>", on_mouse_down_pkm)
-        canvas.bind("<B3-Motion>", on_mouse_drag_pkm)
-        canvas.bind("<ButtonRelease-3>", on_mouse_up_pkm)
-
-        # === ВЫХОД ПО ESC ===
-        def on_esc_pressed(e):
-            self.logger.info("[F3] ESC нажат -> выход из режима захвата")
-            exit_area_mode()
-            return "break"
-
-        # Привязываем ESC к canvas и window
-        canvas.bind("<Escape>", on_esc_pressed)
-        selection_window.bind("<Escape>", on_esc_pressed)
-        self.ui.root.bind_all("<Escape>", on_esc_pressed)
-
-        # === ГЛОБАЛЬНЫЙ ХУК ЧЕРЕЗ keyboard (перехватывает ESC на системном уровне) ===
-        def global_esc_handler(e):
-            self.logger.info("[F3] Глобальный хук: ESC нажат -> выход из режима захвата")
-            exit_area_mode()
-            return False  # Блокируем дальнейшую обработку
-
-        try:
-            esc_hook_handler = keyboard.on_press_key('esc', global_esc_handler, suppress=True)
-            esc_hook_active = True
-            self.logger.info("[F3] Глобальный хук ESC установлен через keyboard")
-        except Exception as e:
-            self.logger.warning(f"[F3] Не удалось установить глобальный хук ESC: {e}")
-
-        # Enter для выхода
-        canvas.bind("<Return>", lambda e: exit_area_mode())
-        selection_window.bind("<Return>", lambda e: exit_area_mode())
-
-        # === УСИЛЕННЫЙ ЗАХВАТ ФОКУСА ===
-        selection_window.update_idletasks()
-        time.sleep(0.05)
-
-        try:
-            hwnd = int(selection_window.winfo_id())
-
-            # 1. Устанавливаем TOPMOST
-            win32gui.SetWindowPos(
-                hwnd,
-                win32con.HWND_TOPMOST,
-                0, 0, 0, 0,
-                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW
-            )
-
-            # 2. Принудительно поднимаем окно
-            win32gui.BringWindowToTop(hwnd)
-            time.sleep(0.02)
-
-            # 3. Устанавливаем фокус
-            win32gui.SetForegroundWindow(hwnd)
-            time.sleep(0.02)
-
-            # 4. Устанавливаем фокус через SetFocus
-            win32gui.SetFocus(hwnd)
-
-            # 5. Отправляем сообщение активации
-            win32gui.SendMessage(hwnd, win32con.WM_ACTIVATE, win32con.WA_ACTIVE, 0)
-
-            self.logger.info(f"[F3] Фокус установлен на окно выбора области (HWND: {hwnd})")
-        except Exception as e:
-            self.logger.warning(f"[F3] Не удалось установить фокус через Win32 API: {e}")
-
-        # Устанавливаем фокус через Tkinter
-        canvas.focus_set()
-        selection_window.focus_force()
-        selection_window.grab_set()
-        selection_window.lift()
-
-        # Дополнительная задержка для стабилизации
-        selection_window.update_idletasks()
-        time.sleep(0.05)
-
-        # Ещё раз пробуем захватить фокус
-        try:
-            hwnd = int(selection_window.winfo_id())
-            win32gui.SetForegroundWindow(hwnd)
-        except:
-            pass
-
-        # === ТАЙМЕР ДЛЯ ПОВТОРНОЙ УСТАНОВКИ ФОКУСА ===
-        def ensure_focus():
-            try:
-                if selection_window.winfo_exists():
-                    hwnd = int(selection_window.winfo_id())
-                    win32gui.SetForegroundWindow(hwnd)
-                    self.logger.info("[F3] Повторная установка фокуса на окно выбора области")
-            except:
-                pass
-
-        selection_window.after(100, ensure_focus)
-
-        self.hotkeys.set_actions_blocked(True)
 
     def _auto_switch_fullscreen_window(self, hwnd: int, app_name: str):
         """
@@ -1673,16 +2073,10 @@ class ScreenshotTranslatorApp:
                     self.ocr_processor.initialize()
                     self._ocr_initialized = True
                     self.logger.info("✅ EasyOCR готов к использованию")
-                    # Удаляем уведомление
-                    # if hasattr(self, 'show_notification'):
-                    #     self.ui.root.after(0, lambda: self.show_notification("✅ OCR готов", 1500))
                 except ImportError as e:
                     self.logger.warning(f"EasyOCR не установлен: {e}")
                     self._ocr_initialized = False
                     self.ocr_processor = None
-                    # Удаляем уведомление
-                    # if hasattr(self, 'show_notification'):
-                    #     self.ui.root.after(0, lambda: self.show_notification("❌ EasyOCR не установлен", 2000))
                 except Exception as e:
                     self.logger.error(f"❌ Ошибка инициализации EasyOCR: {e}")
                     self._ocr_initialized = False
@@ -1751,7 +2145,7 @@ class ScreenshotTranslatorApp:
                 self._handle_ocr_no_text()
                 return
 
-            self.show_notification(f"📝 Создание {len(regions)} оверлеев...")
+            self.show_notification(f"📝 {self.get_string('f3_hold_creating_overlays').format(count=len(regions))}")
 
             # Получаем существующие оверлеи
             app_name, existing_overlays = self._get_existing_overlays(target_hwnd)
@@ -1769,7 +2163,7 @@ class ScreenshotTranslatorApp:
                 orig_w, orig_h
             )
 
-            self._finalize_ocr_processing(created_count, skipped_count, updated_count)
+            self._finalize_ocr_processing(created_count, skipped_count, updated_count, app_name)
 
         except Exception as e:
             self._handle_ocr_exception(e)
@@ -1781,6 +2175,39 @@ class ScreenshotTranslatorApp:
             self.set_actions_blocked(False)
             self._pending_command_ids = {}
             self.is_processing_queue = False
+
+    def _finalize_ocr_processing(self, created_count, skipped_count, updated_count, app_name):
+        """Завершает обработку OCR с локализованными уведомлениями."""
+        total_count = created_count + updated_count
+        self.logger.info(
+            f"[F3_HOLD] Создано {created_count} новых оверлеев, пропущено {skipped_count} занятых зон"
+        )
+        self.ui.root.after(500, self.window_list.refresh)
+
+        if created_count > 0:
+            # Локализованное уведомление о создании оверлеев
+            if created_count == 1:
+                if app_name:
+                    msg = self.get_string('overlay_created_single').format(app_name=app_name)
+                else:
+                    msg = self.get_string('overlay_created')
+            else:
+                if app_name:
+                    msg = self.get_string('overlay_created_count').format(count=created_count, app_name=app_name)
+                else:
+                    msg = self.get_string('f3_hold_overlays_created').format(count=created_count)
+            self.show_notification(msg)
+
+            if skipped_count > 0:
+                self.show_notification(f"ℹ️ Пропущено {skipped_count} занятых зон")
+        else:
+            if skipped_count > 0:
+                self.show_notification(
+                    self.get_string('overlay_toggle_no_overlays_for_app').format(app_name=app_name or "Неизвестно"))
+            else:
+                self.show_notification(self.get_string('overlay_creation_failed'))
+
+        self._hide_translation_overlay()
 
     def _handle_ocr_error(self, error):
         """Обрабатывает ошибку OCR."""
@@ -1921,7 +2348,6 @@ class ScreenshotTranslatorApp:
         """Обрабатывает все OCR регионы — ТОЛЬКО ДОБАВЛЯЕТ ШАБЛОНЫ В МОНИТОР, без создания оверлеев."""
 
         import time
-        from pathlib import Path
 
         loop_start = time.time()
         self.logger.info(f"[TIMING] Этап 7: Обработка {len(regions)} зон...")
@@ -2027,7 +2453,6 @@ class ScreenshotTranslatorApp:
                                    orig_w, orig_h, wx1, wy1):
         """Создает оверлей для одного региона."""
         import time
-        from pathlib import Path
 
         try:
             region_img = translated_img.crop((x1, y1, x2, y2))
@@ -2068,7 +2493,6 @@ class ScreenshotTranslatorApp:
                                  orig_w, orig_h, wx1, wy1, app_name, i):
         """Добавляет шаблон в монитор для автозамены."""
         import time
-        from pathlib import Path
 
         if not self.translation_monitor or not self.settings.get_auto_replace_translated():
             return
@@ -2113,39 +2537,12 @@ class ScreenshotTranslatorApp:
         except Exception as e:
             self.logger.warning(f"[F3_HOLD] Не удалось создать шаблон: {e}")
 
-    def _finalize_ocr_processing(self, created_count, skipped_count, updated_count):
-        """Завершает обработку OCR."""
-        total_count = created_count + updated_count
-        self.logger.info(
-            f"[F3_HOLD] Создано {created_count} новых оверлеев, пропущено {skipped_count} занятых зон"
-        )
-        self.ui.root.after(500, self.window_list.refresh)
-
-        if created_count > 0 or skipped_count > 0:
-            self.logger.info("[F3_HOLD] Обработка завершена, скрываем индикатор")
-            self._hide_translation_overlay()
-        else:
-            self.logger.info("[F3_HOLD] Не создано ни одного оверлея, скрываем индикатор")
-            self._hide_translation_overlay()
-
-        if created_count > 0:
-            self.show_notification(f"✅ {created_count} оверлеев создано ({skipped_count} пропущено)")
-            # Статус убран
-        else:
-            if skipped_count > 0:
-                self.show_notification(f"ℹ️ Все {skipped_count} зон уже заняты оверлеями")
-                # Статус убран
-            else:
-                self.show_notification("⚠️ Не удалось создать оверлеи")
-                # Статус убран
-
     def _handle_ocr_exception(self, e):
         """Обрабатывает исключение в OCR."""
         self.logger.error(f"[F3_HOLD] Ошибка OCR: {e}")
         import traceback
         traceback.print_exc()
         self.show_notification(f"❌ Ошибка OCR: {str(e)[:30]}")
-        self.ui.update_status("● " + self.ui.get_string('error'), '#f44336')
         self._hide_translation_overlay()
 
     def _get_app_name_by_hwnd(self, hwnd: int) -> str:
@@ -2159,33 +2556,35 @@ class ScreenshotTranslatorApp:
 
     def clear_all_overlays(self):
         """
-        Удаляет последний перетащенный F2-оверлей.
-        Если такого нет - удаляет оверлеи для текущего приложения.
+        Удаляет все оверлеи для приложения, которые были созданы в течение последних 30 секунд.
         """
-        self.logger.info("[CLEAR_ALL] Начинаем удаление оверлеев")
+        self.logger.info("[CLEAR_ALL] Начинаем удаление недавно созданных оверлеев")
 
         if not self.overlay_manager:
             self.logger.warning("[CLEAR_ALL] OverlayManager не инициализирован")
             self.show_notification(self.get_string('notification_remove_no_app'))
             return
 
+        # Очищаем устаревшие записи (старше 30 секунд)
+        self._cleanup_recent_overlays()
+
         # ============================================================
-        # 1. ПРОВЕРЯЕМ: ЕСТЬ ЛИ ПОСЛЕДНИЙ ПЕРЕТАЩЕННЫЙ F2-ОВЕРЛЕЙ
+        # 1. ПРОВЕРЯЕМ ПОСЛЕДНИЙ ПЕРЕТАЩЕННЫЙ F2-ОВЕРЛЕЙ
         # ============================================================
         if hasattr(self, '_last_dragged_f2_overlay') and self._last_dragged_f2_overlay:
             overlay = self._last_dragged_f2_overlay
-
             try:
                 if overlay and overlay.root and overlay.root.winfo_exists():
                     app_name = overlay._app_name or "Неизвестно"
                     self.logger.info(f"[CLEAR_ALL] Удаляем последний перетащенный F2-оверлей для {app_name}")
                     self._clear_single_overlay(overlay)
                     self._last_dragged_f2_overlay = None
-                    self.show_notification(f"🗑️ Удалён перетащенный оверлей для {app_name}")
+                    self.show_notification(
+                        self.get_string('clear_all_deleted_dragged').format(app_name=app_name)
+                    )
                     return
                 else:
                     self._last_dragged_f2_overlay = None
-                    self.logger.info("[CLEAR_ALL] Последний перетащенный оверлей уже удалён")
             except Exception as e:
                 self.logger.warning(f"[CLEAR_ALL] Ошибка проверки перетащенного оверлея: {e}")
                 self._last_dragged_f2_overlay = None
@@ -2194,71 +2593,100 @@ class ScreenshotTranslatorApp:
         # 2. ПРОВЕРЯЕМ ОВЕРЛЕЙ ПОД КУРСОРОМ
         # ============================================================
         overlay_under_cursor = self._get_overlay_under_cursor()
-
         if overlay_under_cursor:
             self.logger.info(f"[CLEAR_ALL] Найден оверлей под курсором, удаляем")
             app_name = overlay_under_cursor._app_name or "Неизвестно"
             self._clear_single_overlay(overlay_under_cursor)
-            self.show_notification(f"🗑️ Удалён оверлей для {app_name}")
+            self.show_notification(
+                self.get_string('clear_all_deleted_under_cursor').format(app_name=app_name)
+            )
             return
 
         # ============================================================
-        # 3. УДАЛЯЕМ ПО ИМЕНИ ПРИЛОЖЕНИЯ
+        # 3. ОПРЕДЕЛЯЕМ ПРИЛОЖЕНИЕ
         # ============================================================
-        current_app = self._get_current_app_name()
-        self.logger.info(f"[CLEAR_ALL] Текущее приложение: {current_app}")
+        target_app = None
 
-        if not current_app:
-            self.logger.warning("[CLEAR_ALL] Не удалось определить текущее приложение")
-            self.show_notification(self.get_string('notification_remove_no_app'))
+        if hasattr(self, '_last_processed_app_name') and self._last_processed_app_name:
+            target_app = self._last_processed_app_name
+            self.logger.info(f"[CLEAR_ALL] Используем приложение из последней операции: {target_app}")
+        else:
+            target_hwnd = self._get_real_active_window()
+            if target_hwnd:
+                from src.window_utils import get_process_name_by_hwnd
+                target_app = get_process_name_by_hwnd(target_hwnd)
+                self.logger.info(f"[CLEAR_ALL] Используем текущее активное окно: {target_app}")
+
+        if not target_app or target_app == "Неизвестно":
+            self.logger.warning("[CLEAR_ALL] Не удалось определить приложение")
+            self.show_notification(self.get_string('clear_all_no_app'))
             return
 
-        overlays_for_app = self.overlay_manager.get_overlays_by_app_name(current_app)
+        # ============================================================
+        # 4. ПОЛУЧАЕМ ВСЕ ОВЕРЛЕИ ДЛЯ ЭТОГО ПРИЛОЖЕНИЯ
+        # ============================================================
+        all_overlays = self.overlay_manager.get_overlays_by_app_name(target_app)
 
-        if not overlays_for_app:
-            self.logger.info(f"[CLEAR_ALL] Нет оверлеев для приложения {current_app}")
-
-            # Проверяем, есть ли вообще оверлеи
-            total_overlays = len(self.overlay_manager.overlays)
-            if total_overlays > 0:
-                self.show_notification(f"ℹ️ Нет оверлеев для {current_app} (есть для других приложений)")
-            else:
-                self.show_notification(f"ℹ️ Нет оверлеев для удаления")
+        if not all_overlays:
+            self.logger.info(f"[CLEAR_ALL] Нет оверлеев для {target_app}")
+            self.show_notification(
+                self.get_string('clear_all_no_overlays').format(app_name=target_app)
+            )
             return
 
-        overlays_count = len(overlays_for_app)
-        self.logger.info(f"[CLEAR_ALL] Найдено {overlays_count} оверлеев для приложения {current_app}")
+        self.logger.info(f"[CLEAR_ALL] Найдено {len(all_overlays)} оверлеев для {target_app}")
 
-        # Останавливаем сохранение состояния во время массового удаления
-        if hasattr(self.overlay_manager, '_suppress_save'):
-            self.overlay_manager._suppress_save = True
+        # ============================================================
+        # 5. УДАЛЯЕМ ВСЕ
+        # ============================================================
+        # Останавливаем монитор
+        if self.translation_monitor:
+            self.translation_monitor.stop()
+            self.logger.info("[CLEAR_ALL] Монитор остановлен")
 
+        old_suppress = self.overlay_manager._suppress_save
+        self.overlay_manager._suppress_save = True
+
+        removed_count = 0
         try:
-            if hasattr(self.overlay_manager, 'remove_all_overlays_for_app'):
-                self.overlay_manager.remove_all_overlays_for_app(current_app, force=True)
-            else:
-                for overlay in overlays_for_app[:]:
-                    try:
-                        self.overlay_manager.remove_overlay(overlay, force=True)
-                    except Exception as e:
-                        self.logger.error(f"[CLEAR_ALL] Ошибка удаления оверлея: {e}")
+            for overlay in all_overlays[:]:
+                try:
+                    self.overlay_manager.remove_overlay(overlay, force=True)
+                    removed_count += 1
+                    self.logger.info(f"[CLEAR_ALL] Удалён оверлей для {target_app}")
+                except Exception as e:
+                    self.logger.error(f"[CLEAR_ALL] Ошибка удаления оверлея: {e}")
+
+            # Очищаем шаблоны в мониторе
+            if self.translation_monitor:
+                self.translation_monitor.templates.clear()
+                self.translation_monitor._frame_cache = None
+                self.translation_monitor._frame_cache_hwnd = None
+                self.translation_monitor._last_active_hwnd = None
+                self.logger.info("[CLEAR_ALL] Все шаблоны очищены")
+
+            # Очищаем файл состояния для этого приложения
+            self._remove_overlay_state_from_file(target_app, None)
+
         finally:
-            if hasattr(self.overlay_manager, '_suppress_save'):
-                self.overlay_manager._suppress_save = False
+            self.overlay_manager._suppress_save = old_suppress
+            self.overlay_manager.save_overlay_state(immediate=True)
 
-        # Удаляем состояние из файла
-        self._remove_app_state_from_file(current_app)
+        # Очищаем список недавно активных
+        if target_app in self._recent_overlays:
+            self._recent_overlays[target_app] = []
 
-        # Принудительно сохраняем состояние
-        self.overlay_manager.save_overlay_state(immediate=True)
-
-        # Обновляем список окон
+        # Обновляем список окон с skip_restore=True
         self.ui.root.after(100, lambda: self.window_list.refresh(skip_restore=True))
 
-        self.show_notification(
-            self.get_string('clear_all_completed').format(app_name=current_app, count=overlays_count)
-        )
-        self.logger.info(f"[CLEAR_ALL] Очистка завершена для {current_app}")
+        # Локализованное уведомление
+        if removed_count == 1:
+            msg = self.get_string('clear_all_deleted_single').format(app_name=target_app)
+        else:
+            msg = self.get_string('clear_all_deleted_count').format(count=removed_count, app_name=target_app)
+
+        self.show_notification(msg)
+        self.logger.info(f"[CLEAR_ALL] Очистка завершена, удалено {removed_count} оверлеев для {target_app}")
 
     def get_string(self, key: str) -> str:
         """Возвращает локализованную строку"""
@@ -2356,8 +2784,6 @@ class ScreenshotTranslatorApp:
         if error:
             self.logger.error(f"Ошибка инициализации: {error}")
             self.initializing = False
-
-            # Кнопка настроек остаётся заблокированной до успешной инициализации
             self.ui.root.after(self._init_retry_delay, self._init_translator_step)
             return
 
@@ -2367,19 +2793,16 @@ class ScreenshotTranslatorApp:
         self._init_done = True
         self._init_attempts = 0
 
-        # Сохраняем используемый движок и язык
         self._last_engine = self.settings.get_translator_engine()
         self._last_target_lang = self.settings.get_target_language()
 
         engine_name = "Google Translate" if self._last_engine == "google" else "Яндекс.Переводчик (OCR)"
         self.logger.info(f"[APP] Используется движок: {engine_name}, язык: {self._last_target_lang}")
 
-        # Переустанавливаем горячие клавиши после инициализации
         if hasattr(self, 'hotkeys'):
             self.hotkeys.setup()
             self.logger.info("[APP] Горячие клавиши переустановлены после инициализации браузера")
 
-        # Создаём компоненты заново
         if not self.overlay_manager:
             self.overlay_manager = OverlayManager(self)
             self.logger.info("[APP] OverlayManager создан")
@@ -2388,7 +2811,6 @@ class ScreenshotTranslatorApp:
             self.translation_monitor = TranslationMonitor(self, self.overlay_manager, self.settings)
             self.logger.info("[APP] TranslationMonitor создан")
 
-        # Восстанавливаем оверлеи из сохранённого состояния
         restored_count = 0
         if self.overlay_manager:
             try:
@@ -2401,25 +2823,46 @@ class ScreenshotTranslatorApp:
             except Exception as e:
                 self.logger.error(f"[STATE] Ошибка восстановления оверлеев: {e}")
 
-        # Разблокировка кнопки только при успешной инициализации
+        # Обновляем надписи с хоткеями
+        if hasattr(self.ui, 'update_hotkey_labels'):
+            self.ui.update_hotkey_labels()
+
+        # ============================================================
+        # РАЗБЛОКИРУЕМ ВСЕ ЭЛЕМЕНТЫ ИНТЕРФЕЙСА
+        # ============================================================
+
+        # 1. КОМБОБОКСЫ ВЫБОРА ДВИЖКА И ЯЗЫКА
+        if hasattr(self.ui, 'set_engine_combo_enabled'):
+            self.ui.set_engine_combo_enabled(True)
+            self.logger.info("[APP] Комбобоксы выбора движка и языка разблокированы")
+
+        # 2. КНОПКА НАСТРОЕК
         if hasattr(self.ui, 'settings_btn'):
             self.ui.settings_btn.config(state=tk.NORMAL, bg='#3c3c3c', fg='#cccccc')
             self.logger.info("[APP] Кнопка настроек разблокирована")
 
-        self.ui.set_settings_menu_enabled(True)
+        # 3. КНОПКА МИНИ-БАР
+        if hasattr(self.ui, 'update_mini_bar_button'):
+            self.ui.update_mini_bar_button()
+            self.logger.info("[APP] Кнопка мини-бар разблокирована и обновлена")
 
-        # Обновляем статус на "Готов"
+        # 4. МЕНЮ (НАСТРОЙКИ, ХОТКЕИ, ВИД)
+        self.ui.set_settings_menu_enabled(True)
+        self.logger.info("[APP] Меню настроек, хоткеев и вид разблокированы")
+
+        # 5. СТАТУС - ИСПОЛЬЗУЕТ ЛОКАЛИЗАЦИЮ
         ready_text = self.ui.get_string('ready')
-        self.logger.info(f"[STATUS] Обновление статуса на: {ready_text}")
-        self.ui.update_status(f"● {ready_text} ({engine_name}, {self._last_target_lang.upper()})", '#4CAF50')
+        engine_name_localized = self.ui.get_string(
+            'engine_google') if self._last_engine == "google" else self.ui.get_string('engine_yandex')
+        self.ui.update_status(f"● {ready_text} ({engine_name_localized}, {self._last_target_lang.upper()})", '#4CAF50')
         self.logger.info("[STATUS] Статус обновлён на Готов")
 
         self.window_list.refresh()
         self.logger.info("Инициализация полностью завершена, статус: Готов")
 
-        # Показываем уведомление о готовности
         self.show_notification(
-            f"✅ {self.ui.get_string('ready_notification')} ({engine_name}, {self._last_target_lang.upper()})", 2000
+            f"✅ {self.ui.get_string('ready_notification')} ({engine_name_localized}, {self._last_target_lang.upper()})",
+            2000
         )
 
     def _on_window_switch(self, new_hwnd):
@@ -2440,10 +2883,57 @@ class ScreenshotTranslatorApp:
         old_hwnd = self._current_active_hwnd
         self._current_active_hwnd = new_hwnd
 
+        # ============================================================
+        # СОХРАНЯЕМ ПОСЛЕДНЕЕ РЕАЛЬНОЕ АКТИВНОЕ ОКНО
+        # ============================================================
         if new_hwnd:
             try:
                 from src.window_utils import get_process_name_by_hwnd
+                import os
+                import psutil
+
                 app_name = get_process_name_by_hwnd(new_hwnd, default_name="Неизвестно")
+
+                our_pid = os.getpid()
+                try:
+                    our_process = psutil.Process(our_pid)
+                    our_app_name = our_process.name().lower()
+                except:
+                    our_app_name = "python.exe"
+
+                # Проверяем, является ли активное окно мини-баром
+                is_mini_bar = False
+                if hasattr(self, '_mini_bar_window') and self._mini_bar_window:
+                    try:
+                        mini_bar_hwnd = int(self._mini_bar_window.window.winfo_id())
+                        if new_hwnd == mini_bar_hwnd:
+                            is_mini_bar = True
+                            self.logger.info("[WINDOW] Активное окно - мини-бар")
+                    except:
+                        pass
+
+                # Проверяем, является ли активное окно главным окном приложения
+                is_main_window = False
+                if hasattr(self, 'ui') and hasattr(self.ui, 'root'):
+                    try:
+                        main_hwnd = int(self.ui.root.winfo_id())
+                        if new_hwnd == main_hwnd:
+                            is_main_window = True
+                            self.logger.info("[WINDOW] Активное окно - главное окно приложения")
+                    except:
+                        pass
+
+                # Если переключились на наше приложение (не мини-бар) — запоминаем
+                if app_name and app_name.lower() == our_app_name and not is_mini_bar:
+                    if hasattr(self, '_last_real_active_hwnd') and self._last_real_active_hwnd:
+                        last_hwnd = self._last_real_active_hwnd
+                        if win32gui.IsWindow(last_hwnd) and win32gui.IsWindowVisible(last_hwnd):
+                            self.logger.info(f"[WINDOW] Сохранено последнее активное окно: HWND={last_hwnd}")
+                        else:
+                            self._last_real_active_hwnd = None
+                elif not is_mini_bar and not is_main_window:
+                    self._last_real_active_hwnd = new_hwnd
+
                 self._auto_switch_fullscreen_window(new_hwnd, app_name)
             except Exception as e:
                 self.logger.warning(f"[WINDOW] Ошибка авто-переключения: {e}")
@@ -2454,12 +2944,63 @@ class ScreenshotTranslatorApp:
         if self.overlay_manager.is_dragging():
             return
 
-        # ============================================================
-        # ИСПРАВЛЕНИЕ: Используем _get_current_app_name() для получения активного приложения
-        # ============================================================
         active_app_name = self._get_current_app_name()
 
+        # Проверяем, является ли активное окно мини-баром
+        is_mini_bar_active = False
+        if hasattr(self, '_mini_bar_window') and self._mini_bar_window:
+            try:
+                mini_bar_hwnd = int(self._mini_bar_window.window.winfo_id())
+                if new_hwnd == mini_bar_hwnd:
+                    is_mini_bar_active = True
+                    self.logger.info("[WINDOW] Мини-бар активен, оверлеи остаются видимыми")
+            except:
+                pass
+
+        # Проверяем, является ли активное окно главным окном приложения
+        is_main_window_active = False
+        if hasattr(self, 'ui') and hasattr(self.ui, 'root'):
+            try:
+                main_hwnd = int(self.ui.root.winfo_id())
+                if new_hwnd == main_hwnd:
+                    is_main_window_active = True
+                    self.logger.info("[WINDOW] Главное окно активно, оверлеи будут скрыты")
+            except:
+                pass
+
         auto_hide_enabled = self.settings.get_auto_hide_overlay() if hasattr(self, 'settings') else True
+
+        # ============================================================
+        # ЕСЛИ АКТИВНО ГЛАВНОЕ ОКНО ПРИЛОЖЕНИЯ — СКРЫВАЕМ ВСЕ ОВЕРЛЕИ
+        # ============================================================
+        if is_main_window_active:
+            self.logger.info("[WINDOW] Главное окно активно, скрываем все оверлеи")
+            for overlay in self.overlay_manager.overlays:
+                try:
+                    if overlay.visible:
+                        overlay.hide(by_user=False)
+                        self.logger.info(f"[WINDOW] Скрыт оверлей для {overlay._app_name}")
+                except Exception as e:
+                    self.logger.warning(f"[WINDOW] Ошибка скрытия оверлея: {e}")
+
+            # Обновляем список окон
+            if hasattr(self, 'window_list'):
+                self.window_list.refresh()
+            return
+
+        # ============================================================
+        # ЕСЛИ АКТИВЕН МИНИ-БАР — НЕ СКРЫВАЕМ ОВЕРЛЕИ
+        # ============================================================
+        if is_mini_bar_active:
+            self.logger.info("[WINDOW] Мини-бар активен, оверлеи не скрываем")
+            if hasattr(self, 'window_list'):
+                self.window_list.refresh()
+            return
+
+        # ============================================================
+        # ОСТАЛЬНАЯ ЛОГИКА ДЛЯ ДРУГИХ ПРИЛОЖЕНИЙ
+        # ============================================================
+        f2_overlays_shown = False
 
         if active_app_name:
             f2_overlays = []
@@ -2478,6 +3019,7 @@ class ScreenshotTranslatorApp:
                                 overlay._is_visible_by_user = True
                                 if not overlay.visible:
                                     overlay.show()
+                                    f2_overlays_shown = True
                                     self.logger.info(
                                         f"[WINDOW] Показан F2-оверлей для {active_app_name} (auto-hide OFF)")
                         except Exception as e:
@@ -2490,6 +3032,7 @@ class ScreenshotTranslatorApp:
                                 overlay._is_visible_by_user = True
                                 if not overlay.visible:
                                     overlay.show()
+                                    f2_overlays_shown = True
                                     self.logger.info(
                                         f"[WINDOW] Показан F2-оверлей для {active_app_name} (auto-hide ON)")
                         except Exception as e:
@@ -2512,11 +3055,8 @@ class ScreenshotTranslatorApp:
                         except Exception as e:
                             self.logger.warning(f"[WINDOW] Ошибка скрытия оверлея: {e}")
         else:
-            self.logger.info("[WINDOW] Auto-hide выключен, F2-оверлеи не скрываются при переключении окон")
+            self.logger.info("[WINDOW] Auto-hide выключен, оверлеи не скрываются при переключении окон")
 
-        # ============================================================
-        # ОСТАВЛЯЕМ ЛОГИКУ ДЛЯ TRANSLATION_MONITOR
-        # ============================================================
         if hasattr(self, 'translation_monitor') and self.translation_monitor and auto_hide_enabled:
             monitor = self.translation_monitor
             for template_data in monitor.templates:
@@ -2532,6 +3072,10 @@ class ScreenshotTranslatorApp:
                         except Exception as e:
                             self.logger.warning(f"[WINDOW] Ошибка скрытия оверлея: {e}")
 
+        if f2_overlays_shown:
+            self._ensure_mini_bar_on_top()
+            self.logger.info("[WINDOW] Мини-бар поднят поверх F2-оверлеев")
+
         self.logger.info(
             f"[WINDOW] Переключение на {active_app_name}, оверлеи будут показаны монитором при нахождении шаблонов"
         )
@@ -2544,78 +3088,23 @@ class ScreenshotTranslatorApp:
         self._edit_mode_enabled = not getattr(self, '_edit_mode_enabled', False)
         self.settings.set_edit_mode_enabled(self._edit_mode_enabled)
 
-        # Обновляем все оверлеи (только режим редактирования, без принудительного показа)
-        self.overlay_manager.update_edit_mode_for_all(self._edit_mode_enabled)
+        # ============================================================
+        # ОПТИМИЗАЦИЯ: обновляем только видимые оверлеи
+        # ============================================================
+        visible_overlays = [ov for ov in self.overlay_manager.overlays if ov.visible]
+
+        if visible_overlays:
+            self.logger.info(f"[EDIT_MODE] Обновление {len(visible_overlays)} видимых оверлеев")
+            for overlay in visible_overlays:
+                try:
+                    overlay.update_edit_mode(self._edit_mode_enabled)
+                except Exception as e:
+                    self.logger.warning(f"[EDIT_MODE] Ошибка обновления оверлея: {e}")
+        else:
+            self.logger.info("[EDIT_MODE] Нет видимых оверлеев для обновления")
 
         status_text = "включён" if self._edit_mode_enabled else "выключен"
-        status_color = '#4CAF50' if self._edit_mode_enabled else '#ff9800'
-
-        self.ui.update_status(f"● Режим редактирования {status_text}", status_color)
         self.show_notification(f"✏️ Режим редактирования {status_text}")
-
-        if self._edit_mode_enabled:
-            # Включаем режим: отключаем автоскрытие и монитор видимости
-            for overlay in self.overlay_manager.overlays:
-                try:
-                    overlay.auto_hide_enabled = False
-                    overlay._stop_visibility_monitor()
-                    # НЕ ПОКАЗЫВАЕМ ОВЕРЛЕЙ ПРИНУДИТЕЛЬНО!
-                    # Оверлеи показываются только когда монитор находит шаблон
-                except Exception as e:
-                    self.logger.warning(f"[EDIT_MODE] Ошибка настройки оверлея: {e}")
-        else:
-            # Выключаем режим: включаем автоскрытие
-            for overlay in self.overlay_manager.overlays:
-                try:
-                    overlay.auto_hide_enabled = True
-                    if overlay.visible:
-                        overlay._start_visibility_monitor()
-                except Exception as e:
-                    self.logger.warning(f"[EDIT_MODE] Ошибка настройки оверлея: {e}")
-
-    def process(self):
-        """Скриншот окна (F2)"""
-        if self.translating or not self.ready:
-            return
-
-        self.set_actions_blocked(True)
-        current_hwnd = win32gui.GetForegroundWindow()
-        if current_hwnd:
-            self.screenshot._last_hwnd = current_hwnd
-            self.screenshot._is_fullscreen = self.screenshot.is_window_fullscreen(current_hwnd)
-
-        self.translating = True
-        # Убираем статус "translating" — только лог
-        self.logger.info("[F2] Захват скриншота...")
-        self.show_notification(self.get_string('notification_capturing'))
-
-        def capture_task():
-            try:
-                from PIL import Image
-                img = self.screenshot.capture_active_window()
-                if not img:
-                    # Ошибка захвата — только лог
-                    self.logger.error("[F2] Ошибка захвата окна")
-                    self.translating = False
-                    self.set_actions_blocked(False)
-                    return
-
-                self.ui.root.after(0, self._show_translation_overlay)
-                path = self.temp_dir / f"scr_{int(time.time())}.png"
-                img.save(path)
-
-                task = {'type': 'screenshot', 'image_path': path, 'area_rect': None}
-                self.translation_queue.append(task)
-                self.translating = False
-
-                if not self.is_processing_queue:
-                    self._process_next_in_queue()
-            except Exception as e:
-                self.logger.error(f"Ошибка захвата: {e}")
-                self.translating = False
-                self.set_actions_blocked(False)
-
-        threading.Thread(target=capture_task, daemon=True).start()
 
     def _on_translate_finished(self, result, error):
         self.logger.info(f"[DEBUG] === _on_translate_finished НАЧАЛО ===")
@@ -2672,6 +3161,22 @@ class ScreenshotTranslatorApp:
                             f"[DEBUG] {'Временный' if is_temporary else 'Постоянный'} шаблон #{pair_index} добавлен в монитор, время жизни: {lifetime_seconds}с"
                         )
                         overlay_created = True
+
+                        # Локализованное уведомление о добавлении шаблона
+                        if is_temporary:
+                            msg = self.get_string('template_added_temporary').format(
+                                index=pair_index,
+                                lifetime=lifetime_seconds
+                            )
+                        else:
+                            if target_app_name:
+                                msg = self.get_string('template_added_for_app').format(
+                                    index=pair_index,
+                                    app_name=target_app_name
+                                )
+                            else:
+                                msg = self.get_string('template_added').format(index=pair_index)
+                        self.show_notification(msg)
                     else:
                         self.logger.warning("[DEBUG] Не удалось добавить шаблон в монитор")
                 else:
@@ -2695,7 +3200,7 @@ class ScreenshotTranslatorApp:
                             is_temporary=is_temporary,
                             lifetime_seconds=lifetime_seconds,
                             app_name=app_name,
-                            force_edit_mode=True  # <-- ВСЕГДА ВКЛЮЧАЕМ РЕЖИМ РЕДАКТИРОВАНИЯ ДЛЯ F2
+                            force_edit_mode=True
                         )
 
                         if overlay:
@@ -2703,14 +3208,25 @@ class ScreenshotTranslatorApp:
                             overlay._hidden_by_user = False
                             if not overlay.visible:
                                 overlay.show()
+                                self._add_recent_overlay(overlay)
                             self.ui.root.after(100, self.window_list.refresh)
                             overlay_created = True
 
+                            # Локализованное уведомление о создании оверлея
+                            if app_name:
+                                msg = self.get_string('overlay_created_single').format(app_name=app_name)
+                            else:
+                                msg = self.get_string('overlay_created')
+                            self.show_notification(msg)
+
                     self._pending_region_path = None
+
+                if overlay_created:
+                    self.ui.root.after(150, self._ensure_mini_bar_on_top)
 
             else:
                 self.logger.warning("Результат перевода пустой")
-                self.show_notification("Ошибка перевода")
+                self.show_notification(self.get_string('translation_error') or "Ошибка перевода")
 
             if overlay_created:
                 self.logger.info("[DEBUG] Оверлей создан, скрываем индикатор")
@@ -2723,7 +3239,7 @@ class ScreenshotTranslatorApp:
             self.logger.error(f"Ошибка показа результата: {e}")
             import traceback
             traceback.print_exc()
-            self.show_notification("Ошибка при обработке перевода")
+            self.show_notification(self.get_string('overlay_creation_error').format(error=str(e)[:30]))
             self._hide_translation_overlay()
 
         finally:
@@ -2777,15 +3293,16 @@ class ScreenshotTranslatorApp:
         self.set_actions_blocked(False)
 
     def _capture_window_for_area(self):
-        """Захват окна для области"""
+        """Захват окна для области (F3)"""
         try:
             from PIL import ImageGrab
             from src.window_utils import make_windowed_fullscreen
             import time
 
-            current_hwnd = win32gui.GetForegroundWindow()
+            # === ПОЛУЧАЕМ РЕАЛЬНОЕ АКТИВНОЕ ОКНО, ИГНОРИРУЯ НАШЕ ПРИЛОЖЕНИЕ ===
+            current_hwnd = self._get_real_active_window()
+
             if not current_hwnd:
-                # Ошибка захвата — только лог
                 self.logger.error("[F3] Не удалось получить активное окно")
                 self._capture_mode = False
                 self.set_actions_blocked(False)
@@ -2814,7 +3331,6 @@ class ScreenshotTranslatorApp:
 
             img = ImageGrab.grab()
             if not img:
-                # Ошибка захвата — только лог
                 self.logger.error("[F3] Ошибка захвата экрана")
                 self._capture_mode = False
                 self.set_actions_blocked(False)
@@ -2827,7 +3343,6 @@ class ScreenshotTranslatorApp:
             self._show_continuous_area_selection_window(screenshot_path)
         except Exception as e:
             self.logger.error(f"Ошибка захвата области: {e}")
-            # Ошибка — только лог
             self._capture_mode = False
             self.set_actions_blocked(False)
             self.ui.root.deiconify()
@@ -2945,11 +3460,8 @@ class ScreenshotTranslatorApp:
             return
 
         self.initializing = True
-        self.ui.update_status("● " + self.ui.get_string('starting_browser'), '#ff9800')
+        self.logger.info("[APP] Инициализация браузера...")
 
-        # ============================================================
-        # ИСПРАВЛЕНИЕ: проверяем debug_mode при показе браузера
-        # ============================================================
         show_browser = self.settings.get_show_browser()
         if self.debug_mode:
             show_browser = True
@@ -3096,6 +3608,10 @@ class ScreenshotTranslatorApp:
         """Обработчик изменения настроек"""
         self.ui.update_ui_language()
 
+        # Обновляем надписи с хоткеями
+        if hasattr(self.ui, 'update_hotkey_labels'):
+            self.ui.update_hotkey_labels()
+
         # Проверяем, изменился ли движок перевода
         if not hasattr(self, '_last_engine'):
             self._last_engine = self.settings.get_translator_engine()
@@ -3130,12 +3646,6 @@ class ScreenshotTranslatorApp:
                         # Для Яндекс используем специальный метод обновления языка через интерфейс
                         self.logger.info("[YANDEX] Обновление языка через интерфейс")
                         self.browser_worker.update_yandex_language(new_lang)
-                        # Обновляем статус, но не перезапускаем браузер
-                        engine_name = "Яндекс.Переводчик (OCR)"
-                        self.ui.update_status(
-                            f"● {self.ui.get_string('ready')} ({engine_name}, {new_lang.upper()})",
-                            '#4CAF50'
-                        )
                         # Обновляем язык в браузере
                         if hasattr(self.browser_worker, 'translator') and self.browser_worker.translator:
                             self.browser_worker.translator.target_lang = new_lang
@@ -3151,14 +3661,10 @@ class ScreenshotTranslatorApp:
             engine = self.settings.get_translator_engine()
             engine_name = "Google Translate" if engine == "google" else "Яндекс.Переводчик (OCR)"
             target_lang = self.settings.get_target_language()
+            ready_text = self.ui.get_string('ready')
             self.ui.update_status(
-                f"● {self.ui.get_string('ready')} ({engine_name}, {target_lang.upper()})",
+                f"● {ready_text} ({engine_name}, {target_lang.upper()})",
                 '#4CAF50'
-            )
-        elif hasattr(self, 'initializing') and self.initializing:
-            self.ui.update_status(
-                "● " + self.ui.get_string('starting_browser'),
-                '#ff9800'
             )
 
     def reset_settings(self):
@@ -3171,12 +3677,29 @@ class ScreenshotTranslatorApp:
             messagebox.showinfo(self.ui.get_string('settings_title'), self.ui.get_string('settings_reset_done'))
 
     def toggle_language(self):
+        """Переключает язык интерфейса"""
         current = self.settings.get_language()
         new = "en" if current == "ru" else "ru"
         self.settings.set_language(new)
+
+        # Обновляем интерфейс главного окна
         self.ui.update_ui_language()
+
+        # Обновляем кнопку языка
         if hasattr(self.ui, 'lang_btn'):
             self.ui.lang_btn.config(text="EN" if new == "ru" else "RU")
+
+        # ============================================================
+        # ОБНОВЛЯЕМ МИНИ-БАР, ЕСЛИ ОН ОТКРЫТ
+        # ============================================================
+        if hasattr(self, '_mini_bar_window') and self._mini_bar_window:
+            try:
+                self._mini_bar_window.update_language()
+                self.logger.info("[APP] Язык мини-бара обновлён")
+            except Exception as e:
+                self.logger.warning(f"[APP] Ошибка обновления языка мини-бара: {e}")
+
+        self.logger.info(f"[APP] Язык интерфейса переключён на {new}")
 
     def open_app_folder(self):
         try:
@@ -3239,11 +3762,7 @@ class ScreenshotTranslatorApp:
         help_window.focus_force()
 
     def on_close(self):
-        """Закрытие приложения с улучшенной обработкой потоков и таймаутами."""
-        import time
-        import threading
-        import os
-        import sys
+        """Закрытие приложения с ожиданием очистки."""
 
         self.logger.info("=" * 60)
         self.logger.info("🛑 НАЧАЛО ЗАКРЫТИЯ ПРИЛОЖЕНИЯ")
@@ -3252,7 +3771,7 @@ class ScreenshotTranslatorApp:
         # 1. Устанавливаем глобальный флаг закрытия
         self._closing = True
 
-        # 2. Сохраняем состояние оверлеев перед закрытием
+        # 2. Сохраняем состояние оверлеев
         if hasattr(self, 'overlay_manager') and self.overlay_manager:
             try:
                 self.overlay_manager.save_overlay_state(immediate=True)
@@ -3266,7 +3785,7 @@ class ScreenshotTranslatorApp:
         except:
             pass
 
-        # 4. Отключаем горячие клавиши (хуки keyboard)
+        # 4. Отключаем горячие клавиши
         try:
             import keyboard
             keyboard.unhook_all()
@@ -3282,7 +3801,7 @@ class ScreenshotTranslatorApp:
         except Exception as e:
             self.logger.warning(f"[CLOSE] Ошибка сохранения настроек: {e}")
 
-        # 6. Останавливаем TranslationMonitor с таймаутом
+        # 6. Останавливаем TranslationMonitor
         if hasattr(self, 'translation_monitor') and self.translation_monitor:
             try:
                 self.logger.info("[CLOSE] Остановка TranslationMonitor...")
@@ -3295,20 +3814,16 @@ class ScreenshotTranslatorApp:
         if hasattr(self, 'browser_worker') and self.browser_worker:
             try:
                 self.logger.info("[CLOSE] Остановка BrowserWorker...")
-                # Устанавливаем флаг отмены в переводчике
                 translator = self.browser_worker.get_translator()
                 if translator:
                     try:
                         translator.cancel_translation()
                     except:
                         pass
-
-                # Останавливаем рабочий поток
                 self.browser_worker.stop()
                 self.logger.info("[CLOSE] BrowserWorker остановлен")
             except Exception as e:
                 self.logger.warning(f"[CLOSE] Ошибка остановки BrowserWorker: {e}")
-                # В случае ошибки - пробуем закрыть браузер напрямую
                 try:
                     translator = self.browser_worker.get_translator()
                     if translator:
@@ -3334,7 +3849,23 @@ class ScreenshotTranslatorApp:
             except Exception as e:
                 self.logger.warning(f"[CLOSE] Ошибка освобождения DXcam: {e}")
 
-        # 10. Закрываем главное окно (убираем лишнюю задержку)
+        # 10. Очищаем временные профили СИНХРОННО с таймаутом
+        try:
+            from src.temp_cleaner import cleanup_all_profiles_sync, find_app_temp_dirs
+
+            dirs = find_app_temp_dirs()
+            if dirs:
+                self.logger.info(f"[CLOSE] Найдено {len(dirs)} папок для удаления, запуск очистки...")
+
+                # Синхронное удаление (блокирует, но быстро)
+                deleted = cleanup_all_profiles_sync(logger=self.logger)
+                self.logger.info(f"[CLOSE] Очистка завершена, удалено {deleted} папок")
+            else:
+                self.logger.info("[CLOSE] Временные папки не найдены")
+        except Exception as e:
+            self.logger.warning(f"[CLOSE] Ошибка очистки временных файлов: {e}")
+
+        # 11. Закрываем главное окно
         try:
             self.logger.info("[CLOSE] Закрытие главного окна...")
             if self.ui and self.ui.root:
@@ -3346,6 +3877,3 @@ class ScreenshotTranslatorApp:
         self.logger.info("=" * 60)
         self.logger.info("✅ ЗАКРЫТИЕ ЗАВЕРШЕНО")
         self.logger.info("=" * 60)
-
-        # Убираем принудительный выход os._exit(0) - теперь это не нужно
-        # os._exit(0) # <--- УДАЛЕНО

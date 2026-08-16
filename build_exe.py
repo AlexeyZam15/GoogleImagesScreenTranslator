@@ -440,22 +440,35 @@ def copy_additional_files():
             print(f"⚠️ Не удалось скопировать иконку: {e}")
 
 
-def create_launcher_bat():
-    """Создаёт .bat файл для быстрого запуска"""
+def create_debug_launcher_bat():
+    """
+    Создаёт .bat файл для запуска в режиме отладки.
+    .bat создаётся рядом с .exe, использует относительный путь.
+    Консоль НЕ остаётся открытой после запуска.
+    """
     output_app_dir = Path(OUTPUT_DIR) / APP_NAME
+    exe_path = output_app_dir / f"{APP_NAME}.exe"
+
+    if not exe_path.exists():
+        print(f"⚠️ Файл {exe_path} не найден, ярлык отладки не создан")
+        return
 
     bat_content = f'''@echo off
-echo Запуск {APP_NAME}...
-start "" "{output_app_dir}\\{APP_NAME}.exe"
+:: Запуск {APP_NAME} в режиме отладки
+:: Ярлык находится рядом с .exe, использует относительный путь
+start "" "{APP_NAME}.exe" --debug
 '''
 
-    bat_path = Path(OUTPUT_DIR) / f"Запустить_{APP_NAME}.bat"
+    bat_path = output_app_dir / f"Запустить_{APP_NAME}_Debug.bat"
     try:
         with open(bat_path, 'w', encoding='utf-8') as f:
             f.write(bat_content)
-        print(f"✅ Создан файл запуска: {bat_path}")
+        print(f"✅ Создан файл запуска в режиме отладки: {bat_path}")
+        print(f"   → Запускает {APP_NAME}.exe с аргументом --debug")
+        print(f"   → .bat находится рядом с .exe")
+        print(f"   → Консоль закрывается после запуска (используется start)")
     except Exception as e:
-        print(f"⚠️ Не удалось создать .bat файл: {e}")
+        print(f"⚠️ Не удалось создать debug .bat файл: {e}")
 
 
 if __name__ == "__main__":
@@ -478,12 +491,12 @@ if __name__ == "__main__":
     # Показываем размер
     show_size_info()
 
-    # Создаём .bat для запуска
-    create_launcher_bat()
+    # Создаём .bat для запуска в режиме отладки (рядом с .exe)
+    create_debug_launcher_bat()
 
     print("\n" + "=" * 60)
     print("🎉 ГОТОВО! Запустите:")
-    print(f"   {OUTPUT_DIR}\\{APP_NAME}\\{APP_NAME}.exe")
+    print(f"   • Режим отладки: {OUTPUT_DIR}\\{APP_NAME}\\Запустить_{APP_NAME}_Debug.bat")
     print("=" * 60)
     print("\n📌 ПРИМЕЧАНИЯ:")
     print("   - Сборка может занимать 15-25 минут")
@@ -492,4 +505,5 @@ if __name__ == "__main__":
     print("     - easyocr, scipy, scikit-image, shapely, pyclipper")
     print("   - Добавлены стандартные модули: pydoc, doctest, linecache, atexit, signal")
     print("   - CUDA исключена для уменьшения размера (OCR работает на CPU)")
+    print("   - .bat для отладки находится рядом с .exe")
     print("=" * 60)

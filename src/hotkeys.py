@@ -153,13 +153,15 @@ class HotkeyManager:
             for action, hotkey in self._hotkey_actions.items():
                 if action in special_actions:
                     continue  # Эти обрабатываются отдельно
-                if hotkey:
+                if hotkey:  # <-- РЕГИСТРИРУЕМ ТОЛЬКО ЕСЛИ ХОТКЕЙ НЕ ПУСТОЙ
                     try:
                         # Используем add_hotkey для поддержки комбинаций
                         keyboard.add_hotkey(hotkey, lambda a=action: self._queue_action(a), suppress=True)
                         self.logger.info(f"[HOTKEYS] Зарегистрировано: {hotkey} -> {action}")
                     except Exception as e:
                         self.logger.warning(f"[HOTKEYS] Не удалось зарегистрировать {hotkey}: {e}")
+                else:
+                    self.logger.info(f"[HOTKEYS] Хоткей для {action} не задан, пропускаем")
 
             # Регистрируем F3 отдельно для обработки длительного зажатия
             try:
@@ -169,13 +171,15 @@ class HotkeyManager:
             except Exception as e:
                 self.logger.warning(f"[HOTKEYS] Не удалось зарегистрировать F3: {e}")
 
-            # Регистрируем F5 отдельно (аналогично F3)
-            try:
-                keyboard.on_press_key('f5', self._on_f5_down, suppress=True)
-                keyboard.on_release_key('f5', self._on_f5_up, suppress=True)
-                self.logger.info("[HOTKEYS] Зарегистрировано: F5 (блокировка)")
-            except Exception as e:
-                self.logger.warning(f"[HOTKEYS] Не удалось зарегистрировать F5: {e}")
+            # Регистрируем F5 отдельно (аналогично F3) - ТОЛЬКО ЕСЛИ ЗАДАН ХОТКЕЙ
+            f5_hotkey = self.settings.get_hotkey("edit_mode")
+            if f5_hotkey and f5_hotkey.lower() == "f5":
+                try:
+                    keyboard.on_press_key('f5', self._on_f5_down, suppress=True)
+                    keyboard.on_release_key('f5', self._on_f5_up, suppress=True)
+                    self.logger.info("[HOTKEYS] Зарегистрировано: F5 (блокировка)")
+                except Exception as e:
+                    self.logger.warning(f"[HOTKEYS] Не удалось зарегистрировать F5: {e}")
 
             # ============================================================
             # ВОССТАНАВЛИВАЕМ ГЛОБАЛЬНЫЙ ХУК ESC

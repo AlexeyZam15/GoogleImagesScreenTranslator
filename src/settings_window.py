@@ -26,8 +26,8 @@ class SettingsWindow:
 
         self.window = tk.Toplevel(self.parent)
         self.window.title(self.get_string('settings_title'))
-        self.window.geometry("750x750")
-        self.window.minsize(700, 650)
+        self.window.geometry("750x650")  # Уменьшен размер, так как убрали вкладку
+        self.window.minsize(700, 550)
         self.window.resizable(True, True)
         self.window.configure(bg='#1e1e1e')
 
@@ -306,7 +306,7 @@ class SettingsWindow:
         ).pack(anchor=tk.W, pady=(5, 0), fill=tk.X)
 
     def _create_ui_tab(self, notebook):
-        """Создает вкладку 'Интерфейс'"""
+        """Создает вкладку 'Интерфейс' - БЕЗ выбора целевого языка"""
         ui_frame = tk.Frame(notebook, bg='#1e1e1e')
         notebook.add(ui_frame, text="  🎨 " + self.get_string('settings_ui_tab'))
 
@@ -314,12 +314,11 @@ class SettingsWindow:
         ui_inner.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         # ============================================================
-        # ВЫБОР ЦЕЛЕВОГО ЯЗЫКА ПЕРЕВОДА УДАЛЕН
-        # Теперь он находится во вкладке "Движок"
+        # ВЫБОР ЦЕЛЕВОГО ЯЗЫКА УДАЛЕН - теперь он в главном окне
         # ============================================================
 
         # ============================================================
-        # ОСТАЛЬНЫЕ НАСТРОЙКИ
+        # ОСТАЛЬНЫЕ НАСТРОЙКИ ИНТЕРФЕЙСА
         # ============================================================
         self.show_indicator_var = tk.BooleanVar(value=self.settings.get_show_translation_indicator())
         indicator_cb = tk.Checkbutton(
@@ -712,7 +711,7 @@ class SettingsWindow:
         dialog.bind('<Return>', lambda e: on_confirm())
 
     def save_settings(self):
-        """Сохраняет настройки."""
+        """Сохраняет настройки - БЕЗ языка и движка (они в главном окне)"""
         logger = logging.getLogger(__name__)
 
         # БЛОКИРУЕМ КНОПКУ НАСТРОЕК И МЕНЮ
@@ -755,19 +754,11 @@ class SettingsWindow:
         new_auto_hide = self.auto_hide_var.get()
 
         # ============================================================
-        # СОХРАНЯЕМ ЦЕЛЕВОЙ ЯЗЫК ПЕРЕВОДА ИЗ НОВОГО КОМБОБОКСА В НАСТРОЙКАХ
+        # СОХРАНЕНИЕ ЦЕЛЕВОГО ЯЗЫКА УДАЛЕНО - теперь в главном окне
+        # СОХРАНЕНИЕ ДВИЖКА УДАЛЕНО - теперь в главном окне
         # ============================================================
-        old_target_lang = self.settings.get_target_language()
-        new_target_lang = old_target_lang
 
-        selected = self.target_lang_in_settings_var.get()
-        if selected and "(" in selected and ")" in selected:
-            new_target_lang = selected.split("(")[-1].replace(")", "").strip()
-            if old_target_lang != new_target_lang:
-                self.settings.set_target_language(new_target_lang)
-                logger.info(f"[SETTINGS] Целевой язык изменён: {old_target_lang} -> {new_target_lang}")
-
-        # Сохраняем все настройки
+        # Сохраняем все настройки (КРОМЕ языка и движка)
         self.settings.set_browser_path(new_browser_path)
         self.settings.set_show_translation_indicator(self.show_indicator_var.get())
         self.settings.set_auto_hide_overlay(new_auto_hide)
@@ -777,11 +768,7 @@ class SettingsWindow:
         self.settings.set_monitor_delay(self.monitor_delay_var.get())
         self.settings.set_temporary_lifetime(self.temp_lifetime_var.get())
 
-        # Сохраняем движок перевода
-        old_engine = self.settings.get_translator_engine()
-        new_engine = self.translator_engine_var.get()
-        self.settings.set_translator_engine(new_engine)
-
+        # Сохраняем режим редактирования
         edit_mode = self.edit_mode_var.get()
         self.settings.set_edit_mode_enabled(edit_mode)
 
@@ -816,19 +803,12 @@ class SettingsWindow:
                         monitor.stop()
 
         # ============================================================
-        # ПРОВЕРЯЕМ: ИЗМЕНИЛСЯ ЛИ ЯЗЫК ИЛИ ДВИЖОК ИЛИ ПУТЬ К БРАУЗЕРУ
+        # ПРОВЕРКА: ИЗМЕНИЛСЯ ЛИ ПУТЬ К БРАУЗЕРУ
         # ============================================================
-        language_changed = (old_target_lang != new_target_lang)
-        engine_changed = (old_engine != new_engine)
         browser_path_changed = (old_browser_path != new_browser_path)
 
-        if language_changed or engine_changed or browser_path_changed:
-            if language_changed:
-                logger.info(f"[SETTINGS] Язык изменен: {old_target_lang} -> {new_target_lang}")
-            if engine_changed:
-                logger.info(f"[SETTINGS] Движок изменен: {old_engine} -> {new_engine}")
-            if browser_path_changed:
-                logger.info(f"[SETTINGS] Путь к браузеру изменен: {old_browser_path} -> {new_browser_path}")
+        if browser_path_changed:
+            logger.info(f"[SETTINGS] Путь к браузеру изменен: {old_browser_path} -> {new_browser_path}")
 
             if hasattr(self.app, 'ready') and self.app.ready:
                 logger.info("[SETTINGS] Браузер активен, выполняем перезапуск...")
@@ -836,11 +816,9 @@ class SettingsWindow:
                     self.app.update_status("● " + self.app.get_string('starting_browser'), '#ff9800')
 
                 # Перезапускаем переводчик с колбэком для разблокировки
-                if hasattr(self.app, '_restart_translator'):
-                    # Сохраняем ссылку на self для колбэка
+                if hasattr(self.app, '_restart_translator_with_callback'):
                     settings_window = self
 
-                    # Создаем обертку для колбэка, которая разблокирует кнопку
                     def on_restart_complete(*args, **kwargs):
                         logger.info("[SETTINGS] Перезапуск завершен, разблокируем кнопку настроек")
                         if hasattr(settings_window, 'app') and hasattr(settings_window.app, 'ui'):
@@ -848,10 +826,8 @@ class SettingsWindow:
                             settings_window.app.ui.set_settings_menu_enabled(True)
                             logger.info("[SETTINGS] Кнопка настроек и меню разблокированы")
 
-                    # Передаем колбэк в перезапуск
                     self.app._restart_translator_with_callback(on_restart_complete)
                 else:
-                    # Если нет _restart_translator - разблокируем сразу
                     if hasattr(self, 'app') and hasattr(self.app, 'ui'):
                         self.app.ui.settings_btn.config(state=tk.NORMAL, bg='#3c3c3c', fg='#cccccc')
                         self.app.ui.set_settings_menu_enabled(True)
@@ -859,7 +835,6 @@ class SettingsWindow:
                 logger.info("[SETTINGS] Браузер не активен, перезапуск не требуется")
                 if hasattr(self.app, 'update_status'):
                     self.app.update_status("● Настройки сохранены", '#4CAF50')
-                # Разблокируем кнопку
                 if hasattr(self, 'app') and hasattr(self.app, 'ui'):
                     self.app.ui.settings_btn.config(state=tk.NORMAL, bg='#3c3c3c', fg='#cccccc')
                     self.app.ui.set_settings_menu_enabled(True)
@@ -930,7 +905,7 @@ class SettingsWindow:
             pass
 
     def _do_reset(self):
-        """Реальная логика сброса настроек"""
+        """Реальная логика сброса настроек - БЕЗ языка и движка"""
         import logging
         logger = logging.getLogger(__name__)
 
@@ -938,22 +913,31 @@ class SettingsWindow:
 
         current_lang = self.settings.get_language()
         current_show_browser = self.settings.get_show_browser()
-        logger.info(f"[SETTINGS] Текущий язык: {current_lang}, show_browser: {current_show_browser}")
+        current_engine = self.settings.get_translator_engine()  # Сохраняем текущий движок
+        current_target_lang = self.settings.get_target_language()  # Сохраняем текущий язык
+        logger.info(f"[SETTINGS] Текущие: язык={current_lang}, show_browser={current_show_browser}, "
+                    f"engine={current_engine}, target_lang={current_target_lang}")
 
+        # Сбрасываем ВСЕ настройки к стандартным
         for key, value in Settings.DEFAULT_SETTINGS.items():
             self.settings.set(key, value)
 
+        # Восстанавливаем ТОЛЬКО язык интерфейса, показ браузера, движок и целевой язык
         self.settings.set_language(current_lang)
         self.settings.set_show_browser(current_show_browser)
-        logger.info(f"[SETTINGS] Восстановлены: язык={current_lang}, show_browser={current_show_browser}")
+        self.settings.set_translator_engine(current_engine)  # Движок остается как был
+        self.settings.set_target_language(current_target_lang)  # Язык остается как был
+        logger.info(f"[SETTINGS] Восстановлены: язык={current_lang}, show_browser={current_show_browser}, "
+                    f"engine={current_engine}, target_lang={current_target_lang}")
 
+        # <-- ОБНОВЛЁННЫЙ СБРОС ХОТКЕЕВ: ТОЛЬКО F1 И F3 -->
         default_hotkeys = {
-            "screenshot": "f2",
-            "area": "f3",
-            "toggle_overlay": "f1",
-            "clear_all": "f4",
-            "edit_mode": "f5",
-            "auto_replace": "f6",
+            "screenshot": "",  # Удалён
+            "area": "f3",  # Оставлен
+            "toggle_overlay": "f1",  # Оставлен
+            "clear_all": "",  # Удалён
+            "edit_mode": "",  # Удалён
+            "auto_replace": "",  # Удалён
         }
         for action, default_key in default_hotkeys.items():
             self.settings.set_hotkey(action, default_key)
@@ -973,9 +957,8 @@ class SettingsWindow:
                 default_key = default_hotkeys.get(action, "")
                 var.set(default_key)
                 if action in self.hotkey_capture_manager.hotkey_buttons:
-                    self.hotkey_capture_manager.hotkey_buttons[action].config(
-                        text=default_key.upper() if default_key else "—"
-                    )
+                    display_text = default_key.upper() if default_key else "—"
+                    self.hotkey_capture_manager.hotkey_buttons[action].config(text=display_text)
 
         if hasattr(self, 'app') and hasattr(self.app, '_edit_mode_enabled'):
             edit_mode = self.settings.get_edit_mode_enabled()
@@ -998,6 +981,15 @@ class SettingsWindow:
         if hasattr(self, 'app') and hasattr(self.app, 'update_ui_language'):
             self.app.update_ui_language()
 
+        # Обновляем отображение в главном окне
+        if hasattr(self, 'app') and hasattr(self.app, 'ui'):
+            # Обновляем комбобокс движка
+            if hasattr(self.app.ui, 'update_engine_display'):
+                self.app.ui.update_engine_display(current_engine)
+            # Обновляем комбобокс языка
+            if hasattr(self.app.ui, 'update_language_display'):
+                self.app.ui.update_language_display(current_target_lang)
+
         if hasattr(self, 'app'):
             if hasattr(self.app, 'ready') and self.app.ready:
                 logger.info("[SETTINGS] Сброс настроек, перезапуск браузера...")
@@ -1015,7 +1007,7 @@ class SettingsWindow:
         self.window.destroy()
 
     def create_widgets(self):
-        """Создает все виджеты окна настроек"""
+        """Создает все виджеты окна настроек - без вкладки 'Движок'"""
         main_container = tk.Frame(self.window, bg='#1e1e1e')
         main_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=15)
 
@@ -1042,10 +1034,9 @@ class SettingsWindow:
         notebook = ttk.Notebook(main_container)
         notebook.pack(fill=tk.BOTH, expand=True, pady=(0, 12))
 
-        # Создаем вкладки с КОРОТКИМИ названиями
+        # Создаем вкладки (БЕЗ вкладки "Движок")
         self._create_browser_tab(notebook)
         self._create_ui_tab(notebook)
-        self._create_translator_tab(notebook)
         self._create_monitor_tab(notebook)
         self._create_hotkey_tab(notebook)
 
@@ -1524,7 +1515,7 @@ class SettingsWindow:
         self.window.geometry(f'{width}x{height}+{x}+{y}')
 
     def load_values(self):
-        """Загружает текущие настройки в поля."""
+        """Загружает текущие настройки в поля - БЕЗ языка"""
         current_path = self.settings.get_browser_path()
         self.browser_path_var.set(current_path)
 
@@ -1538,17 +1529,8 @@ class SettingsWindow:
             self.edit_mode_var.set(self.settings.get_edit_mode_enabled())
 
         # ============================================================
-        # ЗАГРУЖАЕМ ЦЕЛЕВОЙ ЯЗЫК В НОВЫЙ КОМБОБОКС
+        # ЗАГРУЗКА ЦЕЛЕВОГО ЯЗЫКА УДАЛЕНА - теперь в главном окне
         # ============================================================
-        if hasattr(self, 'target_lang_in_settings_combo'):
-            current_lang = self.settings.get_target_language()
-            from src.main_window import LANGUAGES
-            lang_display_names = [f"{name} ({code})" for code, name in LANGUAGES.items()]
-            lang_display_names.sort()
-            for item in lang_display_names:
-                if f"({current_lang})" in item:
-                    self.target_lang_in_settings_combo.set(item)
-                    break
 
         if hasattr(self, 'hotkey_capture_manager'):
             for action, var in self.hotkey_capture_manager.hotkey_vars.items():

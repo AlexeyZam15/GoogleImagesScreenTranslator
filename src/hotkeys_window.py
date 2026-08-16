@@ -135,13 +135,14 @@ class HotkeysWindow:
 
         canvas.bind('<Configure>', on_configure)
 
-        # Обновленное описание для area (F3) - добавлена информация о временном переводе через ПКМ
+        # <-- ОБНОВЛЁННЫЙ СПИСОК: ТОЛЬКО F1 И F3 ПО УМОЛЧАНИЮ -->
         hotkey_data = [
             ('toggle_overlay', '🔄', 'hotkey_toggle_overlay', self.get_string('hotkey_toggle_overlay_desc')),
-            ('screenshot', '📸', 'hotkey_screenshot', self.get_string('hotkey_screenshot_desc')),
             ('area', '✂️', 'hotkey_area',
              self.get_string('hotkey_area_desc') +
-             "\n💡 " + self.get_string('hotkey_area_temporary_hint')),  # <-- ДОБАВЛЕНА ПОДСКАЗКА
+             "\n💡 " + self.get_string('hotkey_area_temporary_hint')),
+            # Остальные действия показываются, но могут быть пустыми
+            ('screenshot', '📸', 'hotkey_screenshot', self.get_string('hotkey_screenshot_desc')),
             ('clear_all', '🗑️', 'hotkey_clear_all', self.get_string('hotkey_clear_all_desc')),
             ('edit_mode', '✏️', 'hotkey_edit_mode', self.get_string('hotkey_edit_mode_desc')),
             ('auto_replace', '🔄', 'hotkey_auto_replace', self.get_string('hotkey_auto_replace_desc')),
@@ -197,7 +198,7 @@ class HotkeysWindow:
 
             key_btn = tk.Label(
                 row_frame,
-                text=key_text,
+                text=key_text if key_text else "—",
                 bg='#3c3c3c',
                 fg=key_color,
                 font=("Segoe UI", 11, "bold"),
@@ -226,7 +227,7 @@ class HotkeysWindow:
             )
             desc_label.pack(fill=tk.X, padx=15, pady=(0, 12))
 
-        # Блок ESC
+        # Блок ESC (без изменений)
         esc_card = tk.Frame(
             cards_frame,
             bg='#2d2d2d',
@@ -292,8 +293,6 @@ class HotkeysWindow:
         )
         esc_desc.pack(fill=tk.X, padx=15, pady=(0, 12))
 
-        # УДАЛЕН блок hint_frame с подсказкой о времени жизни
-
         btn_frame = tk.Frame(main_frame, bg='#1e1e1e')
         btn_frame.pack(fill=tk.X, pady=(20, 0))
 
@@ -328,18 +327,19 @@ class HotkeysWindow:
     def reset_hotkeys(self):
         """Сбрасывает горячие клавиши к значениям по умолчанию без уведомления."""
         default_hotkeys = {
-            "screenshot": "f2",
-            "area": "f3",
-            "toggle_overlay": "f1",
-            "clear_all": "f4",
-            "edit_mode": "f5",
-            "auto_replace": "f6",
+            "screenshot": "",  # Удалён
+            "area": "f3",  # Оставлен
+            "toggle_overlay": "f1",  # Оставлен
+            "clear_all": "",  # Удалён
+            "edit_mode": "",  # Удалён
+            "auto_replace": "",  # Удалён
         }
 
         for action, default_key in default_hotkeys.items():
             self.settings.set_hotkey(action, default_key)
             self.hotkey_vars[action].set(default_key)
-            self.hotkey_buttons[action].config(text=default_key.upper(), bg='#2d2d2d')
+            display_text = default_key.upper() if default_key else "—"
+            self.hotkey_buttons[action].config(text=display_text, bg='#2d2d2d')
 
         self.settings.save()
 

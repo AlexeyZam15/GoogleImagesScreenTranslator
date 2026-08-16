@@ -19,7 +19,7 @@ class Settings:
         "hide_delay": 1500,
         "always_on_top": True,
         "current_profile": "default",
-        "show_browser": False,  # <-- ИЗМЕНЕНО: по умолчанию браузер скрыт
+        "show_browser": False,
         "show_translation_indicator": True,
         "browser_path": "",
         "auto_hide_overlay": True,
@@ -27,18 +27,20 @@ class Settings:
         "edit_mode_enabled": False,
         "auto_replace_translated": True,
         "temporary_lifetime": 180,
-        "translator_engine": "google",  # "google" или "yandex"
-        "target_language": "ru",
+        "translator_engine": "google",
+        # Позиция мини-бара (сохраняется между запусками)
+        "mini_bar_x": None,
+        "mini_bar_y": None,
     }
 
     # Значения горячих клавиш по умолчанию
     DEFAULT_HOTKEYS = {
-        "screenshot": "f2",
-        "area": "f3",
-        "toggle_overlay": "f1",
-        "clear_all": "f4",
-        "edit_mode": "f5",
-        "auto_replace": "f6",
+        "screenshot": "",  # Удалён
+        "area": "f3",  # Оставлен
+        "toggle_overlay": "f1",  # Оставлен
+        "clear_all": "",  # Удалён
+        "edit_mode": "",  # Удалён
+        "auto_replace": "",  # Удалён
         "fullscreen_ocr": "f3",  # Это же F3, но с длительным зажатием
     }
 
@@ -49,6 +51,25 @@ class Settings:
         self._config_dir = Path.home() / "Documents" / "GoogleScreenTranslate" / "config"
         self._config_file = self._config_dir / "settings.json"
         self.load()
+
+    def set_translator_engine_no_save(self, engine: str):
+        """Устанавливает движок перевода без автоматического сохранения (для быстрого переключения)"""
+        if engine in ["google", "yandex"]:
+            self.settings["translator_engine"] = engine
+
+    def get_mini_bar_position(self) -> tuple:
+        """Возвращает сохранённую позицию мини-бара (x, y) или None."""
+        x = self.settings.get("mini_bar_x")
+        y = self.settings.get("mini_bar_y")
+        if x is not None and y is not None:
+            return (x, y)
+        return None
+
+    def set_mini_bar_position(self, x: int, y: int):
+        """Сохраняет позицию мини-бара."""
+        self.settings["mini_bar_x"] = x
+        self.settings["mini_bar_y"] = y
+        self.save()
 
     def get_translator_engine(self) -> str:
         """Возвращает выбранный движок перевода ('google' или 'yandex')"""
@@ -137,6 +158,15 @@ class Settings:
         normalized = '+'.join(unique_parts)
         self.settings[f"hotkey_{action}"] = normalized
         self.save()
+
+        # Обновляем надписи в главном окне
+        try:
+            from src.main_window import MainWindow
+            if hasattr(self, '_app') and self._app and hasattr(self._app, 'ui'):
+                if hasattr(self._app.ui, 'update_hotkey_labels'):
+                    self._app.ui.update_hotkey_labels()
+        except Exception as e:
+            pass
 
     def get_all_hotkeys(self) -> dict:
         return {

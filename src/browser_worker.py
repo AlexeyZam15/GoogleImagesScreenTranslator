@@ -10,7 +10,7 @@ from typing import Optional, Callable, Any
 from pathlib import Path
 
 # Локальные импорты
-from src.translator import GoogleTranslateDebug
+from src.translators import GoogleTranslateDebug, YandexOcrTranslator
 from src.settings import Settings
 
 
@@ -42,6 +42,166 @@ class BrowserWorker:
         self._result_batch = []
         self._batch_max_size = 10
 
+    def cleanup_temp_profiles(self):
+        """
+        Удаляет все временные папки профилей, созданные приложением.
+        Вызывается при остановке или вручную.
+        """
+        try:
+            from src.temp_cleaner import cleanup_all_profiles, cleanup_old_profiles
+
+            self.logger.info("[BROWSER_WORKER] Очистка временных профилей...")
+
+            # Удаляем все профили, созданные приложением
+            deleted = cleanup_all_profiles(logger=self.logger)
+
+            if deleted > 0:
+                self.logger.info(f"[BROWSER_WORKER] Удалено {deleted} папок профилей")
+            else:
+                self.logger.info("[BROWSER_WORKER] Временные профили не найдены")
+
+        except ImportError:
+            self.logger.warning("[BROWSER_WORKER] Модуль temp_cleaner не найден, пропускаем очистку")
+        except Exception as e:
+            self.logger.warning(f"[BROWSER_WORKER] Ошибка очистки временных профилей: {e}")
+
+    def switch_engine(self, engine: str, target_lang: str, show_browser: bool,
+                      callback: Optional[Callable] = None) -> int:
+        """
+        Переключает движок перевода без перезапуска браузера.
+        Закрывает текущий переводчик и создаёт новый с теми же параметрами.
+        """
+        cmd_id = id(self) + len(self._command_queue.queue)
+        self._command_queue.put({
+            'type': 'switch_engine',
+            'id': cmd_id,
+            'args': [engine, target_lang, show_browser],
+            'kwargs': {},
+            'callback': callback
+        })
+        self.logger.info(f"Команда switch_engine отправлена в очередь (id={cmd_id}, engine={engine})")
+        return cmd_id
+
+    def _switch_engine(self, engine: str, target_lang: str, show_browser: bool):
+        """Выполняет переключение движка без перезапуска браузера."""
+        self.logger.info(f"[SWITCH_ENGINE] Переключение на движок: {engine}")
+
+        # Сохраняем старый контекст и PW перед закрытием страницы
+        old_context = None
+        old_pw = None
+        old_profile_dir = None
+        old_permissions = None
+
+        if self.translator:
+            self.logger.info("[SWITCH_ENGINE] Сохранение контекста текущего переводчика...")
+            try:
+                old_context = self.translator._context if hasattr(self.translator, '_context') else None
+                old_pw = self.translator._pw if hasattr(self.translator, '_pw') else None
+                old_profile_dir = self.translator._profile_dir if hasattr(self.translator, '_profile_dir') else None
+                # Сохраняем разрешения, если они были установлены
+                if hasattr(self.translator, '_permissions'):
+                    old_permissions = self.translator._permissions
+
+                # Закрываем только страницу, НЕ контекст
+                if hasattr(self.translator, '_page') and self.translator._page:
+                    self.translator._page.close()
+                    self.translator._page = None
+                    self.logger.info("[SWITCH_ENGINE] Страница закрыта, контекст сохранён")
+            except Exception as e:
+                self.logger.warning(f"[SWITCH_ENGINE] Ошибка при сохранении контекста: {e}")
+
+        # Создаём новый переводчик
+        self.logger.info(f"[SWITCH_ENGINE] Создание нового переводчика для движка: {engine}")
+
+        try:
+            if engine == "yandex":
+                new_translator = YandexOcrTranslator(
+                    headless=not show_browser,
+                    target_lang=target_lang,
+                    settings=self.settings
+                )
+            else:
+                new_translator = GoogleTranslateDebug(
+                    headless=not show_browser,
+                    target_lang=target_lang,
+                    settings=self.settings
+                )
+
+            # Если есть сохранённый контекст — используем его
+            if old_context is not None and old_pw is not None:
+                self.logger.info("[SWITCH_ENGINE] Используем существующий контекст браузера")
+                new_translator._pw = old_pw
+                new_translator._context = old_context
+                new_translator._profile_dir = old_profile_dir
+
+                # Сохраняем разрешения в новом переводчике
+                if old_permissions:
+                    new_translator._permissions = old_permissions
+
+                # Создаём новую страницу через метод переводчика
+                if new_translator.create_new_page():
+                    self.logger.info("[SWITCH_ENGINE] ✅ Новая страница создана в существующем контексте")
+
+                    # ============================================================
+                    # ВАЖНО: Явно запрашиваем разрешение на буфер обмена
+                    # ============================================================
+                    if hasattr(new_translator, '_grant_clipboard_permission'):
+                        new_translator._grant_clipboard_permission()
+                else:
+                    self.logger.warning("[SWITCH_ENGINE] Не удалось создать страницу, запускаем браузер заново")
+                    new_translator.start_browser()
+            else:
+                # Если контекста нет — запускаем браузер как обычно
+                self.logger.info("[SWITCH_ENGINE] Контекст не сохранён, запускаем браузер")
+                new_translator.start_browser()
+
+            # Обновляем состояние
+            self.translator = new_translator
+            self._ready = True
+            self._initializing = False
+            self.logger.info(f"[SWITCH_ENGINE] ✅ Переключение на {engine} завершено успешно")
+            return {'ready': True, 'engine': engine}
+
+        except Exception as e:
+            self._ready = False
+            self._initializing = False
+            self.logger.error(f"[SWITCH_ENGINE] Ошибка переключения на {engine}: {e}")
+            if self.translator:
+                try:
+                    self.translator.close_browser()
+                except:
+                    pass
+                self.translator = None
+            raise
+
+    def _execute_command(self, cmd_type: str, *args, **kwargs):
+        """Добавляем обработку команды switch_engine"""
+        self.logger.info(f"Выполнение команды: {cmd_type} с аргументами: args={args}, kwargs={kwargs}")
+        try:
+            if cmd_type == 'init':
+                return self._init_browser(*args, **kwargs)
+            elif cmd_type == 'translate':
+                return self._translate_image(*args, **kwargs)
+            elif cmd_type == 'restart':
+                return self._restart_browser(*args, **kwargs)
+            elif cmd_type == 'switch_engine':
+                return self._switch_engine(*args, **kwargs)
+            elif cmd_type == 'update_language':
+                return self._update_language(*args, **kwargs)
+            elif cmd_type == 'update_interface_language':
+                return self._update_interface_language(*args, **kwargs)
+            elif cmd_type == 'reset_page':
+                return self._reset_page()
+            elif cmd_type == 'update_yandex_language':
+                return self._update_yandex_language(*args, **kwargs)
+            elif cmd_type == 'close':
+                return self._close_browser()
+            else:
+                raise ValueError(f"Неизвестная команда: {cmd_type}")
+        except Exception as e:
+            self.logger.error(f"Ошибка выполнения команды {cmd_type}: {e}")
+            raise
+
     def update_yandex_language(self, target_lang: str, callback: Optional[Callable] = None) -> int:
         """Отправляет команду обновления языка для Яндекс.Переводчика"""
         cmd_id = id(self) + len(self._command_queue.queue)
@@ -60,7 +220,6 @@ class BrowserWorker:
             raise RuntimeError("Браузер не инициализирован")
 
         # Проверяем, что используется именно Яндекс
-        from src.translator import YandexOcrTranslator
         if not isinstance(self.translator, YandexOcrTranslator):
             self.logger.warning("Попытка обновить язык Яндекс, но используется другой движок")
             return {'success': False, 'error': 'Not a Yandex translator'}
@@ -193,21 +352,18 @@ class BrowserWorker:
                     self.logger.warning(f"Ошибка при закрытии старого браузера: {e}")
                 self.translator = None
 
-            import time
-            time.sleep(2.0)  # УВЕЛИЧЕНО: 0.5 -> 2.0
+            time.sleep(2.0)
 
             engine = self.settings.get_translator_engine()
             self.logger.info(f"Используемый движок перевода: {engine}")
 
             if engine == "yandex":
-                from src.translator import YandexOcrTranslator
                 self.translator = YandexOcrTranslator(
                     headless=not show_browser,
                     target_lang=target_lang,
                     settings=self.settings
                 )
             else:
-                from src.translator import GoogleTranslateDebug
                 self.translator = GoogleTranslateDebug(
                     headless=not show_browser,
                     target_lang=target_lang,
@@ -232,7 +388,6 @@ class BrowserWorker:
                 except Exception as e2:
                     self.logger.warning(f"Ошибка при закрытии браузера после ошибки: {e2}")
                 self.translator = None
-            import time
             time.sleep(0.5)
             raise
 
@@ -248,8 +403,7 @@ class BrowserWorker:
             self.translator = None
         self._ready = False
 
-        import time
-        time.sleep(2.0)  # УВЕЛИЧЕНО: 1.0 -> 2.0
+        time.sleep(2.0)
 
         return self._init_browser(show_browser, target_lang)
 
@@ -281,9 +435,6 @@ class BrowserWorker:
 
     def stop(self):
         """Останавливает рабочий поток с таймаутом и принудительным завершением"""
-        import time
-        import threading
-
         self.logger.info("[BROWSER_WORKER] Остановка...")
 
         # 1. Устанавливаем флаг остановки
@@ -316,44 +467,24 @@ class BrowserWorker:
                 self.logger.warning(f"[BROWSER_WORKER] Ошибка закрытия браузера: {e}")
             self.translator = None
 
-        # 5. Ждем завершения потока с таймаутом (уменьшено до 0.5 секунды)
+        # 5. Ждем завершения потока с таймаутом
         if self._thread and self._thread.is_alive():
             self.logger.info("[BROWSER_WORKER] Ожидание завершения потока...")
-            self._thread.join(timeout=0.5)  # УМЕНЬШЕНО: 3.0 -> 0.5
+            self._thread.join(timeout=0.5)
 
             if self._thread.is_alive():
                 self.logger.warning("[BROWSER_WORKER] Поток не завершился за 0.5 секунды, продолжаем закрытие.")
-                # Не пытаемся сделать поток демоном - просто продолжаем
-                # Поток будет завершен при выходе из процесса
+
+        # 6. Очищаем временные профили АСИНХРОННО (не блокирует)
+        try:
+            from src.temp_cleaner import cleanup_all_profiles
+            self.logger.info("[BROWSER_WORKER] Запуск асинхронной очистки временных профилей...")
+            cleanup_all_profiles(logger=self.logger)
+            self.logger.info("[BROWSER_WORKER] Очистка запущена в фоновом потоке")
+        except Exception as e:
+            self.logger.warning(f"[BROWSER_WORKER] Ошибка очистки временных профилей: {e}")
 
         self.logger.info("[BROWSER_WORKER] Остановлен")
-
-    def _execute_command(self, cmd_type: str, *args, **kwargs):
-        """Выполняет команду в рабочем потоке"""
-        self.logger.info(f"Выполнение команды: {cmd_type} с аргументами: args={args}, kwargs={kwargs}")
-        try:
-            if cmd_type == 'init':
-                return self._init_browser(*args, **kwargs)
-            elif cmd_type == 'translate':
-                return self._translate_image(*args, **kwargs)
-            elif cmd_type == 'restart':
-                return self._restart_browser(*args, **kwargs)
-            elif cmd_type == 'update_language':
-                return self._update_language(*args, **kwargs)
-            elif cmd_type == 'update_interface_language':
-                return self._update_interface_language(*args, **kwargs)
-            elif cmd_type == 'reset_page':
-                return self._reset_page()
-            # Новая команда для Yandex
-            elif cmd_type == 'update_yandex_language':
-                return self._update_yandex_language(*args, **kwargs)
-            elif cmd_type == 'close':
-                return self._close_browser()
-            else:
-                raise ValueError(f"Неизвестная команда: {cmd_type}")
-        except Exception as e:
-            self.logger.error(f"Ошибка выполнения команды {cmd_type}: {e}")
-            raise
 
     def _translate_image(self, image_path: Path, output_dir: Path):
         """Перевод изображения"""

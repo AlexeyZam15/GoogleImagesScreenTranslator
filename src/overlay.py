@@ -54,7 +54,8 @@ class OverlayWindow:
         '_image_offset_y', '_saved_window_height', '_saved_window_y',
         '_closing',
         '_save_timer', '_last_frame_update',
-        '_is_f2_overlay'  # <-- ФЛАГ ДЛЯ F2-ОВЕРЛЕЯ
+        '_is_f2_overlay',
+        '_updating_edit_mode'  # <-- ДОБАВЛЕН
     )
 
     def __init__(self, parent=None, app_title="Перевод скриншотов", auto_hide_enabled=True):
@@ -108,6 +109,11 @@ class OverlayWindow:
         # ФЛАГ: идентифицирует F2-оверлей
         # ============================================================
         self._is_f2_overlay = False
+
+        # ============================================================
+        # ФЛАГ ДЛЯ ПРЕДОТВРАЩЕНИЯ ПОВТОРНЫХ ОБНОВЛЕНИЙ РЕЖИМА РЕДАКТИРОВАНИЯ
+        # ============================================================
+        self._updating_edit_mode = False
 
         # Временный режим
         self._is_temporary = False
@@ -170,13 +176,37 @@ class OverlayWindow:
         self.root.bind('<Leave>', self._on_mouse_leave)
 
         # ============================================================
-        # ДОБАВЛЯЕМ ЛОКАЛЬНЫЙ ОБРАБОТЧИК ESC ДЛЯ ОВЕРЛЕЯ
+        # ДОБАВЛЯЕМ ПРИВЯЗКИ ДЛЯ ПОДНЯТИЯ МИНИ-БАРА
+        # ============================================================
+        self.canvas.bind('<ButtonPress-1>', self._on_click_raise_mini_bar, add='+')
+        self.root.bind('<ButtonPress-1>', self._on_click_raise_mini_bar, add='+')
+        self.root.bind('<FocusIn>', self._on_focus_raise_mini_bar, add='+')
+
+        # ============================================================
+        # ЛОКАЛЬНЫЙ ОБРАБОТЧИК ESC
         # ============================================================
         self.root.bind('<Escape>', self._on_escape_local)
         self.canvas.bind('<Escape>', self._on_escape_local)
         self.logger.info("[OVERLAY] Локальный обработчик ESC добавлен")
 
         self.logger.info("OverlayWindow инициализирован")
+
+    def _on_click_raise_mini_bar(self, event):
+        """Обработчик клика по оверлею — поднимает мини-бар поверх."""
+        self._raise_mini_bar()
+
+    def _on_focus_raise_mini_bar(self, event):
+        """Обработчик получения фокуса оверлеем — поднимает мини-бар поверх."""
+        self._raise_mini_bar()
+
+    def _raise_mini_bar(self):
+        """Поднимает мини-бар поверх оверлея."""
+        if hasattr(self, '_overlay_manager') and self._overlay_manager:
+            parent = self._overlay_manager.parent
+            if parent and hasattr(parent, '_ensure_mini_bar_on_top'):
+                if hasattr(parent, 'root') and parent.root:
+                    parent.root.after(10, parent._ensure_mini_bar_on_top)
+                    self.logger.debug("[OVERLAY] Мини-бар поднят после клика/фокуса")
 
     def _on_escape_local(self, event):
         """Локальный обработчик ESC для оверлея."""
@@ -352,6 +382,9 @@ class OverlayWindow:
             width = self.root.winfo_width()
             height = self.root.winfo_height()
 
+            # Удаляем старую рамку, если есть
+            self.canvas.delete('edit_frame')
+
             self._edit_frame = self.canvas.create_rectangle(
                 0, 0, width, height,
                 outline='#000000',
@@ -499,19 +532,13 @@ class OverlayWindow:
         except Exception as e:
             self.logger.warning(f"[DEBUG][hide] Ошибка сохранения позиции: {e}")
 
-        # ============================================================
-        # НЕ БЛОКИРУЕМ ПОКАЗ ПРИ F1
-        # by_user=True означает, что пользователь нажал F1 или ПКМ
-        # ============================================================
         if by_user:
             self._hidden_by_user = True
             self._is_visible_by_user = False
         else:
-            # При системном скрытии (переключение окон) НЕ сбрасываем _is_visible_by_user
             self._hidden_by_user = False
 
         self.visible = False
-
         self._stop_visibility_monitor()
 
         try:
@@ -519,6 +546,14 @@ class OverlayWindow:
             self.logger.info("[DEBUG][hide] оверлей скрыт")
         except Exception as e:
             self.logger.error(f"[DEBUG][hide] ОШИБКА: {e}")
+
+        # ============================================================
+        # СООБЩАЕМ РОДИТЕЛЮ, ЧТО ОВЕРЛЕЙ СКРЫТ
+        # ============================================================
+        if hasattr(self, '_overlay_manager') and self._overlay_manager:
+            parent = self._overlay_manager.parent
+            if parent and hasattr(parent, '_on_overlay_hidden'):
+                parent._on_overlay_hidden(self)
 
     def show(self):
         """Показывает оверлей."""
@@ -588,8 +623,21 @@ class OverlayWindow:
             self._is_visible_by_user = True
 
             # ============================================================
-            # УБРАН АВТОФОКУС НА ОВЕРЛЕЙ
+            # ДОБАВЛЯЕМ ОВЕРЛЕЙ В СПИСОК НЕДАВНО АКТИВНЫХ
             # ============================================================
+            if hasattr(self, '_overlay_manager') and self._overlay_manager:
+                parent = self._overlay_manager.parent
+                if parent and hasattr(parent, '_add_recent_overlay'):
+                    parent._add_recent_overlay(self)
+
+            # ============================================================
+            # ПОДНИМАЕМ МИНИ-БАР ПОВЕРХ ОВЕРЛЕЯ ПОСЛЕ ПОКАЗА
+            # ============================================================
+            if hasattr(self, '_overlay_manager') and self._overlay_manager:
+                parent = self._overlay_manager.parent
+                if parent and hasattr(parent, '_ensure_mini_bar_on_top'):
+                    if hasattr(parent, 'root') and parent.root:
+                        parent.root.after(50, parent._ensure_mini_bar_on_top)
 
             if self.auto_hide_enabled:
                 self._start_visibility_monitor()
@@ -600,31 +648,37 @@ class OverlayWindow:
 
     def update_edit_mode(self, edit_mode_enabled: bool):
         """Обновляет состояние режима редактирования для оверлея."""
-        self.logger.info(f"[DEBUG] Обновлен _edit_mode_enabled = {edit_mode_enabled}")
-
-        self._edit_mode_enabled = edit_mode_enabled
-
         # ============================================================
-        # ТОЛЬКО РАМКА! Монитор видимости и F1 продолжают работать
+        # ЗАЩИТА ОТ ПОВТОРНЫХ ВЫЗОВОВ
         # ============================================================
-        if edit_mode_enabled:
-            # Показываем рамку
-            self._show_edit_frame()
+        if hasattr(self, '_updating_edit_mode') and self._updating_edit_mode:
+            return
 
-            # Сбрасываем флаг скрытия мышью (чтобы оверлей не был скрыт из-за мыши)
-            # НО НЕ ВЛИЯЕМ НА F1 И АВТОСКРЫТИЕ ПРИ ПЕРЕКЛЮЧЕНИИ ОКОН
-            if self._hidden_by_mouse:
-                self._hidden_by_mouse = False
-                if not self.visible and self._last_image_path and self._last_window_rect:
-                    # Показываем только если оверлей НЕ скрыт пользователем (F1) и НЕ скрыт системой
-                    if not self._hidden_by_user and self._is_visible_by_user:
-                        self.show()
+        # Проверяем, изменилось ли состояние
+        if self._edit_mode_enabled == edit_mode_enabled:
+            self.logger.debug(f"[EDIT_MODE] Состояние не изменилось: {edit_mode_enabled}")
+            return
 
-            self.logger.info("[DEBUG] Режим редактирования включен: рамка показана")
-        else:
-            # Скрываем рамку
-            self._hide_edit_frame()
-            self.logger.info("[DEBUG] Режим редактирования выключен: рамка скрыта")
+        self._updating_edit_mode = True
+
+        try:
+            self.logger.info(f"[DEBUG] Обновлен _edit_mode_enabled = {edit_mode_enabled}")
+            self._edit_mode_enabled = edit_mode_enabled
+
+            if edit_mode_enabled:
+                # Включаем режим: показываем рамку только если оверлей видим
+                if self.visible:
+                    self._show_edit_frame()
+                    self.logger.info("[DEBUG] Режим редактирования включен: рамка показана")
+                else:
+                    self.logger.debug("[DEBUG] Режим редактирования включен, но оверлей скрыт")
+            else:
+                # Выключаем режим: скрываем рамку
+                self._hide_edit_frame()
+                self.logger.info("[DEBUG] Режим редактирования выключен: рамка скрыта")
+
+        finally:
+            self._updating_edit_mode = False
 
     def _start_drag(self, event):
         """Начинает перетаскивание окна."""
@@ -1153,8 +1207,14 @@ class OverlayWindow:
                 self._enable_esc_hook()
 
                 # ============================================================
-                # УБРАН АВТОФОКУС НА ОВЕРЛЕЙ
+                # ПОДНИМАЕМ МИНИ-БАР ПОВЕРХ ОВЕРЛЕЯ ПОСЛЕ ПОКАЗА
                 # ============================================================
+                if hasattr(self, '_overlay_manager') and self._overlay_manager:
+                    parent = self._overlay_manager.parent
+                    if parent and hasattr(parent, '_ensure_mini_bar_on_top'):
+                        if hasattr(parent, 'root') and parent.root:
+                            # Даём оверлею время полностью отрисоваться
+                            parent.root.after(80, parent._ensure_mini_bar_on_top)
 
                 if self._edit_frame_visible:
                     self._update_edit_frame_position()

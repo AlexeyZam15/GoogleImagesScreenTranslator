@@ -161,53 +161,70 @@ class ScreenshotCapturer:
             self.logger.error(f"Ошибка PrintWindow захвата: {e}")
             return None
 
-    def capture_active_window(self) -> Optional[Image.Image]:
-        """Захватывает скриншот активного окна"""
+    def capture_active_window(self, hwnd: Optional[int] = None) -> Optional[Image.Image]:
+        """Захватывает скриншот указанного окна или активного окна, если hwnd не передан."""
         try:
-            hwnd = win32gui.GetForegroundWindow()
-            if not hwnd:
-                self.logger.error("Не удалось получить активное окно")
-                return None
+            # Если HWND передан - используем его напрямую
+            if hwnd is not None:
+                self.logger.info(f"Используем переданный HWND: {hwnd}")
+                self._last_hwnd = hwnd
+                self._is_fullscreen = self.is_window_fullscreen(hwnd)
 
-            current_time = time.time()
-            if (self._cache is not None and
-                    self._cache_hwnd == hwnd and
-                    current_time - self._cache_time < self._cache_ttl):
-                self.logger.debug("Используем кэшированный скриншот")
-                return self._cache
-
-            try:
-                class_name = win32gui.GetClassName(hwnd)
-                window_text = win32gui.GetWindowText(hwnd)
-                if class_name == "TkTopLevel" and window_text == "Перевод":
-                    if self._last_hwnd is not None:
-                        self.logger.info(f"Активное окно - оверлей, используем сохраненный HWND: {self._last_hwnd}")
-                        hwnd = self._last_hwnd
-                    else:
-                        target_hwnd = self._find_target_window()
-                        if target_hwnd:
-                            hwnd = target_hwnd
-                            self.logger.info(f"Найдено целевое окно через EnumWindows: {hwnd}")
-                        else:
-                            return None
-            except Exception as e:
-                self.logger.warning(f"Ошибка проверки активного окна: {e}")
-
-            self._last_hwnd = hwnd
-            self._is_fullscreen = self.is_window_fullscreen(hwnd)
-
-            if self._is_fullscreen:
-                self.logger.info("Обнаружено полноэкранное приложение, используем DXcam")
-                return self._capture_with_dxcam(hwnd)
-            else:
+                # Пробуем PrintWindow
                 img = self._capture_with_printwindow(hwnd)
                 if img:
                     self._cache = img
                     self._cache_hwnd = hwnd
                     self._cache_time = time.time()
                     return img
-
+                # Fallback на стандартный захват
                 return self._capture_standard_window(hwnd)
+
+            # Если HWND не передан - определяем активное окно
+            current_hwnd = win32gui.GetForegroundWindow()
+            if not current_hwnd:
+                self.logger.error("Не удалось получить активное окно")
+                return None
+
+            current_time = time.time()
+            if (self._cache is not None and
+                    self._cache_hwnd == current_hwnd and
+                    current_time - self._cache_time < self._cache_ttl):
+                self.logger.debug("Используем кэшированный скриншот")
+                return self._cache
+
+            try:
+                class_name = win32gui.GetClassName(current_hwnd)
+                window_text = win32gui.GetWindowText(current_hwnd)
+                if class_name == "TkTopLevel" and window_text == "Перевод":
+                    if self._last_hwnd is not None:
+                        self.logger.info(f"Активное окно - оверлей, используем сохраненный HWND: {self._last_hwnd}")
+                        current_hwnd = self._last_hwnd
+                    else:
+                        target_hwnd = self._find_target_window()
+                        if target_hwnd:
+                            current_hwnd = target_hwnd
+                            self.logger.info(f"Найдено целевое окно через EnumWindows: {current_hwnd}")
+                        else:
+                            return None
+            except Exception as e:
+                self.logger.warning(f"Ошибка проверки активного окна: {e}")
+
+            self._last_hwnd = current_hwnd
+            self._is_fullscreen = self.is_window_fullscreen(current_hwnd)
+
+            if self._is_fullscreen:
+                self.logger.info("Обнаружено полноэкранное приложение, используем DXcam")
+                return self._capture_with_dxcam(current_hwnd)
+            else:
+                img = self._capture_with_printwindow(current_hwnd)
+                if img:
+                    self._cache = img
+                    self._cache_hwnd = current_hwnd
+                    self._cache_time = time.time()
+                    return img
+
+                return self._capture_standard_window(current_hwnd)
 
         except Exception as e:
             self.logger.error(f"Ошибка захвата скриншота: {e}")
