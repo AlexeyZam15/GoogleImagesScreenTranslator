@@ -227,6 +227,87 @@ class ScreenshotTranslatorApp:
         self.logger.info("✅ Приложение инициализировано успешно")
         self._force_log_flush()
 
+    def switch_translator_engine(self, engine: str):
+        """
+        Переключает движок перевода без перезапуска браузера.
+        Вызывается из главного окна при выборе движка в комбобоксе.
+        """
+        self.logger.info(f"[APP] Переключение движка на: {engine}")
+
+        # Проверяем, изменился ли движок
+        current_engine = self.settings.get_translator_engine()
+        if current_engine == engine:
+            self.logger.info("[APP] Движок уже выбран, пропускаем")
+            # Разблокируем комбобокс, если он был заблокирован
+            if hasattr(self.ui, 'set_engine_combo_enabled'):
+                self.ui.set_engine_combo_enabled(True)
+            return
+
+        # Обновляем настройку без сохранения (сохраним позже, если переключение успешно)
+        self.settings.set_translator_engine_no_save(engine)
+
+        # Если браузер готов — переключаем "на лету"
+        if self.browser_worker and self.browser_worker.is_ready:
+            self.logger.info("[APP] Браузер готов, выполняем переключение на лету")
+
+            def on_switch_complete(result, error):
+                if error:
+                    self.logger.error(f"[APP] Ошибка переключения движка: {error}")
+                    self.show_notification(self.get_string('engine_switch_error').format(error[:30]))
+                    # Откатываем настройку
+                    self.settings.set_translator_engine(current_engine)
+                    # Обновляем UI
+                    self.ui.update_engine_display(current_engine)
+                else:
+                    self.logger.info(f"[APP] ✅ Движок переключен на {engine}")
+                    self.settings.save()  # Сохраняем настройку
+                    # Обновляем статус
+                    engine_name = self.get_string('engine_google') if engine == "google" else self.get_string(
+                        'engine_yandex')
+                    target_lang = self.settings.get_target_language()
+                    ready_text = self.ui.get_string('ready')
+                    self.ui.update_status(
+                        f"● {ready_text} ({engine_name}, {target_lang.upper()})",
+                        '#4CAF50'
+                    )
+                    self.show_notification(self.get_string('engine_switched').format(engine_name))
+                    self.ui.update_engine_display(engine)
+
+                # Разблокируем комбобокс после завершения переключения
+                if hasattr(self.ui, 'set_engine_combo_enabled'):
+                    self.ui.set_engine_combo_enabled(True)
+
+            # Блокируем комбобокс на время переключения
+            if hasattr(self.ui, 'set_engine_combo_enabled'):
+                self.ui.set_engine_combo_enabled(False)
+
+            cmd_id = self.browser_worker.switch_engine(
+                engine,
+                self.settings.get_target_language(),
+                self.settings.get_show_browser(),
+                on_switch_complete
+            )
+            self._pending_command_ids[cmd_id] = 'switch_engine'
+        else:
+            # Если браузер не готов — просто сохраняем настройку
+            self.logger.info("[APP] Браузер не готов, сохраняем настройку для следующей инициализации")
+            self.settings.set_translator_engine(engine)
+            self.ui.update_engine_display(engine)
+            # Обновляем статус
+            engine_name = self.get_string('engine_google') if engine == "google" else self.get_string('engine_yandex')
+            ready_text = self.ui.get_string('ready') if self.ready else self.ui.get_string('starting')
+            self.ui.update_status(
+                f"● {ready_text} ({engine_name})",
+                '#4CAF50' if self.ready else '#ff9800'
+            )
+            # Разблокируем комбобокс
+            if hasattr(self.ui, 'set_engine_combo_enabled'):
+                self.ui.set_engine_combo_enabled(True)
+
+    def is_edit_mode_enabled(self) -> bool:
+        """Возвращает состояние режима редактирования"""
+        return getattr(self, '_edit_mode_enabled', False)
+
     def _on_overlay_hidden(self, overlay):
         """Вызывается когда оверлей скрывается — запоминаем время скрытия."""
         if not overlay:
@@ -1635,10 +1716,11 @@ class ScreenshotTranslatorApp:
         # 4. Удаляем состояние из файла
         self._remove_overlay_state_from_file(app_name, template_id)
 
-        # 5. Удаляем из списка недавно активных
+        # 5. Удаляем из списка недавно активных (ИСПРАВЛЕНО)
         if app_name in self._recent_overlays:
+            # В _recent_overlays хранятся (overlay, hide_time) - 2 элемента
             self._recent_overlays[app_name] = [
-                (ov, ct, ht) for ov, ct, ht in self._recent_overlays[app_name] if ov is not overlay
+                (ov, ht) for ov, ht in self._recent_overlays[app_name] if ov is not overlay
             ]
             if not self._recent_overlays[app_name]:
                 del self._recent_overlays[app_name]
@@ -2651,15 +2733,20 @@ class ScreenshotTranslatorApp:
             except Exception as e:
                 self.logger.error(f"[STATE] Ошибка восстановления оверлеев: {e}")
 
+        # ============================================================
+        # РАЗБЛОКИРУЕМ КОМБОБОКС ВЫБОРА ДВИЖКА (НОВОЕ)
+        # ============================================================
+        if hasattr(self.ui, 'set_engine_combo_enabled'):
+            self.ui.set_engine_combo_enabled(True)
+            self.logger.info("[APP] Комбобокс выбора движка разблокирован")
+
         if hasattr(self.ui, 'settings_btn'):
             self.ui.settings_btn.config(state=tk.NORMAL, bg='#3c3c3c', fg='#cccccc')
             self.logger.info("[APP] Кнопка настроек разблокирована")
 
         self.ui.set_settings_menu_enabled(True)
 
-        # ============================================================
         # ТОЛЬКО СТАТУС ГОТОВНОСТИ БРАУЗЕРА
-        # ============================================================
         ready_text = self.ui.get_string('ready')
         self.ui.update_status(f"● {ready_text} ({engine_name}, {self._last_target_lang.upper()})", '#4CAF50')
         self.logger.info("[STATUS] Статус обновлён на Готов")

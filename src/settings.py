@@ -52,6 +52,11 @@ class Settings:
         self._config_file = self._config_dir / "settings.json"
         self.load()
 
+    def set_translator_engine_no_save(self, engine: str):
+        """Устанавливает движок перевода без автоматического сохранения (для быстрого переключения)"""
+        if engine in ["google", "yandex"]:
+            self.settings["translator_engine"] = engine
+
     def get_mini_bar_position(self) -> tuple:
         """Возвращает сохранённую позицию мини-бара (x, y) или None."""
         x = self.settings.get("mini_bar_x")

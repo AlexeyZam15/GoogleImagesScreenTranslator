@@ -23,6 +23,11 @@ def get_russian_main_strings():
         'edit_mode_on': "ВКЛЮЧЕН",
         'edit_mode_off': "ВЫКЛЮЧЕН",
         'windows_with_translations': "📋 Окна с переводами:",
+        # Добавленные строки для движков
+        'engine_google': "Google Translate",
+        'engine_yandex': "Яндекс.Переводчик (OCR)",
+        'engine_switched': "✅ Переключено на {}",
+        'engine_switch_error': "❌ Ошибка переключения: {}",
     }
 
 
@@ -46,6 +51,11 @@ def get_english_main_strings():
         'edit_mode_on': "ON",
         'edit_mode_off': "OFF",
         'windows_with_translations': "📋 Windows with translations:",
+        # Добавленные строки для движков
+        'engine_google': "Google Translate",
+        'engine_yandex': "Yandex.Translator (OCR)",
+        'engine_switched': "✅ Switched to {}",
+        'engine_switch_error': "❌ Switch error: {}",
     }
 
 

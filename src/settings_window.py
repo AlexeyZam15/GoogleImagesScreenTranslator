@@ -1042,10 +1042,9 @@ class SettingsWindow:
         notebook = ttk.Notebook(main_container)
         notebook.pack(fill=tk.BOTH, expand=True, pady=(0, 12))
 
-        # Создаем вкладки с КОРОТКИМИ названиями
+        # Создаем вкладки (БЕЗ вкладки "Движок")
         self._create_browser_tab(notebook)
         self._create_ui_tab(notebook)
-        self._create_translator_tab(notebook)
         self._create_monitor_tab(notebook)
         self._create_hotkey_tab(notebook)
 

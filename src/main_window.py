@@ -365,6 +365,31 @@ class MainWindow:
         right_header = Frame(header_frame, bg='#1a1a1a')
         right_header.pack(side=tk.RIGHT, padx=(0, 20))
 
+        # ============================================================
+        # КОМБОБОКС ВЫБОРА ДВИЖКА (ДОСТУПЕН ТОЛЬКО ПОСЛЕ ИНИЦИАЛИЗАЦИИ)
+        # ============================================================
+        engine_frame = Frame(right_header, bg='#1a1a1a')
+        engine_frame.pack(side=tk.RIGHT, padx=(0, 10))
+
+        self.engine_var = tk.StringVar(value="Google Translate")
+        self.engine_combo = ttk.Combobox(
+            engine_frame,
+            textvariable=self.engine_var,
+            values=[self.get_string('engine_google'), self.get_string('engine_yandex')],
+            state='disabled',  # <-- ИЗНАЧАЛЬНО ЗАБЛОКИРОВАН
+            font=("Segoe UI", 9),
+            width=18
+        )
+        self.engine_combo.pack(side=tk.RIGHT, padx=(0, 5))
+        self.engine_combo.bind('<<ComboboxSelected>>', self._on_engine_changed)
+
+        # Устанавливаем текущий движок
+        current_engine = self.settings.get_translator_engine()
+        if current_engine == "google":
+            self.engine_var.set(self.get_string('engine_google'))
+        else:
+            self.engine_var.set(self.get_string('engine_yandex'))
+
         current_lang = self.settings.get_language()
         lang_text = "EN" if current_lang == "ru" else "RU"
 
@@ -447,11 +472,6 @@ class MainWindow:
         )
         self.status.pack(anchor=tk.W)
 
-        # ============================================================
-        # БЛОК ВЫБОРА ЯЗЫКА УДАЛЕН
-        # Выбор языка теперь только в настройках, во вкладке "Движок"
-        # ============================================================
-
         windows_header = Frame(content_frame, bg='#1a1a1a')
         windows_header.pack(fill=tk.X, pady=(5, 5))
 
@@ -482,6 +502,41 @@ class MainWindow:
             highlightthickness=0
         )
         self.window_listbox.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
+
+    def _on_engine_changed(self, event):
+        """Обработчик выбора движка в комбобоксе"""
+        selected = self.engine_var.get()
+        google_label = self.get_string('engine_google')
+
+        if selected == google_label:
+            engine = "google"
+        else:
+            engine = "yandex"
+
+        current = self.settings.get_translator_engine()
+        if current != engine:
+            self.logger.info(f"[UI] Выбран движок: {engine}")
+            # Блокируем комбобокс на время переключения
+            self.engine_combo.config(state='disabled')
+            self.app.switch_translator_engine(engine)
+
+    def update_engine_display(self, engine: str):
+        """Обновляет отображение выбранного движка в комбобоксе"""
+        if engine == "google":
+            self.engine_var.set(self.get_string('engine_google'))
+        else:
+            self.engine_var.set(self.get_string('engine_yandex'))
+        self.logger.info(f"[UI] Обновлён движок в комбобоксе: {engine}")
+
+    def set_engine_combo_enabled(self, enabled: bool):
+        """
+        Устанавливает доступность комбобокса выбора движка.
+        Вызывается после инициализации браузера.
+        """
+        state = tk.NORMAL if enabled else DISABLED
+        if self.engine_combo:
+            self.engine_combo.config(state=state)
+            self.logger.info(f"[UI] Комбобокс движка {'разблокирован' if enabled else 'заблокирован'}")
 
     def update_ui_language(self):
         """Обновляет язык интерфейса"""
