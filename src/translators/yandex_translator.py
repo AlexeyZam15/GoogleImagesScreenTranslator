@@ -213,13 +213,15 @@ class YandexOcrTranslator(BaseTranslator):
         return self._wait_for_interface(timeout)
 
     def _find_and_click_paste_button(self) -> bool:
-        """Находит и нажимает кнопку вставки изображения."""
+        """
+        Находит и нажимает кнопку вставки изображения.
+        """
         self.logger.info("Вставка изображения...")
 
         # Пробуем через Ctrl+V
         try:
-            self._page.click('body')
-            time.sleep(0.3)
+            # НЕ КЛИКАЕМ ПО body! Это может открыть диалог выбора файла.
+            # Просто отправляем Ctrl+V на текущую страницу
             self._page.keyboard.press("Control+V")
             self.logger.info("✅ Ctrl+V отправлен")
             time.sleep(1.5)
@@ -227,12 +229,13 @@ class YandexOcrTranslator(BaseTranslator):
         except Exception as e:
             self.logger.warning(f"Ctrl+V не сработал: {e}")
 
-        # Пробуем найти кнопку вставки по aria-label
+        # Пробуем найти кнопку вставки
         try:
             paste_button = self._page.locator('button[aria-label="Вставить"]').first
             if paste_button.count() > 0 and paste_button.is_visible():
                 paste_button.click()
                 self.logger.info("✅ Кнопка 'Вставить' нажата")
+                time.sleep(1.5)
                 return True
         except:
             pass
@@ -243,16 +246,7 @@ class YandexOcrTranslator(BaseTranslator):
             if paste_button.count() > 0 and paste_button.is_visible():
                 paste_button.click()
                 self.logger.info("✅ Кнопка вставки (data-testid) нажата")
-                return True
-        except:
-            pass
-
-        # Пробуем найти любую кнопку с текстом "Вставить"
-        try:
-            paste_button = self._page.locator('button:has-text("Вставить")').first
-            if paste_button.count() > 0 and paste_button.is_visible():
-                paste_button.click()
-                self.logger.info("✅ Кнопка с текстом 'Вставить' нажата")
+                time.sleep(1.5)
                 return True
         except:
             pass
