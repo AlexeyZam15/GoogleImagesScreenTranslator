@@ -2781,6 +2781,10 @@ class ScreenshotTranslatorApp:
             except Exception as e:
                 self.logger.error(f"[STATE] Ошибка восстановления оверлеев: {e}")
 
+        # Обновляем надписи с хоткеями
+        if hasattr(self.ui, 'update_hotkey_labels'):
+            self.ui.update_hotkey_labels()
+
         # ============================================================
         # РАЗБЛОКИРУЕМ ВСЕ ЭЛЕМЕНТЫ ИНТЕРФЕЙСА
         # ============================================================
@@ -3558,6 +3562,10 @@ class ScreenshotTranslatorApp:
     def on_settings_changed(self):
         """Обработчик изменения настроек"""
         self.ui.update_ui_language()
+
+        # Обновляем надписи с хоткеями
+        if hasattr(self.ui, 'update_hotkey_labels'):
+            self.ui.update_hotkey_labels()
 
         # Проверяем, изменился ли движок перевода
         if not hasattr(self, '_last_engine'):

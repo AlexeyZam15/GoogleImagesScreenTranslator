@@ -25,6 +25,11 @@ def get_russian_main_strings():
         'edit_mode_off': "ВЫКЛЮЧЕН",
         'windows_with_translations': "Окна с переводами",
 
+        # === НОВЫЕ СТРОКИ ДЛЯ НАДПИСЕЙ С ХОТКЕЯМИ ===
+        'hotkey_info_f1': "скрыть/показать оверлеи",
+        'hotkey_info_f3': "выбрать область для перевода",
+        'hotkey_info_separator': "  |  ",
+
         # === СТРОКИ ДЛЯ ДВИЖКОВ ПЕРЕВОДА ===
         'engine_google': "Google Translate",
         'engine_yandex': "Яндекс.Переводчик (OCR)",
@@ -45,9 +50,6 @@ def get_russian_main_strings():
         'language_hint': "(язык, на который переводить)",
         'windows_hint': "— нажмите правой кнопкой для удаления",
         'windows_count': "({})",
-
-        # Подсказка по горячим клавишам в футере
-        'footer_hotkeys': "⌨️ F2 — скриншот | F3 — область | F1 — скрыть/показать | F4 — очистить | F5 — редактирование | F6 — автозамена",
 
         # === СТРОКИ ДЛЯ КНОПКИ МИНИ-БАР ===
         'mini_bar_toggle_tooltip': "Показать/скрыть мини-бар",
@@ -92,6 +94,11 @@ def get_english_main_strings():
         'edit_mode_off': "OFF",
         'windows_with_translations': "Windows with translations",
 
+        # === NEW STRINGS FOR HOTKEY LABELS ===
+        'hotkey_info_f1': "show/hide overlays",
+        'hotkey_info_f3': "select area to translate",
+        'hotkey_info_separator': "  |  ",
+
         # === TRANSLATION ENGINE STRINGS ===
         'engine_google': "Google Translate",
         'engine_yandex': "Yandex.Translator (OCR)",
@@ -112,9 +119,6 @@ def get_english_main_strings():
         'language_hint': "(target translation language)",
         'windows_hint': "— right-click to remove",
         'windows_count': "({})",
-
-        # Footer hotkeys hint
-        'footer_hotkeys': "⌨️ F2 — screenshot | F3 — area | F1 — show/hide | F4 — clear | F5 — edit mode | F6 — auto-replace",
 
         # === MINI-BAR BUTTON STRINGS ===
         'mini_bar_toggle_tooltip': "Show/Hide mini-bar",

@@ -159,6 +159,15 @@ class Settings:
         self.settings[f"hotkey_{action}"] = normalized
         self.save()
 
+        # Обновляем надписи в главном окне
+        try:
+            from src.main_window import MainWindow
+            if hasattr(self, '_app') and self._app and hasattr(self._app, 'ui'):
+                if hasattr(self._app.ui, 'update_hotkey_labels'):
+                    self._app.ui.update_hotkey_labels()
+        except Exception as e:
+            pass
+
     def get_all_hotkeys(self) -> dict:
         return {
             "screenshot": self.get_hotkey("screenshot"),

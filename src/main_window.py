@@ -68,6 +68,46 @@ class MainWindow:
         self.root.lift()
         self.root.focus_force()
 
+    def update_hotkey_labels(self):
+        """
+        Обновляет надписи с горячими клавишами F1 и F3 в верхней части окна.
+        Использует актуальные значения из настроек и локализацию.
+        """
+        try:
+            hotkeys = self.settings.get_all_hotkeys()
+
+            # Получаем актуальные клавиши для F1 и F3
+            f1_key = hotkeys.get('toggle_overlay', 'F1').upper()
+            f3_key = hotkeys.get('area', 'F3').upper()
+
+            # Форматируем отображение (убираем лишние модификаторы для читаемости)
+            if '+' in f1_key:
+                parts = f1_key.split('+')
+                f1_display = '+'.join(p.upper() for p in parts)
+            else:
+                f1_display = f1_key
+
+            if '+' in f3_key:
+                parts = f3_key.split('+')
+                f3_display = '+'.join(p.upper() for p in parts)
+            else:
+                f3_display = f3_key
+
+            # Получаем локализованные описания
+            f1_desc = self.get_string('hotkey_info_f1')
+            f3_desc = self.get_string('hotkey_info_f3')
+            separator = self.get_string('hotkey_info_separator')
+
+            # Формируем текст надписи с использованием локализации
+            text = f"⌨️ {f1_display} — {f1_desc}{separator}{f3_display} — {f3_desc}"
+
+            if hasattr(self, 'hotkey_info_label') and self.hotkey_info_label:
+                self.hotkey_info_label.config(text=text)
+                self.logger.info(f"[HOTKEYS] Обновлены надписи: {text}")
+
+        except Exception as e:
+            self.logger.warning(f"[HOTKEYS] Ошибка обновления надписей: {e}")
+
     def _add_tooltip(self, widget, text):
         """Добавляет всплывающую подсказку при наведении на виджет."""
 
@@ -393,6 +433,23 @@ class MainWindow:
         self.settings_btn.bind('<Leave>', on_settings_leave)
 
         # ============================================================
+        # ПАНЕЛЬ С ГОРЯЧИМИ КЛАВИШАМИ (F1 и F3) - ИСПОЛЬЗУЕТ ЛОКАЛИЗАЦИЮ
+        # ============================================================
+        hotkey_info_frame = Frame(main, bg='#1a1a1a', height=28)
+        hotkey_info_frame.pack(fill=tk.X, padx=20, pady=(2, 6))
+        hotkey_info_frame.pack_propagate(False)
+
+        self.hotkey_info_label = Label(
+            hotkey_info_frame,
+            text="",
+            bg='#1a1a1a',
+            fg='#888888',
+            font=("Segoe UI", 10),
+            anchor='w'
+        )
+        self.hotkey_info_label.pack(side=tk.LEFT, fill=tk.X)
+
+        # ============================================================
         # РАЗДЕЛИТЕЛЬ
         # ============================================================
         separator1 = Frame(main, bg='#2d2d2d', height=1)
@@ -404,7 +461,7 @@ class MainWindow:
         settings_section = Frame(main, bg='#1a1a1a')
         settings_section.pack(fill=tk.X, padx=20, pady=12)
 
-        # Заголовок секции - ИСПОЛЬЗУЕМ ЛОКАЛИЗОВАННУЮ СТРОКУ
+        # Заголовок секции
         self.section_label = Label(
             settings_section,
             text=self.get_string('translation_settings_header'),
@@ -618,21 +675,8 @@ class MainWindow:
         )
         self.window_listbox.pack(fill=tk.BOTH, expand=True, padx=3, pady=3)
 
-        # ============================================================
-        # НИЖНЯЯ ПАНЕЛЬ С ПОДСКАЗКОЙ ПО ХОТКЕЯМ
-        # ============================================================
-        footer_frame = Frame(main, bg='#1a1a1a')
-        footer_frame.pack(fill=tk.X, padx=20, pady=(0, 8))
-
-        self.footer_label = Label(
-            footer_frame,
-            text=self.get_string('footer_hotkeys'),
-            bg='#1a1a1a',
-            fg='#555555',
-            font=("Segoe UI", 9),
-            anchor='center'
-        )
-        self.footer_label.pack(fill=tk.X)
+        # Обновляем надписи с хоткеями
+        self.update_hotkey_labels()
 
     def update_windows_count(self, count):
         """Обновляет счетчик окон с переводами"""
@@ -990,15 +1034,14 @@ class MainWindow:
                     fg='#4CAF50'
                 )
 
-        # 6. ФУТЕР С ХОТКЕЯМИ
-        if hasattr(self, 'footer_label') and self.footer_label:
-            self.footer_label.config(text=self.get_string('footer_hotkeys'))
-
-        # 7. КНОПКА СМЕНЫ ЯЗЫКА ИНТЕРФЕЙСА
+        # 6. КНОПКА СМЕНЫ ЯЗЫКА ИНТЕРФЕЙСА
         current_lang = self.settings.get_language()
         if self.lang_btn:
             lang_text = "EN" if current_lang == "ru" else "RU"
             self.lang_btn.config(text=lang_text)
+
+        # 7. ОБНОВЛЯЕМ НАДПИСИ С ХОТКЕЯМИ
+        self.update_hotkey_labels()
 
         # 8. МЕНЮ
         is_ready = False
