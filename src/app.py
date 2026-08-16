@@ -143,13 +143,23 @@ class ScreenshotTranslatorApp:
 
         self._force_log_flush()
 
+        # ============================================================
+        # ОЧИСТКА СТАРЫХ ВРЕМЕННЫХ ПРОФИЛЕЙ ПРИ ЗАПУСКЕ (старше 7 дней)
+        # ============================================================
+        try:
+            from src.temp_cleaner import cleanup_old_profiles
+            deleted = cleanup_old_profiles(max_age_days=7, logger=self.logger)
+            if deleted > 0:
+                self.logger.info(f"[STARTUP] 🧹 Удалено {deleted} старых временных папок")
+        except Exception as e:
+            self.logger.warning(f"[STARTUP] Ошибка очистки старых профилей: {e}")
+
         self.settings = Settings()
         self.temp_dir = ensure_app_temp_dir()
 
         # Компоненты
         self.screenshot = ScreenshotCapturer()
         self.browser_worker = BrowserWorker(self.settings)
-        self.browser_worker.start()
         self.overlay_manager = None
         self.translation_monitor = None
 
@@ -212,20 +222,52 @@ class ScreenshotTranslatorApp:
         self.hotkeys = HotkeyManager(self)
         self.window_list = WindowListManager(self, self.ui.window_listbox, self.ui._window_hwnd_map)
 
-        # Настройка
-        self.hotkeys.setup()
-        self._start_window_monitor()
-        self._start_result_processor()
+        # ============================================================
+        # ЗАПУСК БРАУЗЕРА В ФОНОВОМ ПОТОКЕ (НЕ БЛОКИРУЕТ)
+        # ============================================================
+        self.browser_worker.start()
+        self.logger.info("[APP] BrowserWorker запущен")
 
-        # Запускаем фоновую инициализацию OCR
-        self.ui.root.after(100, self._init_ocr_background)
-
-        # Запуск инициализации
-        self.ui.root.after(100, self._init_translator_step)
+        # ============================================================
+        # ОТЛОЖЕННАЯ ИНИЦИАЛИЗАЦИЯ (ДАЁМ ВРЕМЯ НА ОТРИСОВКУ ОКНА)
+        # ============================================================
+        # Запускаем все тяжелые операции с задержками, чтобы окно успело отрисоваться
+        self.ui.root.after(100, self._delayed_init_step1)
+        self.ui.root.after(200, self._delayed_init_step2)
+        self.ui.root.after(300, self._delayed_init_step3)
 
         self._force_log_flush()
         self.logger.info("✅ Приложение инициализировано успешно")
         self._force_log_flush()
+
+    def _delayed_init_step1(self):
+        """Первый шаг отложенной инициализации — настройка хоткеев."""
+        self.logger.info("[APP] Шаг 1: настройка горячих клавиш...")
+        try:
+            self.hotkeys.setup()
+            self.logger.info("[APP] Горячие клавиши настроены")
+        except Exception as e:
+            self.logger.error(f"[APP] Ошибка настройки хоткеев: {e}")
+
+    def _delayed_init_step2(self):
+        """Второй шаг отложенной инициализации — мониторы и OCR."""
+        self.logger.info("[APP] Шаг 2: запуск мониторов и OCR...")
+        try:
+            self._start_window_monitor()
+            self._start_result_processor()
+            self.ui.root.after(100, self._init_ocr_background)
+            self.logger.info("[APP] Мониторы запущены, OCR инициализируется")
+        except Exception as e:
+            self.logger.error(f"[APP] Ошибка запуска мониторов: {e}")
+
+    def _delayed_init_step3(self):
+        """Третий шаг отложенной инициализации — инициализация переводчика."""
+        self.logger.info("[APP] Шаг 3: инициализация переводчика...")
+        try:
+            self._init_translator_step()
+            self.logger.info("[APP] Инициализация переводчика запущена")
+        except Exception as e:
+            self.logger.error(f"[APP] Ошибка инициализации переводчика: {e}")
 
     def _on_language_changed_main(self, event):
         """
@@ -3720,7 +3762,7 @@ class ScreenshotTranslatorApp:
         help_window.focus_force()
 
     def on_close(self):
-        """Закрытие приложения с улучшенной обработкой потоков и таймаутами."""
+        """Закрытие приложения с ожиданием очистки."""
 
         self.logger.info("=" * 60)
         self.logger.info("🛑 НАЧАЛО ЗАКРЫТИЯ ПРИЛОЖЕНИЯ")
@@ -3729,7 +3771,7 @@ class ScreenshotTranslatorApp:
         # 1. Устанавливаем глобальный флаг закрытия
         self._closing = True
 
-        # 2. Сохраняем состояние оверлеев перед закрытием
+        # 2. Сохраняем состояние оверлеев
         if hasattr(self, 'overlay_manager') and self.overlay_manager:
             try:
                 self.overlay_manager.save_overlay_state(immediate=True)
@@ -3743,7 +3785,7 @@ class ScreenshotTranslatorApp:
         except:
             pass
 
-        # 4. Отключаем горячие клавиши (хуки keyboard)
+        # 4. Отключаем горячие клавиши
         try:
             import keyboard
             keyboard.unhook_all()
@@ -3759,7 +3801,7 @@ class ScreenshotTranslatorApp:
         except Exception as e:
             self.logger.warning(f"[CLOSE] Ошибка сохранения настроек: {e}")
 
-        # 6. Останавливаем TranslationMonitor с таймаутом
+        # 6. Останавливаем TranslationMonitor
         if hasattr(self, 'translation_monitor') and self.translation_monitor:
             try:
                 self.logger.info("[CLOSE] Остановка TranslationMonitor...")
@@ -3772,20 +3814,16 @@ class ScreenshotTranslatorApp:
         if hasattr(self, 'browser_worker') and self.browser_worker:
             try:
                 self.logger.info("[CLOSE] Остановка BrowserWorker...")
-                # Устанавливаем флаг отмены в переводчике
                 translator = self.browser_worker.get_translator()
                 if translator:
                     try:
                         translator.cancel_translation()
                     except:
                         pass
-
-                # Останавливаем рабочий поток
                 self.browser_worker.stop()
                 self.logger.info("[CLOSE] BrowserWorker остановлен")
             except Exception as e:
                 self.logger.warning(f"[CLOSE] Ошибка остановки BrowserWorker: {e}")
-                # В случае ошибки - пробуем закрыть браузер напрямую
                 try:
                     translator = self.browser_worker.get_translator()
                     if translator:
@@ -3811,7 +3849,23 @@ class ScreenshotTranslatorApp:
             except Exception as e:
                 self.logger.warning(f"[CLOSE] Ошибка освобождения DXcam: {e}")
 
-        # 10. Закрываем главное окно (убираем лишнюю задержку)
+        # 10. Очищаем временные профили СИНХРОННО с таймаутом
+        try:
+            from src.temp_cleaner import cleanup_all_profiles_sync, find_app_temp_dirs
+
+            dirs = find_app_temp_dirs()
+            if dirs:
+                self.logger.info(f"[CLOSE] Найдено {len(dirs)} папок для удаления, запуск очистки...")
+
+                # Синхронное удаление (блокирует, но быстро)
+                deleted = cleanup_all_profiles_sync(logger=self.logger)
+                self.logger.info(f"[CLOSE] Очистка завершена, удалено {deleted} папок")
+            else:
+                self.logger.info("[CLOSE] Временные папки не найдены")
+        except Exception as e:
+            self.logger.warning(f"[CLOSE] Ошибка очистки временных файлов: {e}")
+
+        # 11. Закрываем главное окно
         try:
             self.logger.info("[CLOSE] Закрытие главного окна...")
             if self.ui and self.ui.root:
@@ -3823,6 +3877,3 @@ class ScreenshotTranslatorApp:
         self.logger.info("=" * 60)
         self.logger.info("✅ ЗАКРЫТИЕ ЗАВЕРШЕНО")
         self.logger.info("=" * 60)
-
-        # Убираем принудительный выход os._exit(0) - теперь это не нужно
-        # os._exit(0) # <--- УДАЛЕНО

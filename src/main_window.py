@@ -64,9 +64,18 @@ class MainWindow:
         self.root.bind('<F1>', lambda e: 'break')
         self.set_settings_menu_enabled(False)
 
+        # ============================================================
+        # ПОКАЗЫВАЕМ ОКНО И ПРИНУДИТЕЛЬНО ОБНОВЛЯЕМ
+        # ============================================================
         self.root.deiconify()
         self.root.lift()
         self.root.focus_force()
+
+        # Принудительная отрисовка окна
+        self.root.update()
+        self.root.update_idletasks()
+
+        self.logger.info("[UI] Главное окно создано и отображено")
 
     def update_hotkey_labels(self):
         """
@@ -467,7 +476,7 @@ class MainWindow:
         settings_section = tk.Frame(main, bg='#1a1a1a')
         settings_section.pack(fill=tk.X, padx=20, pady=12)
 
-        # Заголовок секции - СОХРАНЯЕМ ССЫЛКУ ДЛЯ ОБНОВЛЕНИЯ ЯЗЫКА
+        # Заголовок секции
         self.section_label = tk.Label(
             settings_section,
             text=self.get_string('translation_settings_header'),
@@ -610,7 +619,7 @@ class MainWindow:
         windows_section = tk.Frame(main, bg='#1a1a1a')
         windows_section.pack(fill=tk.BOTH, expand=True, padx=20, pady=(10, 12))
 
-        # Заголовок списка окон (локализованный) - СОХРАНЯЕМ ССЫЛКУ
+        # Заголовок списка окон
         windows_header = tk.Frame(windows_section, bg='#1a1a1a')
         windows_header.pack(fill=tk.X, pady=(0, 6))
 
@@ -633,7 +642,7 @@ class MainWindow:
         )
         self.windows_label.pack(side=tk.LEFT)
 
-        # Счетчик окон (локализованный)
+        # Счетчик окон
         self.windows_count_label = tk.Label(
             windows_header,
             text=self.get_string('windows_count').format(0),
@@ -643,7 +652,7 @@ class MainWindow:
         )
         self.windows_count_label.pack(side=tk.LEFT, padx=(8, 0))
 
-        # Подсказка для списка окон (локализованная)
+        # Подсказка для списка окон
         self.windows_hint_label = tk.Label(
             windows_header,
             text=self.get_string('windows_hint'),
@@ -980,24 +989,32 @@ class MainWindow:
         if self.title_label:
             self.title_label.config(text=self.get_string('app_title'))
 
-        # 2. СЕКЦИЯ НАСТРОЕК ПЕРЕВОДА - прямое обновление по ссылке
+        # 2. СЕКЦИЯ НАСТРОЕК ПЕРЕВОДА
         if hasattr(self, 'section_label') and self.section_label:
             self.section_label.config(text=self.get_string('translation_settings_header'))
 
-        # 3. СЕКЦИЯ СПИСКА ОКОН - прямое обновление по ссылке
-        if hasattr(self, 'windows_label') and self.windows_label:
-            self.windows_label.config(text=self.get_string('windows_header'))
-
-        # Обновляем лейблы "Движок:" и "Язык:"
+        # 3. ЛЕЙБЛЫ "ДВИЖОК:" И "ЯЗЫК:"
         if hasattr(self, 'engine_label') and self.engine_label:
             self.engine_label.config(text=self.get_string('engine_label_short'))
         if hasattr(self, 'lang_label') and self.lang_label:
             self.lang_label.config(text=self.get_string('target_language_short'))
 
-        # Обновляем подсказки
-        self._update_hints()
+        # 4. ПОДСКАЗКИ — ОБНОВЛЯЕМ НАПРЯМУЮ ПО ССЫЛКАМ
+        if hasattr(self, 'engine_hint_label') and self.engine_hint_label:
+            self.engine_hint_label.config(text=self.get_string('engine_hint'))
+        if hasattr(self, 'lang_hint_label') and self.lang_hint_label:
+            self.lang_hint_label.config(text=self.get_string('language_hint'))
+        if hasattr(self, 'windows_hint_label') and self.windows_hint_label:
+            self.windows_hint_label.config(text=self.get_string('windows_hint'))
 
-        # Обновляем значения комбобокса движка
+        # 5. СЕКЦИЯ СПИСКА ОКОН
+        if hasattr(self, 'windows_label') and self.windows_label:
+            self.windows_label.config(text=self.get_string('windows_header'))
+        if hasattr(self, 'windows_count_label') and self.windows_count_label:
+            count = self.window_listbox.size() if hasattr(self, 'window_listbox') else 0
+            self.windows_count_label.config(text=self.get_string('windows_count').format(count))
+
+        # 6. ОБНОВЛЯЕМ ЗНАЧЕНИЯ КОМБОБОКСА ДВИЖКА
         if hasattr(self, 'engine_combo') and self.engine_combo:
             current_engine = self.settings.get_translator_engine()
             self.engine_combo['values'] = [self.get_string('engine_google'), self.get_string('engine_yandex')]
@@ -1006,21 +1023,14 @@ class MainWindow:
             else:
                 self.engine_var.set(self.get_string('engine_yandex'))
 
-        # 3. КНОПКА МИНИ-БАР (обновляем подсказку)
+        # 7. КНОПКА МИНИ-БАР (обновляем подсказку)
         if hasattr(self, 'mini_bar_btn') and self.mini_bar_btn:
             if hasattr(self.app, '_mini_bar_window') and self.app._mini_bar_window:
                 self._add_tooltip(self.mini_bar_btn, self.get_string('mini_bar_hide_tooltip'))
             else:
                 self._add_tooltip(self.mini_bar_btn, self.get_string('mini_bar_show_tooltip'))
 
-        # 4. СЕКЦИЯ СПИСКА ОКОН
-        if hasattr(self, 'windows_hint_label') and self.windows_hint_label:
-            self.windows_hint_label.config(text=self.get_string('windows_hint'))
-        if hasattr(self, 'window_listbox'):
-            count = self.window_listbox.size()
-            self.update_windows_count(count)
-
-        # 5. СТАТУС
+        # 8. СТАТУС
         if self.status and hasattr(self.app, 'ready'):
             if not self.app.ready:
                 if hasattr(self.app, 'initializing') and self.app.initializing:
@@ -1035,7 +1045,8 @@ class MainWindow:
                     )
             else:
                 engine = self.app.settings.get_translator_engine()
-                engine_name = "Google Translate" if engine == "google" else "Яндекс.Переводчик (OCR)"
+                engine_name = self.get_string('engine_google') if engine == "google" else self.get_string(
+                    'engine_yandex')
                 target_lang = self.app.settings.get_target_language()
                 ready_text = self.get_string('ready')
                 self.status.config(
@@ -1043,16 +1054,16 @@ class MainWindow:
                     fg='#4CAF50'
                 )
 
-        # 6. КНОПКА СМЕНЫ ЯЗЫКА ИНТЕРФЕЙСА
+        # 9. КНОПКА СМЕНЫ ЯЗЫКА ИНТЕРФЕЙСА
         current_lang = self.settings.get_language()
         if self.lang_btn:
             lang_text = "EN" if current_lang == "ru" else "RU"
             self.lang_btn.config(text=lang_text)
 
-        # 7. ОБНОВЛЯЕМ НАДПИСИ С ХОТКЕЯМИ
+        # 10. ОБНОВЛЯЕМ НАДПИСИ С ХОТКЕЯМИ
         self.update_hotkey_labels()
 
-        # 8. МЕНЮ
+        # 11. МЕНЮ
         is_ready = False
         if hasattr(self.app, 'ready') and self.app.ready:
             is_ready = True

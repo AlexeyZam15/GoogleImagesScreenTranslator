@@ -42,6 +42,29 @@ class BrowserWorker:
         self._result_batch = []
         self._batch_max_size = 10
 
+    def cleanup_temp_profiles(self):
+        """
+        Удаляет все временные папки профилей, созданные приложением.
+        Вызывается при остановке или вручную.
+        """
+        try:
+            from src.temp_cleaner import cleanup_all_profiles, cleanup_old_profiles
+
+            self.logger.info("[BROWSER_WORKER] Очистка временных профилей...")
+
+            # Удаляем все профили, созданные приложением
+            deleted = cleanup_all_profiles(logger=self.logger)
+
+            if deleted > 0:
+                self.logger.info(f"[BROWSER_WORKER] Удалено {deleted} папок профилей")
+            else:
+                self.logger.info("[BROWSER_WORKER] Временные профили не найдены")
+
+        except ImportError:
+            self.logger.warning("[BROWSER_WORKER] Модуль temp_cleaner не найден, пропускаем очистку")
+        except Exception as e:
+            self.logger.warning(f"[BROWSER_WORKER] Ошибка очистки временных профилей: {e}")
+
     def switch_engine(self, engine: str, target_lang: str, show_browser: bool,
                       callback: Optional[Callable] = None) -> int:
         """
@@ -451,6 +474,15 @@ class BrowserWorker:
 
             if self._thread.is_alive():
                 self.logger.warning("[BROWSER_WORKER] Поток не завершился за 0.5 секунды, продолжаем закрытие.")
+
+        # 6. Очищаем временные профили АСИНХРОННО (не блокирует)
+        try:
+            from src.temp_cleaner import cleanup_all_profiles
+            self.logger.info("[BROWSER_WORKER] Запуск асинхронной очистки временных профилей...")
+            cleanup_all_profiles(logger=self.logger)
+            self.logger.info("[BROWSER_WORKER] Очистка запущена в фоновом потоке")
+        except Exception as e:
+            self.logger.warning(f"[BROWSER_WORKER] Ошибка очистки временных профилей: {e}")
 
         self.logger.info("[BROWSER_WORKER] Остановлен")
 

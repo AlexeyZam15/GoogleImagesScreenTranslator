@@ -84,8 +84,10 @@ class YandexOcrTranslator(BaseTranslator):
 
         safe_temp_dir = get_safe_temp_dir()
         timestamp = int(time.time() * 1000)
+        # Используем единый префикс с указанием движка
         profile_dir = safe_temp_dir / f"yandex_ocr_profile_{timestamp}"
 
+        # Удаляем старый профиль, если он существует
         if profile_dir.exists():
             try:
                 shutil.rmtree(profile_dir)
@@ -169,6 +171,12 @@ class YandexOcrTranslator(BaseTranslator):
                 except:
                     pass
                 self._pw = None
+            try:
+                if profile_dir.exists():
+                    shutil.rmtree(profile_dir, ignore_errors=True)
+                    self.logger.info("🧹 Папка профиля удалена после ошибки")
+            except:
+                pass
             raise
 
     def _wait_for_interface(self, timeout: int = 10000) -> bool:

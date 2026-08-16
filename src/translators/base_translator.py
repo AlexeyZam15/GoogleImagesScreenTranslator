@@ -32,6 +32,14 @@ class BaseTranslator:
         self._cancel_flag = False
         self._worker = None
         self._profile_dir = None
+        self._profile_prefix = "translator_profile"  # <-- ДОБАВЛЕНО
+
+    def _get_profile_prefix(self) -> str:
+        """
+        Возвращает префикс для папки профиля.
+        Может быть переопределён в наследниках.
+        """
+        return "translator_profile"
 
     def _grant_clipboard_permission(self) -> bool:
         """
@@ -309,7 +317,7 @@ class BaseTranslator:
             return False
 
     def close_browser(self):
-        """Закрывает браузер."""
+        """Закрывает браузер и удаляет папку профиля."""
         self._cancel_flag = True
         self.logger.info("[BROWSER] Закрытие браузера...")
 
@@ -338,12 +346,14 @@ class BaseTranslator:
                     pass
                 self._pw = None
 
+            # Удаляем папку профиля
             if self._profile_dir and self._profile_dir.exists():
                 try:
                     shutil.rmtree(self._profile_dir, ignore_errors=True)
                     self.logger.info(f"[BROWSER] 🧹 Папка профиля удалена: {self._profile_dir}")
-                except:
-                    pass
+                except Exception as e:
+                    self.logger.warning(f"[BROWSER] Не удалось удалить профиль: {e}")
+                self._profile_dir = None
 
             self.logger.info("[BROWSER] Браузер закрыт")
         except Exception as e:

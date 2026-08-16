@@ -26,6 +26,17 @@ def main():
     except Exception as e:
         print(f"⚠️ Ошибка проверки версии: {e}")
 
+    # ============================================================
+    # ОЧИСТКА СТАРЫХ ВРЕМЕННЫХ ПРОФИЛЕЙ ПРИ ЗАПУСКЕ (старше 7 дней)
+    # ============================================================
+    try:
+        from src.temp_cleaner import cleanup_old_profiles
+        deleted = cleanup_old_profiles(max_age_days=7)
+        if deleted > 0:
+            print(f"🧹 Удалено {deleted} старых временных папок")
+    except Exception as e:
+        print(f"⚠️ Ошибка очистки временных папок: {e}")
+
     # Парсинг аргументов командной строки
     parser = argparse.ArgumentParser(description='Google Screen Translate')
     parser.add_argument('--debug', action='store_true', help='Включить режим отладки')
@@ -68,7 +79,16 @@ def main():
 
         print("⏳ Запуск приложения...")
 
+        # Создаём приложение
         app = ScreenshotTranslatorApp(debug_mode=debug_mode)
+
+        # ============================================================
+        # ПРИНУДИТЕЛЬНАЯ ОТРИСОВКА ОКНА ПЕРЕД ВХОДОМ В ГЛАВНЫЙ ЦИКЛ
+        # ============================================================
+        if hasattr(app, 'ui') and hasattr(app.ui, 'root'):
+            app.ui.root.update()
+            app.ui.root.update_idletasks()
+            print("✅ Окно отрисовано")
 
         print("✅ Приложение запущено, вход в главный цикл...")
         app.run()
