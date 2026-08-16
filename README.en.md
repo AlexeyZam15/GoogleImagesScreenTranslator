@@ -27,7 +27,7 @@
 
 Discuss the project, ask questions, and share your experience in our Discord:
 
-➡️ **[Join Discord](https://discord.gg/tAjZmzrPU7)**
+➡️ **[Join Discord](https://discord.gg/TSRFfRUwn)**
 
 ---
 
@@ -44,25 +44,33 @@ Thank you for your support! ❤️
 ## Features
 
 ### 📸 Screenshots and Translation
+
 - **Window screenshot (F2)** — capture and translate the active window
 - **Area selection (F3)** — choose any area on the screen for translation
-- **Long press F3 (500ms)** — screenshot of the entire window + OCR recognition of all text zones and automatic overlay creation
+- **Long press F3 (500ms)** — screenshot of the entire window + OCR recognition of all text zones and automatic overlay
+  creation
 - **Temporary translation (RMB in F3 mode)** — overlay is automatically removed after a specified time
 
 ### 🧠 Two Translation Engines
+
 - **Google Translate** — translation via Google Images (requires stable internet)
 - **Yandex.Translator (OCR)** — translation with text recognition on images
 
 ### 🔄 Automation
-- **Auto-replace translated areas (F6)** — screen monitoring and automatic display of translation when the same area is detected
+
+- **Auto-replace translated areas (F6)** — screen monitoring and automatic display of translation when the same area is
+  detected
 - **Translation queue** — select multiple areas in a row without waiting for the current translation to finish
 
 ### 🖼️ Overlay Management
+
 - **Overlay with result** — display translated image over the original
 - **Edit mode (F5)** — move overlays with the mouse and remove with ESC
 - **Remove overlays (F4)** — remove all overlays or a specific one under the cursor
+- **Context menu in the window list** — quickly remove all overlays for a specific application
 
 ### ⚙️ Settings
+
 - **Hotkeys** — fully customizable all combinations
 - **Browser selection** — automatic search or manual path with "Find Browsers" button
 - **Translation engine selection** — Google Translate or Yandex.Translator
@@ -70,6 +78,7 @@ Thank you for your support! ❤️
 - **Bilingual interface** — Russian and English
 
 ### 🔒 Security
+
 - Minimal permissions, no external requests
 - Version control — automatic cleanup of outdated files on update
 
@@ -78,17 +87,24 @@ Thank you for your support! ❤️
 ## ⚠️ Important: Administrator Rights
 
 ### The Problem
-If the application you want to translate is **running with administrator rights**, then the **Google Screen Translate hotkeys WILL NOT WORK** if the program itself is running without administrator privileges.
+
+If the application you want to translate is **running with administrator rights**, then the **Google Screen Translate
+hotkeys WILL NOT WORK** if the program itself is running without administrator privileges.
 
 ### The Reason
-Windows blocks global hotkey interception from applications with standard privileges if the target window belongs to an application with elevated rights.
+
+Windows blocks global hotkey interception from applications with standard privileges if the target window belongs to an
+application with elevated rights.
 
 ### The Solution
+
 **Run Google Screen Translate with administrator rights.**
 
 **How to do it:**
+
 1. **Via context menu:** Right-click on `GoogleScreenTranslate.exe` → **"Run as administrator"**
-2. **Via shortcut properties (permanent):** Right-click on shortcut → Properties → Compatibility → "Run this program as an administrator"
+2. **Via shortcut properties (permanent):** Right-click on shortcut → Properties → Compatibility → "Run this program as
+   an administrator"
 3. **Via command line:** `runas /user:Administrator "path\GoogleScreenTranslate.exe"`
 
 ---
@@ -107,17 +123,22 @@ Windows blocks global hotkey interception from applications with standard privil
 | **Edit mode** | `F5` | Toggle edit mode on/off |
 | **Auto-replace** | `F6` | Toggle automatic area replacement on/off |
 
+> **Note:** All hotkeys can be reassigned in the settings window (Hotkeys section).
+
 ### 💡 Additional Features
 
 | Action | Description |
 |--------|-------------|
 | **Temporary translation (RMB)** | In F3 mode, press RMB instead of LMB — overlay will be temporary and auto-removed |
 | **Remove overlay under cursor** | In edit mode, press `ESC` over the overlay |
+| **Remove overlays for an application** | In the main window, in the "Windows with translations" list, right-click and select "Remove overlays" |
 | **Translation queue** | Select multiple areas in a row without waiting for current translation to finish |
 | **Drag overlays** | In edit mode, drag overlays with the mouse anywhere |
 
 ### Temporary Overlay Lifetime Configuration
-Temporary overlay lifetime can be adjusted in **Settings → Interface → «Temporary overlay lifetime» slider** (from 10 to 600 seconds).
+
+Temporary overlay lifetime can be adjusted in **Settings → Interface → «Temporary overlay lifetime» slider** (from 10 to
+600 seconds).
 
 ---
 
@@ -126,16 +147,19 @@ Temporary overlay lifetime can be adjusted in **Settings → Interface → «Tem
 All settings are available in the settings window (opens via menu or by clicking ⚙️ in the main window).
 
 ### 🌐 Browser
+
 - **Browser path** — manually specify the path to the browser executable
 - **"Find Browsers" button** — scans the system for Yandex Browser, Google Chrome, and other Chromium browsers
 - **Recommended** — Yandex Browser for better compatibility
 
 ### 🔤 Translation Engine (NEW!)
+
 - **Google Translate** — standard translation via Google Images
 - **Yandex.Translator (OCR)** — translation with text recognition on images
 - Browser restarts automatically when changing the engine
 
 ### 🎨 Interface
+
 - **Show translation indicator** — display progress during translation
 - **Auto-hide overlay** — automatically hide when switching to another window
 - **Auto-replace translated areas** — automatic detection and replacement of areas on screen
@@ -144,11 +168,13 @@ All settings are available in the settings window (opens via menu or by clicking
 - **Temporary overlay lifetime** — from 10 to 600 seconds
 
 ### ⌨️ Hotkeys
+
 - **Reassign hotkeys** — click the button with the key, then press a new key
 - **Automatic key swapping** — if a key is already taken, it swaps with the current assignment
 - Available actions: screenshot, area, show/hide, clear all, edit mode, auto-replace
 
 ### 🔍 Monitor (for auto-replace)
+
 - **Confidence threshold** — adjust detection sensitivity (0.5–1.0)
 - **Scan interval** — screen check interval (0.1–2.0 sec)
 
@@ -169,15 +195,20 @@ All settings are available in the settings window (opens via menu or by clicking
 ## ⚙️ Requirements
 
 ### Browser
+
 The program requires one of the following browsers:
+
 - **Yandex Browser** (recommended)
 - **Google Chrome**
 - **Chromium**, **Brave**, **Vivaldi**, or **Edge**
 
-If the browser is not found automatically, the program will prompt you to specify the path manually or use the "Find Browsers" button.
+If the browser is not found automatically, the program will prompt you to specify the path manually or use the "Find
+Browsers" button.
 
 ### OCR (for long press F3)
+
 For the full window OCR feature, you need:
+
 - **EasyOCR** — install via `pip install easyocr`
 - On first launch, models are downloaded (~500 MB)
 
@@ -186,6 +217,7 @@ For the full window OCR feature, you need:
 ## 🛠️ Building from source
 
 1. Clone the repository:
+
 ```bash
 git clone https://github.com/AlexeyZam15/GoogleImagesScreenTranslator.git
 cd GoogleImagesScreenTranslator
