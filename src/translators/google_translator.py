@@ -555,6 +555,13 @@ class GoogleTranslateDebug(BaseTranslator):
                 total_elapsed = time.time() - total_start
                 self.logger.info(f"✅ Изображение сохранено: {output_path} ({size} байт)")
                 self.logger.info(f"⏱️ ОБЩЕЕ ВРЕМЯ ПЕРЕВОДА: {total_elapsed:.3f} секунд")
+
+                # ============================================================
+                # ИСПРАВЛЕНИЕ: Сбрасываем страницу после успешного перевода
+                # ============================================================
+                self.logger.info("🔄 Сброс страницы Google Translate для следующего перевода...")
+                self.reset_page()
+
                 return output_path
             else:
                 self.logger.error("Файл не был сохранён")
@@ -577,7 +584,7 @@ class GoogleTranslateDebug(BaseTranslator):
                 return None
 
     def reset_page(self):
-        """Сбрасывает страницу Google Translate."""
+        """Сбрасывает страницу Google Translate на чистую страницу загрузки изображения."""
         self.logger.info("[DEBUG] GoogleTranslateDebug.reset_page() - сброс страницы")
         if not self._page:
             self.logger.warning("[DEBUG] reset_page: страница не инициализирована")
@@ -587,12 +594,28 @@ class GoogleTranslateDebug(BaseTranslator):
             timeout_ms = 10000
             self.logger.info(f"[DEBUG] reset_page: переход на {self.base_url} (таймаут {timeout_ms}мс)")
             self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=timeout_ms)
-            self.logger.info("[DEBUG] reset_page: страница сброшена")
+
+            # Ждём загрузки интерфейса
+            self.logger.info("[DEBUG] reset_page: ожидание загрузки интерфейса...")
+            if self._wait_for_interface(timeout=5000):
+                self.logger.info("[DEBUG] reset_page: интерфейс загружен, страница сброшена")
+            else:
+                self.logger.warning("[DEBUG] reset_page: интерфейс не загрузился, но переход выполнен")
+
+            # Дополнительно пробуем активировать разрешение на буфер обмена
+            try:
+                self._page.evaluate("navigator.clipboard.read().catch(() => {})")
+                self.logger.info("[DEBUG] reset_page: разрешение на буфер обмена активировано")
+            except Exception as e:
+                self.logger.debug(f"[DEBUG] reset_page: не удалось активировать разрешение: {e}")
+
         except Exception as e:
             self.logger.error(f"[DEBUG] reset_page: ошибка: {e}")
             try:
                 self._page.reload()
                 self.logger.info("[DEBUG] reset_page: страница перезагружена (fallback)")
+                # Ждём загрузку интерфейса после перезагрузки
+                self._wait_for_interface(timeout=5000)
             except Exception as e2:
                 self.logger.error(f"[DEBUG] reset_page: не удалось перезагрузить: {e2}")
 
